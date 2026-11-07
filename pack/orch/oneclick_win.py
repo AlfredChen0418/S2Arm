@@ -64,8 +64,17 @@ def mixed(p):   # Windows 原生 Python 与 Git Bash 都认的写法（R:/a/b）
     return str(p).replace('\\', '/')
 
 
+def metal_exe():
+    """Windows Metal：显式目录优先，再查 PATH，最后用官方安装目录；显式配置无效时不另选一份。"""
+    configured = os.environ.get('S2A_METAL_BIN')
+    if configured: return Path(configured) / 'metal.exe'
+    found = shutil.which('metal.exe')
+    # PATH 可以含相对目录；后续编译在仓库目录运行，传给子进程前固定为绝对路径。
+    return Path(found).absolute() if found else Path(r'C:\Program Files\Metal Developer Tools\bin') / 'metal.exe'
+
+
 def metal_bin():
-    return Path(os.environ.get('S2A_METAL_BIN') or r'C:\Program Files\Metal Developer Tools\bin')
+    return metal_exe().parent
 
 
 def prebuilt(rel, ident=None):
@@ -115,7 +124,8 @@ def env_items(target, shell):
         add('clang', not miss, f'预编直连翻译库 dsx / Yaz0 / CRI 小库（{pre}）' + (f'缺 {"、".join(miss)}' if miss else '齐'))
     else:
         add('clang', os.environ.get('S2A_CLANG') or shutil.which('clang'), '直连翻译库 dsx / Yaz0 小库现编')
-    add('metal', (metal_bin() / ('metal.exe' if WIN else 'metal')).is_file() if WIN else True, f'Metal Developer Tools（{metal_bin()}；S2A_METAL_BIN 可改）')
+    metal = metal_exe()
+    add('metal', metal.is_file() if WIN else True, f'Metal Developer Tools（{metal.parent}；S2A_METAL_BIN 可指定，否则查 PATH / 官方安装目录）')
     sys.path.insert(0, str(R / 'graphics/tools/shbake')); import zstd_lib
     try: zstd_lib._lib(); zok, zwhy = True, 'libzstd 已装上'
     except zstd_lib.ZstdError as e: zok, zwhy = False, f'{e}（zstd 官方发行包加进 PATH）'
@@ -417,6 +427,8 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
     env = dict(os.environ, PYTHONUTF8='1', S2A_DIRECT_TARGETS=target, S2A_DIRECT_PUBLISH=target, J=str(jobs), S2A_CPU_BAKE=str(jobs),
                DM_GAMES_DIR=mixed(games), DM_GAMES_FIRST='1',
                S2A_PY=sys.executable, S2A_PYTHON=sys.executable)
+    # Python / C# 编译器包装都读这个目录，metal 与 metallib 必须来自同一安装。
+    if WIN: env['S2A_METAL_BIN'] = mixed(metal_bin())
     if dsx: env['DSX_LIB'] = mixed(dsx)
     gv = prebuilt('glslang/glslangValidator.exe')   # OpenGL 款离线翻译（gl_shaders.py 认 GLSLANG）：预编的在、调用方没另给就用它
     if gv and 'GLSLANG' not in env: env['GLSLANG'] = mixed(gv)

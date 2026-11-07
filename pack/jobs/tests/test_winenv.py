@@ -688,6 +688,30 @@ class EnvironmentTests(unittest.TestCase):
                     self.mod.NativeProbe()("metal", executable=None)
                 self.assertEqual(run.call_args.args, ([paths[2], "--version"],))
 
+    def test_cap_native_metal_bin_wins_path(self):
+        with tempfile.TemporaryDirectory(prefix="metal bin 中文 ") as tmp:
+            selected = Path(tmp) / "explicit" / "metal.exe"
+            other = Path(tmp) / "PATH" / "metal.exe"
+            for path in (selected, other):
+                path.parent.mkdir()
+                path.write_bytes(b"original fixture, never executed")
+            with patch.dict(os.environ, {"S2A_METAL_BIN": str(selected.parent)}, clear=True), \
+                 patch.object(self.mod.shutil, "which", return_value=str(other)), \
+                 patch.object(self.mod.NativeProbe, "run", return_value=b"Apple metal version 9\n") as run:
+                self.mod.NativeProbe()("metal", executable=None)
+            self.assertEqual(run.call_args.args, ([str(selected), "--version"],))
+
+    def test_cap_native_missing_explicit_metal_bin_does_not_fall_back(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            other = Path(tmp) / "metal.exe"
+            other.write_bytes(b"original fixture, never executed")
+            with patch.dict(os.environ, {"S2A_METAL_BIN": str(Path(tmp) / "missing")}, clear=True), \
+                 patch.object(self.mod.shutil, "which", return_value=str(other)), \
+                 patch.object(self.mod.NativeProbe, "run") as run:
+                with self.assertRaises(FileNotFoundError):
+                    self.mod.NativeProbe()("metal", executable=None)
+                run.assert_not_called()
+
     def test_cap_metal_nonzero_is_missing_timeout_and_overflow_still_error(self):
         self.capabilities()
         for error, expected in ((self.mod.ProbeError("exit", nonzero=True), "missing"),

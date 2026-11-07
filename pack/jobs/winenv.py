@@ -313,10 +313,11 @@ class NativeProbe:
         if kind == "service":
             return self.service()
         if kind == "metal":
-            exe = (options.get("executable") or os.environ.get("S2A_METAL_EXE") or shutil.which("metal.exe")
-                   or str(Path(os.environ.get("S2A_METAL_BIN") or r"C:\Program Files\Metal Developer Tools\bin") / "metal.exe"))   # 同 oneclick_win.metal_bin()：官方安装器缺省装这里、不进 PATH
+            exe = options.get("executable") or os.environ.get("S2A_METAL_EXE")
             if not exe:
-                raise FileNotFoundError()
+                sys.path.insert(0, str(ROOT))
+                from pack.orch.oneclick_win import metal_exe
+                exe = str(metal_exe())   # 与出包预检、实际编译共用目录选择，显式目录优先于 PATH
             meta = self("file", path=exe)
             if not meta["exists"]:
                 raise FileNotFoundError()

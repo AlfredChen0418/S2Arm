@@ -25,7 +25,7 @@ Python 接口：`check(request, *, probe=None)`。默认 `NativeProbe` 获取真
 | `targetDir` | 计划输出目录；有catalog时省略用其父目录（游戏库目录），否则用当前目录；未存在时只查最近存在祖先的卷，不建目录 |
 | `requiredFreeBytes` | 显式出包计划预算，非负整数字节数；优先于catalog计算，存在时不读取catalog |
 | `catalog` / `gameId` | 可选游戏库catalog.json路径与游戏id；两者齐全且无显式预算时，沿用library.py的selected_packages和共用预算纯函数；缺配对字段/未知游戏不判绿。三者（含 `requiredFreeBytes`）都没给 = 还没选游戏：不列 `disk` 项、不拖 `ready`，选好游戏开始前带上再查 |
-| `metal` | 显式Metal路径；省略用S2A_METAL_EXE、PATH metal.exe，再用官方安装器缺省目录（S2A_METAL_BIN，同 oneclick_win.metal_bin）；普通非链接文件才执行有界--version |
+| `metal` | 显式Metal路径；省略用S2A_METAL_EXE，再沿用出包目录选择：S2A_METAL_BIN → PATH metal.exe → 官方默认目录；普通非链接文件才执行有界--version |
 | `shell` / `target` | 预编壳目录、出包目标（`ios` 缺省 / `mac`）；交给出包件自检（见下） |
 | `anisette` | 可选对象：`source` 为 `local`、`self-hosted` 或 `public`；远程配置提供 `endpoint`，公共备选须显式 `allowPublic: true` |
 | `offline` | 可选布尔值，声明离线场景；两种模式均只读本机，不发健康检查或登录请求，不省略检查项 |
@@ -43,6 +43,9 @@ Python 接口：`check(request, *, probe=None)`。默认 `NativeProbe` 获取真
   `pack/orch/oneclick_win.py` 的 `env_items`（即 `oneclick_win --check` 那一份），不另写规则；其中 python、metal 两行由本模块核得更细，不重复列。
 - 签名装机 `impactor`：玩家自装的官方 Impactor 实测版本 + 同版本命令行 plumesign（`pack/jobs/impactor.py`、`pack/orch/install_win.py`）。
 - 作废（随包运行时 + 预编件之后）：`dotnet_sdk`（玩家只要随包的 .NET 运行时）、`rewriter` / `sidecar` 的「待发布」项。
+
+Metal 的默认目录选择与 `oneclick_win --check` 共用 `oneclick_win.metal_exe()`：`S2A_METAL_BIN` 优先；未配置时找 PATH 上 `metal.exe` 的所在目录，最后用 `C:\Program Files\Metal Developer Tools\bin`。显式目录无效时照实报缺，不偷偷换成 PATH 上另一份。出直连库时把选中目录作为 `S2A_METAL_BIN` 传给子进程，Python / C# 的 `metal.exe` 与 `metallib.exe` 都从同一目录取；不会从 PATH 混用另一份链接器。相对 PATH 条目会先转成绝对路径。请求 `metal` 与 `S2A_METAL_EXE` 仍只覆盖本次只读版本探测；要配置实际出包目录用 `S2A_METAL_BIN`。
+
 只有 Impactor、anisette、Apple 设备服务和 USB 设备属于签名装机（`requiredFor` 为 `install`），不挡导入和出包。其余各项属于 `prepare/ipa`，`blocking` 为真（确实缺或确实不符）才挡；认不出、探测失败只提示。状态为 `ok/missing/mismatch/unverified/error/user-selected`；
 只有所有必需项 `ok` 才能 `ready=true`。一个探测失败仍列出其余项；解释器失败时逐项列依赖未核实。
 摘要和 JSON 使用相同状态，异常不回显命令原始输出、私有路径或配置内容。
@@ -107,7 +110,7 @@ USB映射错码、用安装指引覆盖help。首轮help负控在Metal项被原�
 | Python 最低版本 | 从 `toolchain.py:preflight` 的现有 Python 比较定义读取；定义不再可识别即报错，不退到自造版本 |
 | Python 依赖 | 现有 `launchers/macos/requirements-runtime.txt` 精确钉版；该文件名虽带 macos，本入口只复用其清单，不运行 Mac 工作流 |
 | .NET SDK | `compat/tree/global.json` 和 `ipa.py:_sdk_ok`；运行 `dotnet --list-sdks`，运行时不能替代 SDK |
-| Metal | 请求metal路径（显式配置）→S2A_METAL_EXE→PATH metal.exe；版本命令与唯一metal_iphoneos测试锁提示 |
+| Metal | 请求metal路径 → S2A_METAL_EXE → 共用出包目录选择（S2A_METAL_BIN → PATH → 官方默认目录）；版本命令与唯一metal_iphoneos测试锁提示 |
 | Apple 支持 | SCM运行+本机27015连接即断，只证明驱动就绪；单独ListDevices确认USB数量 |
 | anisette | 当前用户Store安装元数据身份与来源；显选公共备选只标user-selected，仍挡ready |
 | 空间 | `shutil.disk_usage` 实际可用字节，与显式预算或library.py共用出包计划预算比较；不另写公式 |
