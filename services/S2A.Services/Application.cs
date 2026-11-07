@@ -205,6 +205,7 @@ namespace S2A.Services
 
             // 按相对路径序号序加入（与预建索引 RomFsIndex 同序）：LibHac 建出的镜像布局随加入顺序变，同序才逐字节相同
             List<string> files = new(Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories));
+            files.RemoveAll(RomFsIndex.IsHostJunk);
             files.Sort(StringComparer.Ordinal);
 
             foreach (string file in files)

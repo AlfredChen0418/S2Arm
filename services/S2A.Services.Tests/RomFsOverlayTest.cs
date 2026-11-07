@@ -64,6 +64,27 @@ namespace S2A.Services.Tests
                 {
                     Check("目录现建 + 覆盖层：覆盖文件", "Success/1200×0x22", Read(s, "/Layout/a.zs", 1200));
                 }
+                // #玩家诊断：romfs 里的 macOS 垃圾进了索引、却不进资源包，游戏枚举到就读不到（万缕千丝 Movie/.DS_Store，服务异常后闪退）；游戏自己的点开头文件要留
+                Directory.CreateDirectory(Path.Combine(rom, "Movie"));
+                File.WriteAllBytes(Path.Combine(rom, ".DS_Store"), other);
+                File.WriteAllBytes(Path.Combine(rom, "Movie", ".DS_Store"), other);
+                File.WriteAllBytes(Path.Combine(rom, "Movie", "._a.mp4"), other);
+                File.WriteAllBytes(Path.Combine(rom, ".build.config"), other);
+                File.WriteAllBytes(Path.Combine(over, ".DS_Store"), other);
+                string Listed(IStorage s, string path) => new LibHac.Tools.FsSystem.RomFs.RomFsFileSystem(s).FileTable.TryOpenFile(path, out LibHac.Tools.FsSystem.RomFs.RomFileInfo _) ? "在" : "不在";
+                string junkIndex = Path.Combine(root, "junk.s2aidx");
+                RomFsIndex.Write(rom, junkIndex);
+                foreach ((string name, IStorage image) in new[] { ("索引", RomFsIndex.Open(rom, junkIndex)), ("目录现建", S2A.Services.Application.RomFsFromDirectory(rom, over)) })
+                {
+                    using (image)
+                    {
+                        Check($"{name}：根目录 .DS_Store", "不在", Listed(image, "/.DS_Store"));
+                        Check($"{name}：子目录 .DS_Store", "不在", Listed(image, "/Movie/.DS_Store"));
+                        Check($"{name}：._ 文件", "不在", Listed(image, "/Movie/._a.mp4"));
+                        Check($"{name}：游戏自己的点开头文件", "在", Listed(image, "/.build.config"));
+                    }
+                }
+                Check("覆盖层盘点不收 .DS_Store", "1", RomFsIndex.OverlayFiles(over).Count.ToString());
             }
             finally { Red.Strict = strict; Directory.Delete(root, true); }
             return failures == 0 ? 0 : 1;
