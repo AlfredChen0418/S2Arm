@@ -51,7 +51,7 @@
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return _store.diagnostics.count ? 5 : 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? _layouts.count + 2 : section == 1 ? 4 : section == 2 ? 3 : section == 3 ? 3 : _store.diagnostics.count;
+    return section == 0 ? _layouts.count + 2 : section == 1 ? 5 : section == 2 ? 3 : section == 3 ? 5 : _store.diagnostics.count;
 }
 // 0 = 默认布局，1 = 触屏直通，之后是用户布局（内置两项没有对应文件，所以固定占前两行）
 - (NSString *)identifierAtRow:(NSInteger)row {
@@ -79,8 +79,8 @@
         cell.accessoryType = [_store.selectedIdentifier isEqualToString:identifier] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         cell.accessibilityIdentifier = [@"vpad.layout." stringByAppendingString:identifier];
     } else if (indexPath.section == 1) {
-        cell.textLabel.text = @[@"导入布局", @"另存当前布局", @"导出当前布局", @"恢复按键布局"][indexPath.row];
-        cell.accessibilityIdentifier = @[@"vpad.layouts.import", @"vpad.layouts.save", @"vpad.layouts.export", @"vpad.layouts.reset"][indexPath.row];
+        cell.textLabel.text = @[@"编辑按键（位置、大小、透明度、配色）", @"导入布局", @"另存当前布局", @"导出当前布局", @"恢复按键布局"][indexPath.row];
+        cell.accessibilityIdentifier = @[@"vpad.layouts.edit", @"vpad.layouts.import", @"vpad.layouts.save", @"vpad.layouts.export", @"vpad.layouts.reset"][indexPath.row];
         cell.textLabel.textColor = self.view.tintColor;
     } else if (indexPath.section == 2 && indexPath.row == 2) {
         cell.textLabel.text = @"按住锁定 ZL / ZR"; cell.detailTextLabel.text = @"按住 2 秒锁定，再点一下解锁；只对这款游戏生效";
@@ -107,6 +107,14 @@
         slider.accessibilityValue = cell.detailTextLabel.text;
         [slider addTarget:self action:@selector(opacityChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = slider;
+    } else if (indexPath.section == 3 && indexPath.row == 3) {
+        cell.textLabel.text = @"固定摇杆"; cell.detailTextLabel.text = @"摇杆常驻屏幕，位置在「编辑按键」里拖；关掉是手指落点当中心。只对这款游戏生效"; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.stickFixed; toggle.accessibilityIdentifier = @"vpad.stick.fixed"; toggle.accessibilityLabel = @"固定摇杆";
+        [toggle addTarget:self action:@selector(stickModeSwitch:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
+    } else if (indexPath.section == 3 && indexPath.row == 4) {
+        cell.textLabel.text = @"灵敏度"; cell.detailTextLabel.text = [NSString stringWithFormat:@"%.1f 倍", _store.stickSensitivity]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 150, 44)]; slider.minimumValue = 0.5; slider.maximumValue = 2; slider.value = _store.stickSensitivity; slider.continuous = NO;
+        slider.accessibilityIdentifier = @"vpad.stick.sensitivity"; slider.accessibilityLabel = @"灵敏度"; [slider addTarget:self action:@selector(stickSensitivityChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = slider;
     } else if (indexPath.section == 3) {
         NSInteger row = indexPath.row;
         CGFloat values[] = {_store.stickDeadzone, _store.stickSaturation, _store.stickExponent};
@@ -148,6 +156,14 @@
     // Appearance alone must not mark a manual layout choice or change touch mode.
     [self reload];
 }
+- (void)stickModeSwitch:(UISwitch *)toggle {
+    NSError *error; if (![_store setStickFixed:toggle.on sensitivity:_store.stickSensitivity error:&error]) { toggle.on = _store.stickFixed; [self showError:error]; return; }
+    if (self.stickModeChanged) self.stickModeChanged();
+}
+- (void)stickSensitivityChanged:(UISlider *)slider {
+    NSError *error; if (![_store setStickFixed:_store.stickFixed sensitivity:round(slider.value * 10) / 10 error:&error]) [self showError:error];
+    [self reload];
+}
 - (void)stickChanged:(UISlider *)slider {
     CGFloat values[] = {_store.stickDeadzone, _store.stickSaturation, _store.stickExponent};
     values[slider.tag] = round(slider.value * 100) / 100;
@@ -171,12 +187,17 @@
         if ([self chooseLayout:[self identifierAtRow:indexPath.row]] && !self.embeddedInSettings) [self close];
     } else if (indexPath.section == 1) {
         switch (indexPath.row) {
-            case 0: [self importLayout]; break;
-            case 1: [self saveCurrent]; break;
-            case 2: [self exportCurrent]; break;
-            case 3: [self confirmReset]; break;
+            case 0: [self requestEdit]; break;
+            case 1: [self importLayout]; break;
+            case 2: [self saveCurrent]; break;
+            case 3: [self exportCurrent]; break;
+            case 4: [self confirmReset]; break;
         }
     }
+}
+- (void)requestEdit {
+    void (^edit)(void) = self.editRequested; void s2a_vpad_set_settings_open(BOOL open);
+    [self.navigationController dismissViewControllerAnimated:YES completion:^{ s2a_vpad_set_settings_open(NO); if (edit) edit(); }];
 }
 - (void)confirmReset {
     UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"恢复按键布局？" message:@"已保存的自定义布局会保留。" preferredStyle:UIAlertControllerStyleAlert];

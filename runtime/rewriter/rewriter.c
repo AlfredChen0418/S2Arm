@@ -142,8 +142,21 @@ typedef struct {
   JV jumps;
   VEC(Wide) wide;
   VEC(SpinSite) spins;
-  AV starts, bounds, consumed;
+  AV starts, bounds;
+  /* 已占用的指令地址（done）：代码段内按字记位图，段外（不应出现，照收）记表；按地址查是 O(1)。
+   * 原先是线性表 + 逐项比较，改写点多的模块（#251 EA SPORTS FC 27）查一次要扫几十万项 */
+  uint8_t* consumed_map;
+  AV consumed_far;
+  /* 当前分析中函数的直接跳转目标（analyze 里每个函数只算一次；原先每条 br x18 的每种识别都整函数重算一遍并且不释放，#251） */
+  const Ins* ftg_of;
+  size_t ftg_n;
+  AV ftg;
+  size_t* fsrc_at;   /* ftg 第 i 个目标的来源（直接跳转在 l 里的下标，升序）= fsrc[fsrc_at[i] .. fsrc_at[i + 1]) */
+  int* fsrc;
+  size_t fwrites[128];   /* 当前函数里写寄存器 n 的指令条数（writes(x, n) 计数） */
+  VEC(Pair) jidx;   /* (地址, 下标) 按地址再按下标排序：jump_at 二分 */
   VEC(Pair) cov;
+  uint8_t* codemap;   /* 非空 = 代码段混有内嵌数据，按字（4 字节）记真实代码范围（data_in_text） */
   size_t fixrefs;
   Alloc* allocs;
   /* 布局重选（同 patch_nso.py #290）：retry_front 非 0 = 本轮是容量不足后的重做；req / now = 上一轮 / 本轮成功的自旋回边 (头, 回边) */
@@ -288,6 +301,11 @@ static int contains(const AV* a, A x) {
     if (a->v[i] == x)
       return 1;
   return 0;
+}
+static size_t upper(const AV* a, A x);
+static int has(const AV* a, A x) {   /* a 已排序去重（sort）：二分查 */
+  size_t i = upper(a, x);
+  return i && a->v[i - 1] == x;
 }
 static size_t upper(const AV* a, A x) {
   size_t l = 0, r = a->n;
@@ -743,10 +761,20 @@ static Site* site_at(A at) {
   return l < g->sites.n && g->sites.v[l].at == at ? g->sites.v + l : NULL;
 }
 static void done(A at) {
-  PUSH(g->consumed, at);
+  if (at >= 0 && at < (A)g->text && !(at & 3)) {
+    if (!g->consumed_map)
+      g->consumed_map = zalloc((size_t)g->text / 32 + 1);
+    g->consumed_map[(size_t)at / 32] |= (uint8_t)(1 << ((size_t)at / 4 % 8));
+  } else
+    PUSH(g->consumed_far, at);
   Site* s = site_at(at);
   if (s)
     s->done = 1;
+}
+static int consumed(A at) {
+  if (at >= 0 && at < (A)g->text && !(at & 3))
+    return g->consumed_map && (g->consumed_map[(size_t)at / 32] >> ((size_t)at / 4 % 8)) & 1;
+  return contains(&g->consumed_far, at);
 }
 static void gatecall(void) {
   tp(30, 29);
@@ -1486,11 +1514,16 @@ static void boundaries(void) {
 }
 static Pair func_of(A at) {
   int covered = 0;
-  for (size_t i = 0; i < g->cov.n; i++)
-    if (at >= g->cov.v[i].a && at < g->cov.v[i].b) {
-      covered = 1;
-      break;
-    }
+  size_t lo = 0, hi = g->cov.n;   /* cov 按起点排序、互不重叠（boundaries 合并）：找最后一段起点 <= at */
+  while (lo < hi) {
+    size_t m = lo + (hi - lo) / 2;
+    if (g->cov.v[m].a <= at)
+      lo = m + 1;
+    else
+      hi = m;
+  }
+  if (lo && at < g->cov.v[lo - 1].b)
+    covered = 1;
   AV* b = covered ? &g->starts : &g->bounds;
   size_t i = upper(b, at);
   Pair r = {i ? b->v[i - 1] : (covered ? at : 0), i < b->n ? b->v[i] : (A)g->text};
@@ -1532,12 +1565,111 @@ static const char* sys_differs(uint32_t w, char* buf, size_t n) {
            w, op0, o1, nn, m, o2);
   return buf;
 }
+static void scan(void);
+#define DATA_MIN_EXC 64   /* 至少这么多 hvc/smc/dcps（苹果和 Horizon 用户态都不会执行）才算「代码段里有数据」的证据 */
+static int in_code(A a) {
+  size_t w = (size_t)a / 4;
+  return !g->codemap || (g->codemap[w / 8] >> (w % 8)) & 1;
+}
+static void mark_code(A a) {
+  size_t w = (size_t)a / 4;
+  g->codemap[w / 8] |= (uint8_t)(1 << (w % 8));
+}
+/* 直接分支目标；不是分支返回 -1 */
+static A branch_target(uint32_t w, A a) {
+  if ((w & 0x7c000000) == 0x14000000) {   /* b / bl */
+    int64_t imm = w & 0x3ffffff;
+    return a + (imm - ((imm >> 25) << 26)) * 4;
+  }
+  if ((w & 0xff000010) == 0x54000000 || (w & 0x7e000000) == 0x34000000) {   /* b.cond / cbz / cbnz */
+    int64_t imm = (w >> 5) & 0x7ffff;
+    return a + (imm - ((imm >> 18) << 19)) * 4;
+  }
+  if ((w & 0x7e000000) == 0x36000000) {   /* tbz / tbnz */
+    int64_t imm = (w >> 5) & 0x3fff;
+    return a + (imm - ((imm >> 13) << 14)) * 4;
+  }
+  return -1;
+}
+static int code_ends(uint32_t w) {   /* 顺序执行到此为止：b / ret / br */
+  return (w & 0xfc000000) == 0x14000000 || (w & 0xfffffc1f) == 0xd65f0000 || (w & 0xfffffc1f) == 0xd61f0000;
+}
+/* #108：有的游戏把大量数据放进代码段（Spelunky 2 约 338 MB，31 万条 hvc/smc/dcps、均匀分布），线性扫描把数据当指令，全成缺口，还会误改数据。
+ * 只有出现足够多「不可能是代码」的指令才启用：真实代码 = .eh_frame 的函数范围 + 动态符号的函数 + 从它们出发的直接分支闭包，范围外是数据，不改写也不算缺口。
+ * 没有这些指令的模块（gaps 为 0 或只有别的缺口）不进这里，产物逐字节不变 */
+static void data_in_text(void) {
+  size_t exc = 0;
+  for (size_t i = 0; i < g->gaps.n; i++)
+    exc += !!strstr(g->gaps.v[i].why, "异常类指令");
+  if (exc < DATA_MIN_EXC || !g->cov.n) {
+    if (exc) msg("%s 内嵌数据判定：不启用（异常类指令 %zu 条，门槛 %d；函数范围 %zu 段）\n", g->r.module, exc, DATA_MIN_EXC, g->cov.n);
+    return;
+  }
+  size_t bytes = (size_t)g->text / 32 + 1;
+  uint8_t* map = resize(NULL, bytes);
+  memset(map, 0, bytes);
+  uint8_t* old = g->codemap;
+  g->codemap = map;
+  AV seeds = {0};
+  size_t fde = 0, syms = 0;
+  for (size_t i = 0; i < g->cov.n; i++)
+    for (A a = g->cov.v[i].a; a < g->cov.v[i].b && a + 4 <= (A)g->text; a += 4) {
+      if (a >= 0) { mark_code(a); fde += 4; }
+    }
+  A m0 = iw(4), dyn = m0 + si(m0 + 4), st = -1, sy = -1;
+  if (dyn >= 0 && (uint64_t)dyn + 16 <= g->len)
+    for (A at = dyn, end = MIN(dyn + 0x400 * 16, (A)g->len - 16); at < end; at += 16) {
+      uint64_t tag = iu64(at), v = iu64(at + 8);
+      if (!tag) break;
+      if (v <= g->len && tag == 5 && st < 0) st = (A)v;
+      if (v <= g->len && tag == 6 && sy < 0) sy = (A)v;
+    }
+  if (st >= 0 && sy >= 0 && sy < st)
+    for (A at = sy; at + 24 <= st && (uint64_t)at + 24 <= g->len; at += 24) {
+      uint64_t val = iu64(at + 8);
+      if ((g->img[at + 4] & 15) == 2 && val && val < g->text && !(val & 3)) { PUSH(seeds, (A)val); syms++; }   /* STT_FUNC */
+    }
+  for (size_t i = 0; i < g->cov.n; i++)
+    for (A a = g->cov.v[i].a; a < g->cov.v[i].b && a + 4 <= (A)g->text; a += 4) {
+      A t = a >= 0 ? branch_target(iw(a), a) : -1;
+      if (t >= 0 && t < (A)g->text && !(t & 3) && !in_code(t)) PUSH(seeds, t);
+    }
+  size_t walked = 0;
+  while (seeds.n) {
+    A a = seeds.v[--seeds.n];
+    for (int n = 0; n < 1 << 16 && a >= 0 && a + 4 <= (A)g->text && !in_code(a); n++, a += 4) {
+      Ins x;
+      uint32_t w = iw(a);
+      if (!decode(w, a, &x)) break;
+      mark_code(a); walked += 4;
+      A t = branch_target(w, a);
+      if (t >= 0 && t < (A)g->text && !(t & 3) && !in_code(t)) PUSH(seeds, t);
+      if (code_ends(w)) break;
+    }
+  }
+  size_t outside = 0;
+  for (size_t i = 0; i < g->gaps.n; i++)
+    outside += strstr(g->gaps.v[i].why, "异常类指令") && !in_code(g->gaps.v[i].at);
+  size_t code = 0;
+  for (A a = 0; a + 4 <= (A)g->text; a += 4) code += in_code(a) ? 4 : 0;
+  if (outside * 10 < exc * 9) {   /* 这些指令大多在函数范围内：范围本身不可信，不排除，缺口照报 */
+    msg("%s 内嵌数据判定：不启用（异常类指令 %zu 条，范围外只有 %zu 条）\n", g->r.module, exc, outside);
+    g->codemap = old;
+    return;
+  }
+  size_t gaps0 = g->gaps.n, sites0 = g->sites.n;
+  g->gaps.n = g->sites.n = 0;
+  scan();
+  msg("%s 内嵌数据判定：启用；代码段 %zu 字节，真实代码 %zu（函数范围 %zu、动态符号 %zu 个、分支闭包 %zu），排除 %zu 字节；异常类指令 %zu 条（范围外 %zu）；缺口 %zu → %zu，改写点 %zu → %zu\n",
+      g->r.module, (size_t)g->text, code, fde, syms, walked, (size_t)g->text - code, exc, outside, gaps0, g->gaps.n, sites0, g->sites.n);
+}
 static void scan(void) {
   /* NRO（romfs 里 nn::ro 装的模块，runtime/rewriter/nro_to_nso.py 转来）：text 段开头 [4, 0x80) 是 NRO 头（MOD0 偏移、
      'NRO0'、大小、段表、构建号），是数据不是指令，不扫（构建号字节会被认成 hvc 等缺口）；NSO 没有这个标记，扫描范围不变（与 patch_nso.py 同口径） */
   const A hdr = g->text >= 0x80 && !memcmp(g->img + 0x10, "NRO0", 4) ? 0x80 : 0;
   for (A a = 0; a < (A)g->text; a += 4) {
     if (a >= 4 && a < hdr) continue;
+    if (!in_code(a)) continue;
     uint32_t w = iw(a);
     const char* k = NULL;
     int arg = 0;
@@ -1584,12 +1716,48 @@ static void scan(void) {
   }
 }
 static AV targets(const IV* l) {
+  if (g->ftg_of && l->v == g->ftg_of && l->n == g->ftg_n)
+    return g->ftg;   /* analyze 已为当前函数算好；调用方只读 */
   AV a = {0};
   for (size_t i = 0; i < l->n; i++)
     if (direct(l->v + i))
       PUSH(a, target(l->v + i));
   sort(&a);
   return a;
+}
+/* 当前函数的一次性索引（analyze 设 ftg 后调）：每个直接跳转目标的来源下标、每个寄存器被写的条数。
+ * general / joinbound 原先每张跳转表都整函数扫一遍，一个函数里上万张表时是平方（#251） */
+static void fn_index(const IV* l) {
+  size_t nt = g->ftg.n;
+  g->fsrc_at = zalloc((nt + 1) * sizeof(size_t));
+  memset(g->fwrites, 0, sizeof(g->fwrites));
+  size_t nsrc = 0;
+  for (size_t q = 0; q < l->n; q++) {
+    const Ins* x = l->v + q;
+    for (int h = 0; h < 2; h++)
+      for (uint64_t m = (uint64_t)(x->wr >> (64 * h)); m; m &= m - 1)
+        g->fwrites[64 * h + __builtin_ctzll(m)]++;
+    if (direct(x)) {
+      size_t i = upper(&g->ftg, target(x));
+      REQUIRE(i && g->ftg.v[i - 1] == target(x));
+      g->fsrc_at[i]++;   /* 先按目标计数，下面前缀和 */
+      nsrc++;
+    }
+  }
+  for (size_t i = 0; i < nt; i++)
+    g->fsrc_at[i + 1] += g->fsrc_at[i];
+  g->fsrc = zalloc((nsrc ? nsrc : 1) * sizeof(int));
+  size_t* fill = zalloc((nt + 1) * sizeof(size_t));
+  memcpy(fill, g->fsrc_at, (nt + 1) * sizeof(size_t));
+  for (size_t q = 0; q < l->n; q++)
+    if (direct(l->v + q)) {
+      size_t i = upper(&g->ftg, target(l->v + q)) - 1;
+      g->fsrc[fill[i]++] = (int)q;   /* q 递增：每个目标的来源天然升序 */
+    }
+  release(fill);
+}
+static int fn_indexed(const IV* l) {
+  return g->ftg_of && l->v == g->ftg_of && l->n == g->ftg_n && g->fsrc_at;
 }
 static int def(const IV* l, int end, int lo, int r) {
   for (int i = end - 1; i >= lo; i--)
@@ -1698,7 +1866,17 @@ static void jbad(char* why, size_t n, A at, const char* fmt, ...) {
  * 中间不写 I、不改标志）有 cmp I,#N；返回各入边允许的项数最大值（b.ls → N+1、b.lo → N），任一条不合规或一条都没有回 -1 */
 static int joinbound(const IV* l, const AV* tg, A J, int I) {
   int best = -1;
-  for (size_t q = 0; q < l->n; q++) {
+  size_t from = 0, to = l->n, ti = 0;
+  int indexed = fn_indexed(l);
+  if (indexed) {   /* 只看跳到 J 的那几条（结果与整函数扫相同：任一条不合规就 -1，否则取最大） */
+    ti = upper(&g->ftg, J);
+    if (!ti || g->ftg.v[ti - 1] != J)
+      return -1;
+    from = g->fsrc_at[ti - 1];
+    to = g->fsrc_at[ti];
+  }
+  for (size_t e = from; e < to; e++) {
+    size_t q = indexed ? (size_t)g->fsrc[e] : e;
     const Ins* x = l->v + q;
     if (!direct(x) || target(x) != J)
       continue;
@@ -1711,7 +1889,7 @@ static int joinbound(const IV* l, const AV* tg, A J, int I) {
         c = (int)y->d.operands[1].imm + eq(x->m, "b.ls");
         break;
       }
-      if (writes(y, I) || isbr(y) || contains(tg, l->v[p + 1].at) || in(y->m, "cmp|cmn|tst|ccmp|ccmn") || pre(y->m, "subs") ||
+      if (writes(y, I) || isbr(y) || has(tg, l->v[p + 1].at) || in(y->m, "cmp|cmn|tst|ccmp|ccmn") || pre(y->m, "subs") ||
           pre(y->m, "adds") || pre(y->m, "ands") || pre(y->m, "bics"))
         break;
     }
@@ -1731,13 +1909,13 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
     return 0;                      \
   } while (0)
   while (k >= 0 && !writes(l->v + k, 18)) {
-    if (isbr(l->v + k) || contains(&tg, l->v[k + 1].at))
+    if (isbr(l->v + k) || has(&tg, l->v[k + 1].at))
       BAD("x18 来源跨基本块");
     k--;
   }
   if (k < 0)
     BAD("函数内找不到 x18 的定义");
-  if (k + 1 < j && contains(&tg, l->v[k + 1].at))
+  if (k + 1 < j && has(&tg, l->v[k + 1].at))
     BAD("x18 定义与 br 之间有跳入点");
   Ins* dx = l->v + k;
   /* 尾调用：x18 由一次从内存取数给出（ldr x18, [Xn, #imm]，或 ldp 一次取「函数指针 + 另一字」，如 IL2CPP 虚调用表项
@@ -1762,7 +1940,7 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
   int cq = -1, cd = -1, csrc = -1;
   for (int q = ka - 1; q >= 0; q--) {
     Ins* x = l->v + q;
-    if (isbr(x) || contains(&tg, l->v[q + 1].at))
+    if (isbr(x) || has(&tg, l->v[q + 1].at))
       break;
     int t, b, i;
     if (ldrsw(x, &t, &b, &i) && ((t == r1 && b == r2) || (t == r2 && b == r1))) {
@@ -1779,7 +1957,7 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
       int o = t == r1 ? r2 : r1, pre = -1;
       for (int p2 = q - 1; o != b && o != t && p2 >= 0; p2--) {
         Ins* y = l->v + p2;
-        if (isbr(y) || contains(&tg, l->v[p2 + 1].at))
+        if (isbr(y) || has(&tg, l->v[p2 + 1].at))
           break;
         if (eq(y->m, "mov") && y->op[0] == 'x' && y->d.op_count == 2 && rno(y, 0) == o && rno(y, 1) == b) {
           pre = p2;
@@ -1846,10 +2024,10 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
       PUSH(out->mids, *x);
     }
   for (int q = k0; q <= j; q++) {
-    if (q > k0 && contains(&tg, l->v[q].at))
+    if (q > k0 && has(&tg, l->v[q].at))
       BAD("跳转落进 ldrsw…br 中间");
     Site* s = site_at(l->v[q].at);
-    if ((s && s->done) || contains(&g->consumed, l->v[q].at))
+    if ((s && s->done) || consumed(l->v[q].at))
       BAD("与改写窗口重叠");
   }
   A tbl;
@@ -1858,23 +2036,30 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
     BAD("表基址 x%d 不是 adrp+add 给出", B);
   int same = 1, uniq = 0, inbound = 0;
   for (int q = p + 1; q <= k0; q++)
-    if (isbr(l->v + q) || contains(&tg, l->v[q].at))
+    if (isbr(l->v + q) || has(&tg, l->v[q].at))
       same = 0;
-  for (size_t q = 0; q < l->n; q++) {
-    if (writes(l->v + q, B))
-      uniq++;
-    if (direct(l->v + q) && l->v[q].at < l->v[p].at) {
-      A t = target(l->v + q);
-      if (t >= l->v[p + 1].at && t <= l->v[k0].at)
+  if (fn_indexed(l)) {   /* 用函数索引：写 B 的条数直接读；外部跳入只看落在 [p+1, k0] 的目标的来源（来源下标 < p 等价于地址在 adrp 之前） */
+    uniq = (int)g->fwrites[B];
+    A lo = l->v[p + 1].at, hi = l->v[k0].at;
+    for (size_t i = upper(&g->ftg, lo - 1); i < g->ftg.n && g->ftg.v[i] <= hi && !inbound; i++)
+      if (g->fsrc_at[i] < g->fsrc_at[i + 1] && g->fsrc[g->fsrc_at[i]] < p)
         inbound = 1;
+  } else
+    for (size_t q = 0; q < l->n; q++) {
+      if (writes(l->v + q, B))
+        uniq++;
+      if (direct(l->v + q) && l->v[q].at < l->v[p].at) {
+        A t = target(l->v + q);
+        if (t >= l->v[p + 1].at && t <= l->v[k0].at)
+          inbound = 1;
+      }
     }
-  }
   if (!(same || uniq == 2 || !inbound))
     BAD("表基址 x%d 的 adrp+add 与 ldrsw 之间有从建基址前的外部跳入，且函数内不唯一", B);
   int cnt = 0, joined = 0;
   for (int q = k0 - 1; q > MAX(-1, k0 - 24); q--) {
     Ins* x = l->v + q;
-    if (q + 1 != k0 && contains(&tg, l->v[q + 1].at)) {
+    if (q + 1 != k0 && has(&tg, l->v[q + 1].at)) {
       /* 跨一次汇合点：别的入边都按 joinbound 带界跳进来才继续往前找直落路径的界；项数取各路最大（每项目标下面都核在函数内） */
       int jc = joined ? -1 : joinbound(l, &tg, l->v[q + 1].at, I);
       if (jc <= 0)
@@ -1888,7 +2073,7 @@ static int general(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) {
     if (regimm(x, "cmp", I, -1)) {
       for (int qq = q + 1; qq < (int)MIN(l->n, (size_t)MAX(q + 8, k0)); qq++) {
         Ins* y = l->v + qq;
-        if (contains(&tg, y->at))
+        if (has(&tg, y->at))
           break;
         if (in(y->m, "b.hi|b.hs")) {
           cnt = (int)x->d.operands[1].imm + eq(y->m, "b.hi");
@@ -1931,7 +2116,7 @@ static int compact(const IV* l, int j, Pair f, Jump* out) {
   AV tg = targets(l);
   int lo = j;
   for (int q = j - 1; q > MAX(-1, j - 33); q--) {
-    if (isbr(l->v + q) || contains(&tg, l->v[q + 1].at))
+    if (isbr(l->v + q) || has(&tg, l->v[q + 1].at))
       break;
     lo = q;
   }
@@ -2050,7 +2235,7 @@ static int classify(const IV* l, int j, Pair f, Jump* out, char* why, size_t n) 
     }
   }
   AV tg = targets(l);
-  if (contains(&tg, p1->at) || contains(&tg, l->v[j].at)) {
+  if (has(&tg, p1->at) || has(&tg, l->v[j].at)) {
     snprintf(why, n, "branch into rel jump window %" PRIx64, (uint64_t)l->v[j].at);
     return 0;
   }
@@ -2283,11 +2468,11 @@ static int jt_open(const IV* l, int j, Pair f, AV* out, char** why) {
   AV tg = targets(l);
   int k = j - 1;
   while (k >= 0 && !writes(l->v + k, 18)) {
-    if (isbr(l->v + k) || contains(&tg, l->v[k + 1].at))
+    if (isbr(l->v + k) || has(&tg, l->v[k + 1].at))
       return 0;
     k--;
   }
-  if (k < 0 || contains(&tg, l->v[k + 1].at))
+  if (k < 0 || has(&tg, l->v[k + 1].at))
     return 0;
   Ins* x = l->v + k;
   int r1 = rno(x, 1), r2 = rno(x, 2);
@@ -2296,7 +2481,7 @@ static int jt_open(const IV* l, int j, Pair f, AV* out, char** why) {
   int ld = -1, T = -1, B = -1;
   for (int q = k - 1; q >= 0; q--) {
     Ins* y = l->v + q;
-    if (isbr(y) || contains(&tg, l->v[q + 1].at))
+    if (isbr(y) || has(&tg, l->v[q + 1].at))
       return 0;
     int t, b, i;
     if (ldrsw(y, &t, &b, &i) && ((t == r1 && b == r2) || (t == r2 && b == r1))) {
@@ -2322,7 +2507,7 @@ static int jt_adr(const IV* l, int j, Pair f, AV* out) {
   AV tg = targets(l);
   int lo = j;
   for (int q = j - 1; q >= 0; q--) {
-    if (isbr(l->v + q) || contains(&tg, l->v[q + 1].at))
+    if (isbr(l->v + q) || has(&tg, l->v[q + 1].at))
       break;
     lo = q;
   }
@@ -2389,6 +2574,10 @@ static void analyze(void) {
       }
       PUSH(l, x);
     }
+    g->ftg = targets(&l);
+    g->ftg_of = l.v;
+    g->ftg_n = l.n;
+    fn_index(&l);
     WV ws = find_windows(&l);
     for (size_t k = 0; k < ws.n; k++) {
       PUSH(g->windows, ws.v[k]);
@@ -2477,15 +2666,36 @@ static void analyze(void) {
       if (bad)
         gap(x->at, "window", "jump table target into window %" PRIx64, (uint64_t)x->at);
     }
+    g->ftg_of = NULL;
+    release(g->ftg.v);
+    release(g->fsrc_at);
+    release(g->fsrc);
+    g->ftg = (AV){0};
+    g->fsrc_at = NULL;
+    g->fsrc = NULL;
     release(l.v);
     release(ws.v);
   }
+  /* jump_at 的二分索引：跳转只在上面加 */
+  g->jidx.n = 0;
+  for (size_t i = 0; i < g->jumps.n; i++) {
+    Pair e = {g->jumps.v[i].at, (A)i};
+    PUSH(g->jidx, e);
+  }
+  if (g->jidx.n > 1)
+    qsort(g->jidx.v, g->jidx.n, sizeof(Pair), cmppair);
 }
-static Jump* jump_at(A at) {
-  for (size_t i = 0; i < g->jumps.n; i++)
-    if (g->jumps.v[i].at == at)
-      return g->jumps.v + i;
-  return NULL;
+static Jump* jump_at(A at) {   /* 同地址多条时取下标最小的一条（同原先顺序扫的结果） */
+  REQUIRE(g->jidx.n == g->jumps.n);
+  size_t lo = 0, hi = g->jidx.n;
+  while (lo < hi) {
+    size_t m = lo + (hi - lo) / 2;
+    if (g->jidx.v[m].a < at)
+      lo = m + 1;
+    else
+      hi = m;
+  }
+  return lo < g->jidx.n && g->jidx.v[lo].a == at ? g->jumps.v + g->jidx.v[lo].b : NULL;
 }
 static void gensite(Site* s) {
   Ins x = dis(iw(s->at), s->at);
@@ -2740,7 +2950,7 @@ static void sdk_aregion(void) {
     Ins x;
     if (at + 4 > value + size || !decode(iw(at), at, &x))
       break;
-    if (!eq(x.m, "ret") || x.op[0] || contains(&g->consumed, at))
+    if (!eq(x.m, "ret") || x.op[0] || consumed(at))
       continue;
     if (!unit_run(at, gen_aregion, &at, NULL))
       gap(at, "aregion", "AssertionError: %s", g->error);
@@ -2896,7 +3106,7 @@ static void fps_rows(int phase) {
       for (int i = 0; i < v.n && bad < 0; i++)
         if (!v.kind[i] && (why = fps_ven_check(v.w[i], i, v.n))) bad = i;
       if (bad >= 0) { gap(off, "fps", "veneer 第 %d 条体字 0x%08x 不能原样搬进跳板（%s）", bad + 1, v.w[bad], why); continue; }
-      if (site_at(off) || contains(&g->consumed, off)) { gap(off, "fps", "veneer 点已是改写点"); continue; }
+      if (site_at(off) || consumed(off)) { gap(off, "fps", "veneer 点已是改写点"); continue; }
       g->guarding = 1;
       int ok = unit_run(off, gen_fps_veneer, &v, NULL);
       g->guarding = 0;
@@ -2908,7 +3118,7 @@ static void fps_rows(int phase) {
       int wt = fps_reg(a1, 'w'), slot = a2 ? atoi(a2) : -1;
       /* Wt 不许 w16：跳板第一条 adrp x16 先把它盖了，记下的会是键页地址低 32 位（原生层线 10-26 审出） */
       if (wt < 0 || wt == 16 || slot < FPS_SLOT_LO || slot > FPS_SLOT_HI || (orig & 0xfc000000u) != 0x94000000u) { gap(off, "fps", "bl_rec 参数不认（Wt 不许 w16）、槽不在范围或原字不是 BL"); continue; }
-      if (site_at(off) || contains(&g->consumed, off)) { gap(off, "fps", "bl_rec 点已是改写点"); continue; }
+      if (site_at(off) || consumed(off)) { gap(off, "fps", "bl_rec 点已是改写点"); continue; }
       A target = off + ((int64_t)((int32_t)(orig << 6)) >> 4);
       /* 单点生成失败只撤本点、记缺口，同 patch_nso.py guarded(off, 'fps', gen) */
       BlRec b = {off, target, wt, slot};
@@ -3032,7 +3242,7 @@ static void cpatch_rows(int phase) {
     int bit = atoi(bits);
     if (off < 0 || off % 4 || off + 4 > (A)g->text || bit < 0 || bit > 63) { gap(off, "cpatch", "p 点不在代码段或位号不在 0–63"); continue; }
     if (iw(off) != orig) { gap(off, "cpatch", "p 点原字 0x%x，表里 0x%x", iw(off), orig); continue; }
-    if (site_at(off) || contains(&g->consumed, off)) { gap(off, "cpatch", "p 点已是改写点（宽屏点 / x18 / 跳转表等），两套改动叠在同一条指令上"); continue; }
+    if (site_at(off) || consumed(off)) { gap(off, "cpatch", "p 点已是改写点（宽屏点 / x18 / 跳转表等），两套改动叠在同一条指令上"); continue; }
     const char *why = cp_check(orig, off), *why2 = cp_check(nw, off);
     if (why || why2) { gap(off, "cpatch", "p 点%s%s", why ? "原指令" : "补丁指令", why ? why : why2); continue; }
     /* 单点生成失败（如补丁区离本点超 ±128 MB）只撤本点、记缺口，同 patch_nso.py guarded(off, 'cpatch', gen)；pack/cpatch.py 据缺口剔掉那份补丁重来 */
@@ -3228,7 +3438,7 @@ static void widen(void) {
       continue;
     }
     Site* s = site_at(off);
-    if (off >= (A)g->text || s || contains(&g->consumed, off)) {
+    if (off >= (A)g->text || s || consumed(off)) {
       wskip(off, "%s 点不在可改代码里或已是改写点", kind);
       continue;
     }
@@ -3780,6 +3990,7 @@ static void spins(void) {
   AV heads = {0};
   VEC(Pair) backedges = {0};
   for (A a = 0; a < (A)g->text; a += 4) {
+    if (!in_code(a)) continue;
     uint32_t w = u32(g->orig + a);
     int top = w >> 24;
     if (!(top == 0x16 || top == 0x17 || top == 0x54 || top == 0x34 || top == 0x35 || top == 0xb4 ||
@@ -4389,6 +4600,7 @@ static int attempt(const s2a_rewrite_request* r, const s2a_rewrite_options* opti
     sdk_addr_cut();
     boundaries();
     scan();
+    data_in_text();
     analyze();
     generate();
     sdk_aregion();

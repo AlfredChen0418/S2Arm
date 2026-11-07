@@ -76,19 +76,80 @@ def profile_teams(env=None):
 #   判据是团队号真的出现，不是账号存在
 ACCOUNT_NONE = ("还没有登录 Apple ID：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，点 + 添加你的 Apple ID（免费的就行），"
                 "选中账号，等团队列表显示出来，再回来重新检查。装了多个 Xcode 也只要登一个，账号是共用的。")
-TEAM_PENDING = ("Apple ID 已经登录，团队还没同步下来：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，"
-                "等团队列表显示出来，再回来重新检查。")
+TEAM_PENDING = ("Apple ID 已经登录，但这台 Mac 还没有签名团队：点「解决办法」打开现成的引导项目，在 Xcode 里选 Personal Team，"
+                "连上手机点运行一次，回来会自动打勾。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。")
+
+
+def _security_text(args, env):
+    try:
+        p = subprocess.run(["security", *args], capture_output=True, text=True, env=env, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return p.stdout if p.returncode == 0 else ""
+
+
+def development_identities(env=None):
+    """钥匙串里带私钥、能用的开发证书的 SHA-1。"""
+    text = _security_text(["find-identity", "-v", "-p", "codesigning"], env)
+    return {h.upper() for h in re.findall(r'\b([0-9A-Fa-f]{40})\s+"(?:Apple Development|iPhone Developer):', text)}
+
+
+def keychain_teams(env=None):
+    """钥匙串开发证书的 OU 就是团队号，不依赖 Xcode 偏好缓存。证书看不出是否付费，按免费处理（只影响到期提示）；最终权限由 Xcode 签名验证。"""
+    identities = development_identities(env)
+    if not identities:
+        return []
+    text = _security_text(["find-certificate", "-a", "-Z", "-p"], env)
+    out, seen = [], set()
+    for sha, pem in re.findall(r"SHA-1 hash: ([0-9A-Fa-f]{40})\s+(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)", text, re.S):
+        if sha.upper() not in identities:
+            continue
+        try:
+            subject = subprocess.run(["/usr/bin/openssl", "x509", "-noout", "-subject"], input=pem, capture_output=True, text=True, env=env, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        match = re.search(r"\bOU\s*=\s*([A-Z0-9]{10})\b", subject)
+        if match and match[1] not in seen:
+            seen.add(match[1])
+            out.append(dict(id=match[1], name="", free=True))
+    return out
+
+
+PREFS_UNREADABLE = "S2ArmPrefsUnreadable"
+
+
+def _xcode_prefs(env):
+    p = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True, env=env, timeout=20)
+    if p.returncode:
+        return {}
+    # 第三方 Xcode 扩展的快捷键键名可能带控制字符（如 ESC），defaults 原样导出，XML 不允许，解析会失败：先去掉（#144）
+    text = re.sub(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", b"", p.stdout)
+    try:
+        return plistlib.loads(text)
+    except Exception:
+        return {PREFS_UNREADABLE: True}
+
+
+def signing_summary(env=None):
+    """给诊断用的签名现状：只有版本和数量，不含账号和团队名。"""
+    if os.name == "nt":
+        return ""
+    try:
+        prefs = _xcode_prefs(env)
+        version = subprocess.run(["xcodebuild", "-version"], capture_output=True, text=True, env=env, timeout=20).stdout.splitlines()[:1]
+    except (OSError, subprocess.TimeoutExpired):
+        prefs, version = {}, []
+    accounts = prefs.get("DVTDeveloperAccountManagerAppleIDLists") or {}
+    count = sum(len(xs) for xs in accounts.values() if isinstance(xs, list)) if isinstance(accounts, dict) else 0
+    return (f"{version[0] if version else 'Xcode 未知'}；账号 {count} 个；团队缓存键{'读不了偏好' if PREFS_UNREADABLE in prefs else '有' if 'IDEProvisioningTeamByIdentifier' in prefs else '无'}；"
+            f"可用团队 {len(xcode_account(env)[1])} 个；开发证书 {len(development_identities(env))} 张")
 
 
 def xcode_account(env=None):
-    """(有没有登录 Apple ID, 团队列表)：团队优先 Xcode 团队缓存，账号存在但缓存缺失时核本机签名材料。"""
+    """(有没有登录 Apple ID, 团队列表)：依次看 Xcode 团队缓存、本机描述文件、钥匙串开发证书，定位不到才算没有。"""
     if os.name == "nt":   # Windows 没有 Xcode 账号（也没有 defaults 命令）：签名走 Impactor
         return False, []
-    p = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True, env=env, timeout=20)
-    try:
-        prefs = plistlib.loads(p.stdout) if p.returncode == 0 else {}
-    except Exception:
-        prefs = {}
+    prefs = _xcode_prefs(env)
     out, seen = [], set()
     for teams in (prefs.get("IDEProvisioningTeamByIdentifier") or {}).values():
         for t in teams or []:
@@ -98,7 +159,42 @@ def xcode_account(env=None):
                 out.append(dict(id=tid, name=t.get("teamName") or "", free=bool(t.get("isFreeProvisioningTeam"))))
     accounts = prefs.get("DVTDeveloperAccountManagerAppleIDLists") or {}
     logged_in = isinstance(accounts, dict) and any(isinstance(xs, list) and any(isinstance(a, dict) and a.get("identifier") for a in xs) for xs in accounts.values())
-    return logged_in, out or (profile_teams(env) if logged_in else [])
+    return logged_in, out or (profile_teams(env) if logged_in else []) or keychain_teams(env)
+
+
+SIGNING_PBXPROJ = """// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A1000000000000000000000A = {isa = PBXBuildFile; fileRef = A1000000000000000000000B; };
+A1000000000000000000000B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+A1000000000000000000000C = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = S2ArmSigning.app; sourceTree = BUILT_PRODUCTS_DIR; };
+A1000000000000000000000D = {isa = PBXGroup; children = (A1000000000000000000000B, A1000000000000000000000E); sourceTree = "<group>"; };
+A1000000000000000000000E = {isa = PBXGroup; children = (A1000000000000000000000C); name = Products; sourceTree = "<group>"; };
+A1000000000000000000000F = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000A); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000010 = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000013; buildPhases = (A1000000000000000000000F); buildRules = (); dependencies = (); name = S2ArmSigning; productName = S2ArmSigning; productReference = A1000000000000000000000C; productType = "com.apple.product-type.application"; };
+A10000000000000000000011 = {isa = PBXProject; buildConfigurationList = A10000000000000000000012; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A1000000000000000000000D; productRefGroup = A1000000000000000000000E; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000010); };
+A10000000000000000000012 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000014); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A10000000000000000000013 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A10000000000000000000014 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; ONLY_ACTIVE_ARCH = YES; }; name = Debug; };
+A10000000000000000000015 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; PRODUCT_BUNDLE_IDENTIFIER = "@BUNDLE@"; PRODUCT_NAME = "$(TARGET_NAME)"; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+}; rootObject = A10000000000000000000011; }
+"""
+SIGNING_APP = """import SwiftUI
+
+@main struct S2ArmSigningApp: App {
+    var body: some Scene { WindowGroup { Text("S2Arm 签名已就绪，可以回到电脑继续") } }
+}
+"""
+
+
+def signing_project(c):
+    """没有团队的玩家用的引导项目：放在私有目录，玩家在 Xcode 选 Personal Team、连手机运行一次，Xcode 就会生成证书和描述文件。"""
+    root = c.private / "signing-helper"
+    project = root / "S2ArmSigning.xcodeproj"
+    project.mkdir(parents=True, exist_ok=True)
+    bundle = "io.s2arm.signing.h" + hashlib.sha256(str(c.private).encode()).hexdigest()[:10]   # 免费账号的包名要全局唯一：按这台机的数据目录算，重开不变
+    (project / "project.pbxproj").write_text(SIGNING_PBXPROJ.replace("@BUNDLE@", bundle), encoding="utf-8")
+    (root / "App.swift").write_text(SIGNING_APP, encoding="utf-8")
+    return dict(path=str(project))
 
 
 def xcode_teams(env=None):
@@ -113,9 +209,11 @@ def no_team_failure(env=None):
 def pick_team(teams, want=None):
     if want:
         t = next((t for t in teams if t["id"] == want), None)
-        if not t:
-            raise Failure(f"Xcode 里没有登录团队 {want}。", code="xcode_account_missing")
-        return t
+        if t:
+            return t
+        if not re.fullmatch(r"[A-Z0-9]{10}", want):
+            raise Failure("Team ID 要是 10 位大写字母或数字，可以在 Xcode 的账户页或 Apple 开发者网站查到。", code="xcode_account_missing")
+        return dict(id=want, name="", free=True)   # 玩家手填的：本机查不到也试，能不能用由 Xcode 签名给真实结果
     if not teams:
         raise no_team_failure()
     paid = [t for t in teams if not t["free"]]
@@ -141,15 +239,169 @@ def game_ctx(gid):
     return f"@bundle/Games/{gid.upper()}/launch.ctx"
 
 
+S_NO_USB = "这台 Mac 的 USB 上没看到 iPhone / iPad：换一根能传数据的线（充电线不行）、换个接口直连 Mac，并解锁手机。"
+S_NOT_LISTED = "这台 Mac 看到手机插着，但设备服务还没列出它：解锁手机，在弹出的框里点「信任」；还不行就拔掉重插一次。"
+S_MANY_WIRED = "连着不止一台 iPhone / iPad：只留要装的那一台。"
+S_MANY_NETWORK = "同一网络上有多台配对过的 iPhone / iPad：用数据线连上要装的那一台。"
+S_STALE_CHOICE = "之前选的设备「{0}」现在不在，可选：{1}。用数据线只连要装的那一台再试。"
+S_TRUST = "在 iPhone 上点「信任」，再输入手机的锁屏密码。"
+S_DEV_MODE = "在 iPhone 上打开「设置 → 隐私与安全性 → 开发者模式」，按提示重启手机；重启后解锁，这里会自动打勾。"
+S_TUNNEL = "和手机建立开发连接失败：解锁手机后再试；走无线的话换成数据线。"
+S_DDI = "手机的开发者服务没准备好：解锁手机后再试；还不行就重启手机。"
+PREPARE_COOLDOWN = 30   # 清单几秒问一次：配对框、更新映像这类有动静的步骤隔一会儿才重试
+
+
+def _link(d):
+    return d.get("connectionProperties", {})
+
+
+def _mask(value):
+    return f"{value[:4]}…{value[-2:]}" if len(value or "") > 8 else "…"
+
+
+def _clean(text):
+    """诊断里的 devicectl 原文：设备序列号、UUID 不进诊断包"""
+    return re.sub(r"\b[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4,16}(?:-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})?\b", "…", str(text or ""))
+
+
+def _with_raw(sentence, raw):
+    """定句走翻译，原文另起一行照原样显示"""
+    tail = _clean(raw).strip().splitlines()
+    return sentence + ("\n" + tail[-1] if tail else "")
+
+
+def _pick_device(devices, want):
+    """要装的那台：返回 (设备, 连接环节的问题)。旧选择对不上时不算没连：只有一台就用它，多台列出来让玩家选"""
+    phones = [d for d in devices if d.get("hardwareProperties", {}).get("reality") == "physical" and d.get("hardwareProperties", {}).get("platform") in ("iOS", "iPadOS")]
+    live = [d for d in phones if _link(d).get("transportType") in ("wired", "localNetwork") or _link(d).get("tunnelState") == "connected"]
+    if want:
+        def named(d):
+            return want in (d.get("identifier"), d.get("hardwareProperties", {}).get("udid"), (d.get("deviceProperties", {}).get("name") or "").strip())
+        chosen = [d for d in live if named(d)]
+        if chosen:
+            live = chosen
+        elif len(pool := [d for d in live if _link(d).get("transportType") == "wired"] or live) > 1:   # 有线优先，同网配对过的不列
+            return None, S_STALE_CHOICE.replace("{0}", want).replace("{1}", "、".join(dict.fromkeys((d.get("deviceProperties", {}).get("name") or "").strip() for d in pool)))
+    wired = [d for d in live if _link(d).get("transportType") == "wired"]
+    if len(wired) > 1:
+        return None, S_MANY_WIRED
+    if not wired and len(live) > 1:
+        return None, S_MANY_NETWORK
+    if wired or live:
+        return (wired or live)[0], ""
+    return None, ""
+
+
+def _cooled(c, device, step, polling):
+    """清单轮询时同一步隔 PREPARE_COOLDOWN 秒才再做一次；真正装机时总是做"""
+    if not polling:
+        return True
+    path = c.private / "device-prepare.json"
+    try:
+        marks = json.loads(path.read_text())
+    except (OSError, ValueError):
+        marks = {}
+    key = f"{device.get('identifier')}:{step}"
+    if time.time() - marks.get(key, 0) < PREPARE_COOLDOWN:
+        return False
+    marks[key] = time.time()
+    atomic(path, marks)
+    return True
+
+
+def device_link(c, want="", polling=False):
+    """读设备并把它准备到能装（玩家不用打开 Xcode）：配对 → 开发者模式 → 拉起隧道和开发者服务 → 必要时更新开发者磁盘映像。
+    返回 {device, stage, problem, trace}：stage 是没过的环节（connected / trusted / developerMode / prepare，全过为空）；polling = 装机前清单轮询。"""
+    import target
+    from diag import devicectl
+    trace, limits = [], (30, 20, 120) if polling else (120, 60, 240)
+    def note(step, rc, raw): trace.append(dict(step=step, rc=rc, raw=_clean(raw)[-1500:]))
+    def say(text):
+        if not polling: c.emit("progress", text)
+    def read():
+        devices, why, rc, raw = target.device_list(c, timeout=30 if polling else 60)
+        note("list devices", rc, raw)
+        return devices, why
+    def step(name, *args, timeout):
+        try:
+            rc, _, raw = devicectl(c, *args, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc, raw = "timeout", f"超过 {timeout} 秒"
+        except OSError as e:
+            rc, raw = "oserror", str(e)
+        note(name, rc, raw)
+        return rc, raw
+    def out(device, stage, problem, devices=()):
+        return dict(device=device, stage=stage, problem=problem, trace=trace, devices=list(devices))
+    def again(dev):
+        devices, why = read()
+        fresh = next((d for d in devices if d.get("identifier") == dev.get("identifier")), None)
+        return devices, why, fresh
+    devices, why = read()
+    if why:
+        return out(None, "connected", why)
+    dev, problem = _pick_device(devices, want)
+    if problem:
+        return out(None, "connected", problem, devices)
+    if dev is None:
+        usb = target.usb_idevices()
+        note("usb", 0, "、".join(usb) or "没有 iPhone / iPad")
+        return out(None, "connected", S_NOT_LISTED if usb else S_NO_USB, devices)
+    if _link(dev).get("pairingState") != "paired":
+        raw = ""
+        if _cooled(c, dev, "pair", polling):
+            say("正在请手机信任这台 Mac")
+            _, raw = step("manage pair", "manage", "pair", "--device", dev["identifier"], timeout=limits[0])
+            devices, why, fresh = again(dev)
+            dev = fresh or dev
+        if _link(dev).get("pairingState") != "paired":
+            return out(dev, "trusted", _with_raw(S_TRUST, raw), devices)
+    if dev.get("deviceProperties", {}).get("developerModeStatus") not in ("enabled", None):
+        return out(dev, "developerMode", S_DEV_MODE, devices)
+    def services_ready(d):
+        return d.get("deviceProperties", {}).get("ddiServicesAvailable") is not False
+    if _link(dev).get("tunnelState") != "connected" or not services_ready(dev):
+        say("正在和手机建立开发连接")
+        rc, raw = step("device info details", "device", "info", "details", "--device", dev["identifier"], timeout=limits[1])
+        if rc != 0:
+            return out(dev, "prepare", _with_raw(S_TUNNEL, raw), devices)
+        devices, why, fresh = again(dev)
+        dev = fresh or dev
+        if not services_ready(dev):
+            raw = ""
+            if _cooled(c, dev, "ddi", polling):
+                say("正在准备手机的开发者服务")
+                _, raw = step("manage ddis update", "manage", "ddis", "update", timeout=limits[2])
+                _, raw2 = step("device info details", "device", "info", "details", "--device", dev["identifier"], timeout=limits[1])
+                raw = raw2 or raw
+                devices, why, fresh = again(dev)
+                dev = fresh or dev
+            if not services_ready(dev):
+                return out(dev, "prepare", _with_raw(S_DDI, raw), devices)
+    return out(dev, "", "", devices)
+
+
+def _write_link_report(c, link):
+    """失败时写进诊断包（私有目录/logs）：每步退出码和原文、每台设备的连接状态；序列号打码，不写设备名"""
+    lines = ["# 设备连接诊断"]
+    lines += [f"{t['step']}: rc={t['rc']} {t['raw']}" for t in link["trace"]]
+    for d in link["devices"]:
+        h, p, cp = d.get("hardwareProperties", {}), d.get("deviceProperties", {}), _link(d)
+        lines.append(f"device {_mask(h.get('udid') or d.get('identifier') or '')} {h.get('productType')} reality={h.get('reality')} transport={cp.get('transportType')} pairing={cp.get('pairingState')} "
+                     f"tunnel={cp.get('tunnelState')} boot={p.get('bootState')} developerMode={p.get('developerModeStatus')} ddi={p.get('ddiServicesAvailable')}")
+    lines.append(f"结论: stage={link['stage']} {link['problem']}")
+    target = c.private / "logs" / f"{c.task}-device.log"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def phone(c):
     import target
-    want = (c.r.get("device") or "").strip()
-    ds = target.cable_first([d for d in target.connected(c, with_link=True) if not want or want in (d["id"], d["name"])])
-    if not ds:
-        raise Failure("没连 iPhone：用数据线连上并解锁，在手机上点「信任」；第一次还要在「设置 → 隐私与安全性 → 开发者模式」打开开发者模式。", code="device_not_connected")
-    if len(ds) > 1:
-        raise Failure("连着不止一台 iPhone / iPad：只留要装的那一台再试。", code="device_not_connected")
-    return ds[0]
+    link = device_link(c, (c.r.get("device") or "").strip())
+    if link["problem"]:
+        _write_link_report(c, link)
+        raise Failure(link["problem"], code="device_not_connected" if link["stage"] == "connected" else "device_not_ready")
+    return target._row(link["device"], c.env()["DEVELOPER_DIR"], with_link=True)
 
 
 def udid_of(c, ident):
@@ -246,9 +498,10 @@ def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None):
         m = re.search(r"资源包推进去了，但(机上解包 \d+ 秒没有新进展[^：\n]*|起 App 后 \d+ 秒机上解包没有开始)", text)   # tools/push_pack.py apply：按进度判停住（11-07）
         if m:
             raise Failure(f"资源包推进去了，但{m.group(1)}：请打开这款游戏，保持在前台等它导入完，会自动进入游戏。", code="job_failed") from e
-        m = re.search(r"起 App 失败：([^\n]*)", text)
+        m = re.search(r"资源包已传完，还差最后一步：[^\n]*", text)   # tools/push_pack.py NeedsPlayer：电脑拉不起 App，传输本身成功（#192）
         if m:
-            raise Failure("起 App 解开资源包失败：" + m.group(1).strip()[:200], code="job_failed") from e
+            c.diagnostic(m.group(0), code="manual_unpack_required", severity="warning")
+            return got.get("files", 0), got.get("mb", 0) << 20
         from errors import tool_reason
         raise Failure("资源包推不进 iPhone：" + tool_reason(log), code="resource_transfer_failed") from e
     return got.get("files", 0), got.get("mb", 0) << 20
@@ -335,7 +588,6 @@ def readiness(c):
     gid = c.r.get("gameId") or ""
     if os.name == "nt":
         return readiness_windows(c, gid)
-    from diag import devicectl
     items = []
     ipa_path = ""
     def item(key, ok, title, detail, who="human", waiting=False):
@@ -349,26 +601,16 @@ def readiness(c):
     teams = xcode_teams(c.env())
     team = (pick_team(teams) if teams else None)
     item("appleId", team, "已登录 Apple ID", "" if team else (TEAM_PENDING if xcode_account(c.env())[0] else ACCOUNT_NONE))
-    try:
-        rc, data, _ = devicectl(c, "list", "devices", timeout=30)
-    except (subprocess.TimeoutExpired, OSError):
-        rc, data = 1, {}
-    ds = [d for d in data.get("result", {}).get("devices", []) if rc == 0
-          and d.get("hardwareProperties", {}).get("reality") == "physical" and d.get("hardwareProperties", {}).get("platform") in ("iOS", "iPadOS")
-          and (d.get("connectionProperties", {}).get("transportType") == "wired" or d.get("connectionProperties", {}).get("tunnelState") == "connected")]
-    ds = [d for d in ds if d.get("connectionProperties", {}).get("transportType") == "wired"] or ds   # 有线连着的优先，同网配对的其他手机不算「连了两台」（同 target.cable_first）
-    name = (ds[0].get("deviceProperties", {}).get("name") or "").strip() if len(ds) == 1 else ""
-    if len(ds) > 1:
-        item("connected", False, "iPhone 已用数据线连上", "连着不止一台 iPhone / iPad：只留要装的那一台。")
-    else:
-        item("connected", ds, "iPhone 已用数据线连上", "用数据线把 iPhone 连到这台 Mac，并解锁手机。")
-    one = ds[0] if len(ds) == 1 else None
-    paired = bool(one) and one.get("connectionProperties", {}).get("pairingState") == "paired"
-    item("trusted", paired, "iPhone 已信任这台 Mac", "在 iPhone 上点「信任」，再输入手机的锁屏密码。", waiting=not one)
-    dev_mode = paired and one.get("deviceProperties", {}).get("developerModeStatus") == "enabled"
-    item("developerMode", dev_mode, "iPhone 已打开开发者模式",
-         "在 iPhone 上打开「设置 → 隐私与安全性 → 开发者模式」，按提示重启手机；重启后解锁，这里会自动打勾。", waiting=not paired)
-    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "", ipaPath=ipa_path)
+    link = device_link(c, (c.r.get("device") or "").strip(), polling=True)
+    one, stage = link["device"], link["stage"]
+    name = (one.get("deviceProperties", {}).get("name") or "").strip() if one else ""
+    item("connected", one, "iPhone 已用数据线连上", link["problem"] if stage == "connected" else "")
+    paired = bool(one) and stage != "trusted"
+    item("trusted", paired, "iPhone 已信任这台 Mac", link["problem"] if stage == "trusted" else S_TRUST, waiting=not one)
+    dev_mode = paired and stage != "developerMode"
+    item("developerMode", dev_mode, "iPhone 已打开开发者模式", S_DEV_MODE, waiting=not paired)
+    item("deviceReady", dev_mode and stage == "", "iPhone 已准备好安装", link["problem"] if stage == "prepare" else "", who="app", waiting=not dev_mode)
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "", ipaPath=ipa_path, signing=signing_summary(c.env()))
 
 
 def linked_sdk(exe):
@@ -620,6 +862,9 @@ class WinPhone:
             return self.W.push_pack(self.udid, self.bid, str(pack), str(self.devpush) if self.devpush.is_file() else None,
                                     say=lambda m: self.c.emit("message", m), docs=game_docs(g), ctx=game_ctx(g), apply_after=True)
         except self.W.Fail as e:
+            if e.err == "manual_unpack_required":
+                self.c.diagnostic(str(e), code=e.err, severity="warning")
+                return e.transferred
             raise Failure(str(e), code=e.err or "resource_transfer_failed") from e
 
     def purge(self, g):
@@ -669,8 +914,6 @@ def remove_from_phone(c):
     _, games = latest_container(c)
     if gid not in games:
         raise Failure("手机上的 S2Arm 里没有这款。", code="job_failed")
-    if len(games) == 1:
-        raise Failure("这是手机上最后一款：在 iPhone 桌面长按 S2Arm 删除 App 即可。", code="container_last_game")
     c.begin("找签名账号与 iPhone", 1, 4)
     ph = phone_for(c)
     if not ph.bid:
@@ -679,7 +922,10 @@ def remove_from_phone(c):
     backup = ph.backup(gid)
     c.begin("更新手机上的 S2Arm", 3, 4)
     with packer.dropped(c, gid) as (ipa, left):
-        ph.install(ipa, left, steps=False)
+        # 最后一款（#227）：不装空容器（宿主 0 款的启动路径没在真机验过，vawin.c 报红不占窗口），手机上的 App 原样留着，
+        #   下一步删掉它的数据后库界面按「数据不在」不再显示 = 空库；游戏库这边的容器照样摘空，下次装新游戏时覆盖装把旧程序一起换掉
+        if left:
+            ph.install(ipa, left, steps=False)
         packer.commit_drop(c, ipa)
     c.begin("删除手机上这款的数据", 4, 4)
     ok, out = ph.purge(gid)

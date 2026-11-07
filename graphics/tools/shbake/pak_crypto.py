@@ -203,43 +203,70 @@ def _scan(image, index, index_hash, workers=None, first=()):
     spans = [(a, min(a + step, end)) for a in range(0, end, step)]
     _SCAN = (image, index, index_hash)
     try:
-        import multiprocessing as mp
-        ctx = mp.get_context('fork')
-    except (ImportError, ValueError):
-        ctx = None
-    try:
-        if ctx is None or workers <= 1 or not spans:
+        if not hasattr(os, 'fork') or workers <= 1 or not spans:
             for key in first:
                 if key_fits(key, index, index_hash): return key
             for sp in spans:
                 k = _scan_range(sp)
                 if k is not None: return k
             return None
-        # 进程池用 concurrent.futures（11-05 根修）：原先 multiprocessing.Pool 里某个工作进程异常退出（被杀 / 崩溃）时，它手上那段既不回调也不报错，
-        #   下面 done.wait() 永远等——门禁 t_keyscan 两次 120 秒超时、日志全空（11-04 16:51、11-05 01:03 gate-host）。ProcessPoolExecutor 发现工作进程死掉
-        #   会让没完成的段都带 BrokenProcessPool 结束，这里记下来、等全部段结束后本进程把没扫到的段顺序补扫，结果与不出事时相同
-        import threading, sys
-        from concurrent.futures import ProcessPoolExecutor
-        hit, left, lock, done, lost = [], [len(spans)], threading.Lock(), threading.Event(), []
-        def got(sp, f):   # 每段结束（执行器的管理线程里回调）
-            with lock:
-                left[0] -= 1
-                if f.cancelled() or f.exception() is not None: lost.append(sp)
-                elif f.result() is not None and not hit: hit.append(f.result())
-                if hit or left[0] == 0: done.set()
-        with ProcessPoolExecutor(workers, mp_context=ctx) as pool:
-            for sp in spans: pool.submit(_scan_range, sp).add_done_callback(lambda f, sp=sp: got(sp, f))
-            for key in first:   # 扫描命中才停；扫描扫完没命中时构造候选照样试完（11-02 小小梦魇3：密钥在第 9101 个候选，并行扫描先扫完就停了试，漏钥判红）
-                if hit: break
-                if key_fits(key, index, index_hash):
-                    pool.shutdown(wait=False, cancel_futures=True); return key
-            done.wait()
-            pool.shutdown(wait=False, cancel_futures=True)   # 命中后没开始的段不再扫；已在扫的段很短（全镜像的 1/(8×路数)），随 with 收尾
-        if not hit and lost:
+        return _scan_forked(spans, workers, first, index, index_hash)
+    finally:
+        _SCAN = None
+
+
+def _scan_forked(spans, workers, first, index, index_hash):
+    """fork 出 workers 个子进程，第 w 个扫第 w、w+workers、… 段，每扫完一段经管道报一行「段号 密钥十六进制或 -」；本进程边收边试 first。
+    父进程不起任何线程，返回前（命中、扫完或异常）一律 SIGKILL 并回收全部子进程。
+    11-09 根修：原先用 concurrent.futures.ProcessPoolExecutor（fork 上下文）。它的管理线程已在跑时再 fork，子进程可能卡在 fork 时被别的线程持有的锁上，
+      既不领任务也不领退出哨兵；别的子进程把段扫完、结果照对，但解释器退出时 join 这个子进程永等——gate-host 门禁 t_keyscan 打完「失败 0」仍 120 秒超时
+      （11-09 00:19、01:58 两次，退出 124）。子进程异常退出（被杀 / 崩溃）时管道读到 EOF，它没报的段由本进程补扫，结果与不出事时相同"""
+    import select, signal, sys
+    workers = min(workers, len(spans))
+    kids, pids = {}, []   # 读端 fd → [没报的段号集合, 半行缓冲]
+    try:
+        for w in range(workers):
+            mine = range(w, len(spans), workers)
+            r, wr = os.pipe()
+            pid = os.fork()
+            if pid == 0:   # 子进程：只算、只写管道，任何情况都 _exit（不跑父进程的 atexit / 缓冲刷新）
+                try:
+                    os.close(r)
+                    for i in mine:
+                        k = _scan_range(spans[i])
+                        os.write(wr, f'{i} {k.hex() if k is not None else "-"}\n'.encode())
+                        if k is not None: break
+                finally:
+                    os._exit(0)
+            os.close(wr); pids.append(pid); kids[r] = [set(mine), b'']
+        hit, lost, cand, cand_left = None, [], iter(first), True
+        while kids and hit is None:
+            ready = select.select(list(kids), [], [], 0 if cand_left else None)[0]
+            for fd in ready:
+                ent, data = kids[fd], os.read(fd, 65536)
+                if not data:   # 子进程结束：正常扫完时集合已空；异常退出时剩下的段记为丢失
+                    lost += [spans[i] for i in ent[0]]; os.close(fd); del kids[fd]; continue
+                *lines, ent[1] = (ent[1] + data).split(b'\n')
+                for ln in lines:
+                    i, k = ln.split(); ent[0].discard(int(i))
+                    if k != b'-' and hit is None: hit = bytes.fromhex(k.decode())
+            if cand_left and hit is None:   # 每轮试一个构造候选；扫描命中才停
+                key = next(cand, None)
+                if key is None: cand_left = False
+                elif key_fits(key, index, index_hash): return key
+        if hit is not None: return hit
+        for key in cand:   # 扫描扫完没命中：构造候选照样试完（11-02 小小梦魇3：密钥在第 9101 个候选）
+            if key_fits(key, index, index_hash): return key
+        if lost:
             print(f'【黄】找钥回退扫描：{len(lost)} 段的工作进程异常退出，本进程补扫', file=sys.stderr)
             for sp in sorted(lost):
                 k = _scan_range(sp)
                 if k is not None: return k
-        return hit[0] if hit else None
+        return None
     finally:
-        _SCAN = None
+        for fd in kids: os.close(fd)
+        for pid in pids:
+            try: os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError: pass
+            try: os.waitpid(pid, 0)
+            except ChildProcessError: pass

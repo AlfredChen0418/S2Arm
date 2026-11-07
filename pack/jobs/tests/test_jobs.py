@@ -1208,6 +1208,7 @@ class JobsTests(unittest.TestCase):
         outside = self.c.library / "outside" / "z"; outside.parent.mkdir(parents=True); outside.write_text("x")
         (work / "pkg/link").symlink_to(outside.parent)   # 指向外部的链接：只删链接，指向的文件在
         with patch.object(library, "_windows_layout", return_value=True):
+            (self.c.library / "iPhone" / game["id"] / "a.ipa").write_bytes(b"ipa")   # 老玩家：有 IPA 没容器件
             library.prune_build(self.c, game["id"])
         self.assertEqual([q for q in keep if not q.exists()], [])
         self.assertEqual([q for q in gone if q.exists()], [])
@@ -1237,6 +1238,29 @@ class JobsTests(unittest.TestCase):
         self.assertEqual(save.read_text(), "keep")
         self.assertTrue((self.c.library / package["path"]).exists())
         self.assertTrue(all(f.exists() for f in other))
+
+    def test_delete_also_drops_game_from_library_container(self):
+        # 期望（#227）：游戏库容器里有 A、B，删 A → 容器清单只剩 B、A 的随行目录和镜像包没了、B 原样；容器里没有的款删除不动容器。真跑 ship_ext container-drop
+        a, b = "0100000000010000", "0100000000020000"
+        app = self.c.library / "iPhone/container/S2Arm.app"
+        for gid in (a, b):
+            (app / "Games" / gid).mkdir(parents=True); (app / "Games" / gid / "main.npdm").write_bytes(b"META" + gid.encode())
+            (app / "Frameworks").mkdir(exist_ok=True); (app / "Frameworks" / f"S2AImages-{gid}.dylib").write_bytes(gid.encode())
+        (app / "s2a_catalogue.json").write_text(json.dumps({"schema": 1, "shell_id": "S", "games": [{"title_id": a}, {"title_id": b}]}))
+        import plistlib; (app / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIdentifier": "io.s2arm.games", "CFBundleExecutable": "S2Arm"})); (app / "S2Arm").write_bytes(b"bin")
+        (self.c.library / "iPhone/container/S2Arm.ipa").write_bytes(b"old")
+        self.catalogue([self.game(tid=a, packages=[self.package(tid=a)]), self.game(tid=b, packages=[self.package(tid=b, sha="b" * 64)])])
+        self.c.r["gameId"] = a
+        library.delete(self.c)
+        self.assertEqual([e["title_id"] for e in json.loads((app / "s2a_catalogue.json").read_text())["games"]], [b])
+        self.assertEqual(sorted(p.name for p in (app / "Games").iterdir()), [b])
+        self.assertEqual(sorted(p.name for p in (app / "Frameworks").iterdir()), [f"S2AImages-{b}.dylib"])
+        self.assertNotEqual((self.c.library / "iPhone/container/S2Arm.ipa").read_bytes(), b"old")
+        before = (app / "s2a_catalogue.json").read_text()
+        self.c.r["gameId"] = b
+        library.delete(self.c)   # 最后一款也摘（摘空）
+        self.assertEqual(json.loads((app / "s2a_catalogue.json").read_text())["games"], [])
+        self.assertNotEqual(before, (app / "s2a_catalogue.json").read_text())
 
     def test_delete_waits_for_execution_lock_held_by_cancelled_task(self):
         # 期望：执行锁被（刚被取消、还没退出的）任务占着 3 秒 → 删除不立刻失败，等锁放开后照样删掉（10-26 Spare-host：导入后自动排的 Mac 准备占锁，删除直接报「另一个任务正在使用游戏库」）
@@ -1568,6 +1592,71 @@ class JobsTests(unittest.TestCase):
         module.apply_custom(app, entries, str(spec_file), "Games")
         self.assertEqual(entries, [dict(title_id="A", name="原名", icon="Games/A/icon.jpg"), dict(title_id="B", name="别的款")])
         self.assertEqual((game / "icon.jpg").read_bytes(), b"original")
+
+    def stopped_game(self, kit=True, ipa=True):
+        gid = "0100000000010000"
+        atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=gid, name="x", display="", packages=[], hidden=False)]))
+        out = self.c.library / "iPhone" / gid; root = out / "roots" / "k@pkg"; root.mkdir(parents=True)
+        (root / "main.npdm").write_bytes(b"n"); (root / "stage.log").write_text("阶段日志")
+        (out / "roots" / "k@现行").symlink_to("k@pkg"); (self.c.library / "cache" / gid / "x").mkdir(parents=True)
+        if ipa: (out / "a.ipa").write_bytes(b"ipa"); (out / "t资源包").mkdir()
+        if kit: (out / library.CONTAINER_KIT).mkdir(); (out / library.CONTAINER_KIT / "main.npdm").write_bytes(b"old")
+        release = self.c.library / "games" / gid / "releases"; (release / "good").mkdir(parents=True); (release / "bad.partial").mkdir()
+        save = self.c.library / "saves" / gid / "s.bin"; save.parent.mkdir(parents=True); save.write_bytes(b"save")
+        return gid, out, save
+
+    def stop_context(self, gid):
+        return Context(dict(self.request, taskId=str(uuid.uuid4()), operation="ipa", gameId=gid))
+
+    def test_clean_after_stop_keeps_previous_delivery_and_logs(self):
+        gid, out, save = self.stopped_game()
+        c = self.stop_context(gid)
+        library.clean_after_stop(c)
+        self.assertEqual(sorted(p.name for p in out.iterdir()), sorted(["a.ipa", "t资源包", library.CONTAINER_KIT]))
+        self.assertFalse((self.c.library / "cache" / gid).exists())
+        self.assertEqual((out / library.CONTAINER_KIT / "main.npdm").read_bytes(), b"old")
+        self.assertEqual(save.read_bytes(), b"save")
+        self.assertEqual((c.private / "logs" / (c.task + "-stages") / "stage.log").read_text(), "阶段日志")
+
+    def test_clean_after_stop_keeps_failed_stage_logs(self):   # #251：改写失败的 .failed/<款>_main.log 在游戏库缓存里，清理前要拷进私有日志目录，诊断包才带得上
+        gid, out, _ = self.stopped_game()
+        failed = self.c.library / "cache" / gid / "x" / "roots" / ".failed"; failed.mkdir(parents=True)
+        (failed / f"{gid}_main.log").write_text("改写超时前最后一行")
+        c = self.stop_context(gid)
+        library.clean_after_stop(c)
+        self.assertFalse(failed.exists())
+        self.assertEqual((c.private / "logs" / (c.task + "-stages") / f"{gid}_main.log").read_text(), "改写超时前最后一行")
+
+    def test_clean_after_stop_removes_first_failed_export(self):
+        gid, out, _ = self.stopped_game(kit=False, ipa=False)
+        library.clean_after_stop(self.stop_context(gid))
+        self.assertEqual(list(out.iterdir()), [])
+
+    def test_clean_after_stop_keeps_only_source_of_old_install(self):
+        gid, out, _ = self.stopped_game(kit=False)
+        library.clean_after_stop(self.stop_context(gid))
+        self.assertTrue((out / "roots" / "k@pkg" / "main.npdm").is_file())   # 老玩家：没有容器件时产物根是装机的唯一来源
+
+    def test_sweep_skips_while_export_runs_and_cleans_when_idle(self):
+        gid, out, _ = self.stopped_game()
+        c = self.stop_context(gid)
+        with c.lock("execution"):
+            library.sweep_residue(c)
+        self.assertTrue((out / "roots").exists())
+        library.sweep_residue(c)
+        self.assertFalse((out / "roots").exists())
+        release = self.c.library / "games" / gid / "releases"
+        self.assertEqual([p.name for p in release.iterdir()], ["good"])
+
+    def test_sweep_without_residue_never_takes_execution_lock(self):
+        """读游戏库（catalog）每次都扫：没有残留时不碰执行锁，否则同时开始的任务当场撞锁（11-09 main 守望红 SaveManagementTests）"""
+        import unittest.mock as um
+        gid, out, _ = self.stopped_game()
+        c = self.stop_context(gid)
+        library.sweep_residue(c)            # 先把残留清干净
+        with um.patch.object(library, "_execution_idle", side_effect=AssertionError("没有残留却去拿执行锁")):
+            library.sweep_residue(c)
+        self.assertEqual(sorted(p.name for p in (self.c.library / "games" / gid / "releases").iterdir()), ["good"])
 
     def test_diagnostic_bounded_reads_and_atomic_publication(self):
         import unittest.mock as um

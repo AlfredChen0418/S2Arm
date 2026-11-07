@@ -1,5 +1,5 @@
 """装到 iPhone（pack/jobs/install.py，10-26）：选团队、包名、报错分类、整条流程（签名 / 装机 / 拷资源包打桩，IPA 夹具用 ditto 真解）。期望按规则手写"""
-import json, os, plistlib, sys, tempfile, unittest, zipfile
+import json, os, plistlib, shutil, subprocess, sys, tempfile, unittest, zipfile
 import unittest.mock as um
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -44,6 +44,59 @@ class PickTests(unittest.TestCase):
         self.assertEqual(install.classify("This device has reached the maximum number of installed apps using a free developer profile"), "free_app_limit")   # 11-06 iOS 27 原文
         self.assertEqual(install.classify('error: No Account for Team "TEAM1".'), "xcode_account_missing")
         self.assertEqual(install.classify("error: something else"), "signing_failed")
+
+    FAKE_TEAM = "ABCDE" + "12345"
+    FAKE_OU = "TEAM12" + "3456"
+
+    def test_manual_team_id_is_tried_even_when_not_detected(self):
+        self.assertEqual(install.pick_team([], self.FAKE_TEAM), dict(id=self.FAKE_TEAM, name="", free=True))
+        with self.assertRaises(Failure) as e: install.pick_team([], "bad id")
+        self.assertIn("Team ID", str(e.exception))
+
+    @unittest.skipUnless(shutil.which("openssl") and os.path.exists("/usr/bin/openssl"), "需要 /usr/bin/openssl")
+    def test_keychain_certificate_gives_team_without_xcode_cache(self):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["/usr/bin/openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN=Apple Development: X ({self.FAKE_TEAM})/OU={self.FAKE_OU}/O=X/C=US",
+                            "-keyout", d + "/k", "-out", d + "/c"], check=True, capture_output=True)
+            pem = open(d + "/c").read()
+        good, other = "A" * 40, "B" * 40
+        def security(args, env):
+            if args[0] == "find-identity":
+                return f'  1) {good} "Apple Development: X ({self.FAKE_TEAM})"\n  2) {other} "Developer ID Application: X ({self.FAKE_OU})"\n'
+            return f"SHA-1 hash: {good}\n{pem}SHA-1 hash: {other}\n{pem}"
+        with um.patch.object(install, "_security_text", security):
+            self.assertEqual(install.keychain_teams(), [dict(id=self.FAKE_OU, name="", free=True)])   # 同一团队去重，Developer ID 不算
+            with um.patch.object(install, "_xcode_prefs", return_value={}), um.patch.object(install, "profile_teams", return_value=[]):
+                self.assertEqual(install.xcode_account()[1], [dict(id=self.FAKE_OU, name="", free=True)])
+                self.assertEqual(install.pick_team(install.xcode_account()[1])["id"], self.FAKE_OU)
+        with um.patch.object(install, "_security_text", return_value=""), um.patch.object(install, "_xcode_prefs", return_value={}):
+            self.assertEqual(install.xcode_account(), (False, []))
+
+    def test_signing_summary_has_counts_not_names(self):
+        prefs = {"DVTDeveloperAccountManagerAppleIDLists": {"a": [{"identifier": "secret@example.com"}]}, "IDEProvisioningTeamByIdentifier": {"x": [{"teamID": "SECRET" + "1234", "teamName": "秘密团队"}]}}
+        with um.patch.object(install, "_xcode_prefs", return_value=prefs), um.patch.object(install, "development_identities", return_value={"A"}), \
+                um.patch.object(install.subprocess, "run", return_value=um.Mock(stdout="Xcode 27.1\nBuild")):
+            text = install.signing_summary()
+        self.assertEqual(text, "Xcode 27.1；账号 1 个；团队缓存键有；可用团队 1 个；开发证书 1 张")
+        self.assertNotIn("secret", text); self.assertNotIn("秘密", text)
+
+    def test_signing_project_is_stable_and_buildable_shape(self):
+        import types, plistlib as _p
+        with tempfile.TemporaryDirectory() as d:
+            c = types.SimpleNamespace(private=Path(d))
+            path = install.signing_project(c)["path"]
+            text = (Path(path) / "project.pbxproj").read_text(encoding="utf-8")
+            self.assertRegex(text, r'PRODUCT_BUNDLE_IDENTIFIER = "io\.s2arm\.signing\.h[0-9a-f]{10}"')
+            self.assertNotIn("@BUNDLE@", text); self.assertNotIn("DEVELOPMENT_TEAM", text)
+            self.assertEqual(install.signing_project(c)["path"], path)
+            self.assertTrue((Path(d) / "signing-helper/App.swift").is_file())
+
+    def test_prefs_with_control_characters_still_show_account(self):
+        body = plistlib.dumps(dict(DVTDeveloperAccountManagerAppleIDLists=dict(a=[dict(identifier="x")]))).replace(b"<dict>", b"<dict><key>ext\x1bkey</key><string>v</string>", 1)
+        with um.patch.object(install.subprocess, "run", return_value=um.Mock(returncode=0, stdout=body)):
+            self.assertIn("DVTDeveloperAccountManagerAppleIDLists", install._xcode_prefs(None))
+        with um.patch.object(install.subprocess, "run", return_value=um.Mock(returncode=0, stdout=b"not a plist")):
+            self.assertEqual(install._xcode_prefs(None), {install.PREFS_UNREADABLE: True})
 
     def test_xcode_teams_reads_prefs(self):
         d = tempfile.mkdtemp(); fake = Path(d) / "defaults"
@@ -102,7 +155,7 @@ class FlowTests(unittest.TestCase):
             z.writestr("Payload/S2Arm.app/Info.plist", plistlib.dumps({"CFBundleIdentifier": "io.s2arm.games", "CFBundleExecutable": "S2Arm"}))
             z.writestr("Payload/S2Arm.app/S2Arm", b"bin")
 
-    def _install(self, gid, pushed, applied_before, mbps=0, unpack_ok=True, existing=()):
+    def _install(self, gid, pushed, applied_before, mbps=0, unpack_ok=True, existing=(), cant_open=False):
         """跑 install.install（容器流程）：替身 assemble 出容器（含已有各款 + 本款）、签名装机、只推 fresh 的款。
         existing = 容器里已有的款（同壳），assemble 原样带过来，fresh 只含本款。替身按 push_pack.apply 口径记起 App 解包"""
         for g in (gid,) + tuple(existing): self._roots(g)
@@ -122,6 +175,10 @@ class FlowTests(unittest.TestCase):
                 if "--apply" in args and not (pushed == 0 and state["applied"] == "cafe01"):
                     launches.append({"S2A_PACK_APPLY_ONLY": "1"})
                     on_line("[12:00:05] 机上解包 13/17")
+                    if cant_open:
+                        Path(log).parent.mkdir(parents=True, exist_ok=True)
+                        Path(log).write_text("【红】资源包已传完，还差最后一步：在 iPhone 上打开 S2Arm（电脑这边打不开手机上的 App：起 App 失败：RSD 里没有 app_service）\n", encoding="utf-8")
+                        raise install.Failure("tool", code="tool_exit")
                     if not unpack_ok:
                         Path(log).parent.mkdir(parents=True, exist_ok=True)
                         Path(log).write_text("【红】资源包推进去了，但机上解包 180 秒没有新进展（停在第 13 包）：打开这款游戏、保持在前台等它导入完\n", encoding="utf-8")
@@ -154,6 +211,13 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(launches), 1)
         ev = [json.loads(l) for l in self.c.events.read_text(encoding="utf-8").splitlines() if l.strip()]   # 推包工具的「机上解包 k/n」→ 作业进度事件（启动器显示）
         self.assertTrue(any(e["type"] == "progress" and e["message"] == "机上解包 13/17" and (e["done"], e["total"], e.get("unit")) == (13, 17, "包") for e in ev), ev[-3:])
+
+    def test_cant_open_app_is_warning_not_failure(self):   # #192：资源传完、电脑拉不起 App → 装机完成 + 黄字；推了多少照实报（替身：2 个文件 3 MB）
+        gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)
+        r, *_ = self._install(gid, pushed=2, applied_before="", cant_open=True)
+        d = [x for x in self.c.job["diagnostics"] if x["code"] == "manual_unpack_required"]
+        self.assertEqual(len(d), 1); self.assertEqual(d[0]["severity"], "warning"); self.assertIn("资源包已传完", d[0]["summary"])
+        self.assertEqual(r["packFiles"], 2)
 
     def test_install_signs_installs_and_pushes(self):
         gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)
@@ -230,17 +294,22 @@ class FlowTests(unittest.TestCase):
             with self.assertRaises(Failure) as e: packer.assemble(self.c, "0100000000090000")
         self.assertEqual(e.exception.code, "container_stale")
 
-    def _ready(self, devices, teams=(dict(id="team-a", name="我", free=True),), rc=0):
+    def _ready(self, devices, teams=(dict(id="team-a", name="我", free=True),), rc=0, usb=(), raises=None):
         """跑装机前清单：devicectl list devices 回 devices（手造的 devicectl 行），Xcode 团队 teams"""
         import diag
         data = {"result": {"devices": list(devices)}}
-        with um.patch.object(install, "xcode_teams", return_value=list(teams)), um.patch.object(diag, "devicectl", lambda c, *a, timeout=0: (rc, data, "")):
+        import target
+        def devicectl(c, *a, timeout=0):
+            if raises: raise raises
+            return rc, data, ""
+        with um.patch.object(install, "xcode_teams", return_value=list(teams)), um.patch.object(diag, "devicectl", devicectl), \
+             um.patch.object(target, "usb_idevices", return_value=list(usb)):
             r = install.readiness(self.c)
         return r, {i["id"]: i for i in r["items"]}
 
     @staticmethod
     def _dev(name="测试设备2", transport="wired", pairing="paired", devmode="enabled", tunnel="disconnected", platform="iOS", reality="physical"):
-        return {"hardwareProperties": {"reality": reality, "platform": platform},
+        return {"identifier": name, "hardwareProperties": {"reality": reality, "platform": platform},
                 "connectionProperties": {"transportType": transport, "pairingState": pairing, "tunnelState": tunnel},
                 "deviceProperties": {"name": name, "developerModeStatus": devmode}}
 
@@ -248,7 +317,7 @@ class FlowTests(unittest.TestCase):
         gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
         r, it = self._ready([self._dev()])
         self.assertTrue(r["ready"]); self.assertEqual(r["device"], "测试设备2")
-        self.assertEqual([i["id"] for i in r["items"]], ["package", "appleId", "connected", "trusted", "developerMode"])
+        self.assertEqual([i["id"] for i in r["items"]], ["package", "appleId", "connected", "trusted", "developerMode", "deviceReady"])
         self.assertTrue(r["ipaPath"].endswith(".ipa"))
         self.assertEqual((r["account"], it["appleId"]["title"]), ("我", "已登录 Apple ID"))
         self.assertTrue(all(i["detail"] == "" for i in r["items"]))   # 好了的项不带说明
@@ -290,7 +359,103 @@ class FlowTests(unittest.TestCase):
         self.assertFalse(it["connected"]["ok"]); self.assertIn("不止一台", it["connected"]["detail"]); self.assertEqual(r["device"], ""); self.assertTrue(it["trusted"]["waiting"])
         # 读不到设备列表（devicectl 失败）= 当没连
         r, it = self._ready([self._dev()], rc=1)
-        self.assertFalse(it["connected"]["ok"])
+        self.assertFalse(it["connected"]["ok"]); self.assertIn("读不到设备列表", it["connected"]["detail"])
+
+    def test_readiness_single_paired_network_device_counts(self):
+        gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
+        r, it = self._ready([self._dev(transport="localNetwork")])
+        self.assertTrue(it["connected"]["ok"]); self.assertEqual(r["device"], "测试设备2")
+        _, it = self._ready([self._dev(transport="localNetwork"), self._dev(name="另一台", transport="localNetwork")])
+        self.assertFalse(it["connected"]["ok"]); self.assertIn("多台配对过", it["connected"]["detail"])
+        _, it = self._ready([self._dev(transport="localNetwork"), self._dev(name="线连的")])
+        self.assertTrue(it["connected"]["ok"])   # 有线优先，同网另一台不算两台
+
+    def _link(self, states, want="", polling=False, usb=(), results=None, raises=None):
+        """device_link：states 是每次 list devices 依次读到的设备表（读完停在最后一张）；results = {子命令: (rc, 原文)}"""
+        import diag, target
+        calls, seen = [], [0]
+        def devicectl(c, *a, timeout=0):
+            if a[:2] == ("list", "devices"):
+                if raises: raise raises
+                state = states[min(seen[0], len(states) - 1)]; seen[0] += 1
+                return state if isinstance(state, tuple) else (0, {"result": {"devices": state}}, "")
+            calls.append(a[:3]); rc, raw = (results or {}).get(a[1], (0, ""))
+            return rc, {}, raw
+        with um.patch.object(diag, "devicectl", devicectl), um.patch.object(target, "usb_idevices", return_value=list(usb)):
+            return install.device_link(self.c, want, polling=polling), calls
+
+    def _p(self, name="甲", transport="wired", pairing="paired", tunnel="disconnected", devmode="enabled", ddi=True, ident="D1", udid="SAMPLE-UDID-00112233"):
+        d = self._dev(name=name, transport=transport, pairing=pairing, tunnel=tunnel, devmode=devmode)
+        d["identifier"] = ident; d["hardwareProperties"]["udid"] = udid; d["deviceProperties"]["ddiServicesAvailable"] = ddi
+        return d
+
+    def test_link_reports_why_the_list_is_unreadable(self):
+        self.assertIn("超时", self._link([], raises=subprocess.TimeoutExpired("devicectl", 60), usb=["iPad"])[0]["problem"])   # 读不到优先：不说成「没插」
+        self.assertIn("CoreDevice", self._link([(127, {}, "x")])[0]["problem"])
+        link, _ = self._link([(1, {}, "boom")])
+        self.assertIn("读不到设备列表", link["problem"]); self.assertEqual(link["trace"][0]["rc"], 1); self.assertEqual(link["trace"][0]["raw"], "boom")
+
+    def test_link_usb_branches(self):
+        self.assertIn("USB 上没看到", self._link([[]])[0]["problem"])
+        link, _ = self._link([[self._p(transport=None, tunnel="unavailable")]], usb=["iPad"])
+        self.assertEqual(link["stage"], "connected"); self.assertIn("还没列出", link["problem"])
+
+    def test_link_pairs_an_untrusted_phone(self):
+        link, calls = self._link([[self._p(pairing="unpaired")], [self._p()]])
+        self.assertEqual(link["stage"], ""); self.assertIn(("manage", "pair", "--device"), calls)
+        link, _ = self._link([[self._p(pairing="unpaired")]], results={"pair": (1, "user denied")})
+        self.assertEqual(link["stage"], "trusted"); self.assertIn("信任", link["problem"]); self.assertIn("user denied", link["problem"])
+
+    def test_link_polling_does_not_repeat_the_trust_prompt(self):
+        states = [[self._p(pairing="unpaired")]]
+        self.assertIn(("manage", "pair", "--device"), self._link(states, polling=True)[1])
+        link, calls = self._link(states, polling=True)
+        self.assertEqual(calls, []); self.assertEqual(link["stage"], "trusted")
+
+    def test_link_developer_mode_stops_before_connecting(self):
+        link, calls = self._link([[self._p(devmode="disabled", ddi=False)]])
+        self.assertEqual(link["stage"], "developerMode"); self.assertEqual(calls, []); self.assertIn("开发者模式", link["problem"])
+
+    def test_link_brings_up_an_idle_tunnel(self):
+        link, calls = self._link([[self._p(ddi=False)], [self._p(tunnel="connected")]])
+        self.assertEqual(link["stage"], ""); self.assertEqual(calls, [("device", "info", "details")])
+        link, calls = self._link([[self._p(tunnel="connected")]])
+        self.assertEqual((link["stage"], calls), ("", []))   # 已经通了不折腾
+        link, _ = self._link([[self._p(transport="localNetwork", ddi=False)]], results={"info": (1, "device locked")})
+        self.assertEqual(link["stage"], "prepare"); self.assertIn("开发连接", link["problem"]); self.assertIn("device locked", link["problem"])
+
+    def test_link_updates_disk_images_when_services_stay_down(self):
+        down = [self._p(tunnel="connected", ddi=False)]
+        link, calls = self._link([down, down, [self._p(tunnel="connected")]])
+        self.assertEqual(link["stage"], ""); self.assertEqual(calls, [("device", "info", "details"), ("manage", "ddis", "update"), ("device", "info", "details")])
+        link, _ = self._link([down], results={"info": (0, "still no ddi")})
+        self.assertEqual(link["stage"], "prepare"); self.assertIn("开发者服务", link["problem"])
+
+    def test_link_stale_choice(self):
+        link, _ = self._link([[self._p(tunnel="connected")]], want="旧手机")
+        self.assertEqual((link["stage"], link["device"]["identifier"]), ("", "D1"))
+        link, _ = self._link([[self._p(name="甲"), self._p(name="乙", ident="D2")]], want="旧手机")
+        self.assertEqual(link["stage"], "connected")
+        for text in ("旧手机", "甲", "乙"): self.assertIn(text, link["problem"])
+        link, _ = self._link([[self._p(name="甲"), self._p(name="乙", ident="D2"), self._p(name="网上的", ident="D3", transport="localNetwork")]], want="旧手机")
+        self.assertNotIn("网上的", link["problem"])   # 有线优先：同网配对的不列
+        link, _ = self._link([[self._p(name="线连的", tunnel="connected"), self._p(name="网上的", ident="D3", transport="localNetwork")]], want="旧手机")
+        self.assertEqual((link["stage"], link["device"]["identifier"]), ("", "D1"))
+        link, _ = self._link([[self._p(name="甲", tunnel="connected"), self._p(name="乙", ident="D2", tunnel="connected")]], want="乙")
+        self.assertEqual(link["device"]["identifier"], "D2")
+
+    def test_phone_failure_writes_a_redacted_report(self):
+        import diag, target
+        udid = "00008140-" + "AB" * 8
+        data = {"result": {"devices": [self._p(name="张三的手机", ddi=False, udid=udid)]}}
+        def devicectl(c, *a, timeout=0):
+            return (0, data, "") if a[:2] == ("list", "devices") else (1, {}, f"error on {udid}")
+        with um.patch.object(diag, "devicectl", devicectl), um.patch.object(target, "usb_idevices", return_value=[]), self.assertRaises(Failure) as e:
+            install.phone(self.c)
+        self.assertEqual(e.exception.code, "device_not_ready"); self.assertNotIn(udid, str(e.exception))
+        report = (self.c.private / "logs" / f"{self.c.task}-device.log").read_text(encoding="utf-8")
+        self.assertNotIn(udid, report); self.assertNotIn("张三", report)
+        for field in ("rc=1", "transport=wired", "pairing=paired", "tunnel=disconnected", "developerMode=enabled", "ddi=False", "boot="): self.assertIn(field, report)
 
     def test_no_pack_dir_fails_before_install(self):
         # 审计 18:00 P1-58：没有「…资源包」目录不装、不报成功（原先照装，启动器写死「资源包也拷好了」）
@@ -521,10 +686,34 @@ class AssembleTests(unittest.TestCase):
         def run(*a, **k): pass
         with um.patch.object(packer, "current_shell_id", return_value="SID2"), \
              um.patch.object(packer, "container_shell", return_value=shell), \
-             um.patch.object(self.c, "run", run):
+             um.patch.object(self.c, "run", run), \
+             um.patch.object(self.c, "catalog", return_value={"games": [{"id": A}, {"id": B}]}):
             with self.assertRaises(Failure) as e: packer.assemble(self.c, A)
         self.assertEqual(e.exception.code, "container_stale")
         self.assertIn("B款", str(e.exception))
+
+    def test_assemble_shell_changed_skips_games_deleted_from_library(self):
+        """#194：旧容器里的某款已从游戏库删除：不点名、不挡出包，新容器不带它（不传 --base），黄字说明"""
+        A, B = "0100000000010000", "0100000000020000"
+        self._shell_and_root(A, "SID2")
+        import ipa as packer
+        shell = self.c.private / "shell"; shell.mkdir(exist_ok=True); (shell / "manifest.json").write_text("{}")
+        base = self.c.library / "iPhone/container/S2Arm.app"; base.mkdir(parents=True, exist_ok=True)
+        (base / "s2a_catalogue.json").write_text(json.dumps({"schema": 1, "shell_id": "SID1", "games": [{"title_id": B, "name": "B款"}, {"title_id": A}]}))
+        runs, notes = [], []
+        class Stop(Exception): pass
+        def run(cmd, *a, **k):
+            runs.append([str(x) for x in cmd]); raise Stop
+        with um.patch.object(packer, "current_shell_id", return_value="SID2"), \
+             um.patch.object(packer, "container_shell", return_value=shell), \
+             um.patch.object(self.c, "run", run), \
+             um.patch.object(self.c, "catalog", return_value={"games": [{"id": A}]}), \
+             um.patch.object(self.c, "diagnostic", lambda m, **k: notes.append((m, k.get("severity")))), \
+             self.assertRaises(Stop):
+            packer.assemble(self.c, A)
+        self.assertNotIn("--base", runs[0])
+        self.assertEqual(runs[0].count("--game"), 1)
+        self.assertEqual(len(notes), 1); self.assertIn("B款", notes[0][0]); self.assertEqual(notes[0][1], "warning")
 
     def test_assemble_own_game_no_root(self):
         """① 本款无本壳产物根 → container_stale"""
@@ -581,15 +770,26 @@ class AssembleTests(unittest.TestCase):
         self.assertIn("没有这款", str(e.exception))
 
     def test_remove_from_phone_last_game(self):
-        """③ 最后一款 → container_last_game"""
+        """③ 最后一款（#227）：不再硬拒；备份存档、删手机上它的数据，不装空容器；游戏库里的容器摘空"""
+        import ipa as packer
         A = "0100000000010000"
         out = self.c.library / "iPhone/container"; out.mkdir(parents=True, exist_ok=True)
         (out / "S2Arm.app").mkdir(parents=True, exist_ok=True)
         (out / "S2Arm.app/s2a_catalogue.json").write_text(json.dumps({"schema": 1, "games": [{"title_id": A}]}))
         (out / "S2Arm.ipa").write_bytes(b"x")
         self.c.r.update(gameId=A)
-        with self.assertRaises(Failure) as e: install.remove_from_phone(self.c)
-        self.assertEqual(e.exception.code, "container_last_game")
+        def run(args, *a, **k):
+            args = [str(x) for x in args]
+            if "container-drop" in args:
+                o = Path(args[args.index("--out") + 1]); o.mkdir(parents=True)
+                (o / "s2a_catalogue.json").write_text(json.dumps({"schema": 1, "games": []}))
+            if "write_ipa" in args: Path(args[-1]).write_bytes(b"empty")
+        ph = um.Mock(); ph.bid = "io.s2arm.games"; ph.info = {"device": "d"}; ph.backup.return_value = None; ph.purge.return_value = (True, "")
+        with um.patch.object(install, "phone_for", return_value=ph), um.patch.object(self.c, "run", run):
+            r = install.remove_from_phone(self.c)
+        ph.install.assert_not_called()
+        ph.backup.assert_called_once_with(A); ph.purge.assert_called_once_with(A)
+        self.assertEqual((r["games"], json.loads((out / "S2Arm.app/s2a_catalogue.json").read_text())["games"]), ([], []))
 
     def test_remove_from_phone_purge_failure_warning(self):
         """③ purge 失败只报 container_purge_failed 黄字，不报整单失败"""
@@ -661,10 +861,13 @@ class ShipExtContainerDropTests(unittest.TestCase):
         # A 的目录已删
         self.assertFalse((out / "Games" / A).exists())
 
-    def test_drop_last_game_refused(self):
+    def test_drop_last_game_leaves_empty_container(self):
+        """#227：摘最后一款不再拒，得到 0 款的容器（游戏库侧下次加款的底子），它的目录和镜像包都没了"""
         A = "0100000000010000"
         self._make_container([A])
-        with self.assertRaises(SystemExit): self._drop(A)
+        out = self._drop(A)
+        self.assertEqual(json.loads((out / "s2a_catalogue.json").read_text())["games"], [])
+        self.assertFalse((out / "Games" / A).exists()); self.assertFalse((out / f"Frameworks/S2AImages-{A}.dylib").exists())
 
 
 if __name__ == "__main__":

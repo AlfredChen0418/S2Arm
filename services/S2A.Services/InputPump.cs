@@ -159,6 +159,8 @@ namespace S2A.Services
             // 主 App 的纯 C 查询不加载可选 BLE 模块；只有真实 READY 会话才创建反馈对象。
             if (NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "s2a_pad_rumble_session", out nint session))
                 _rumbleSession = (delegate* unmanaged<ulong>)session;
+            // Mac 宿主只导出六轴、没有震动会话：反馈对象照建，只走六轴
+            else _motionOnly = ControllerFeedback.MotionExport(out _);
 
             // iOS 壳的触屏虚拟手柄（ios/vpad.m）：同样按符号查，有就接到 InputHook（Mac 宿主没有这个导出，保持为空）
             if (InputHook == null && NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "s2a_vpad_read", out nint vp))
@@ -222,6 +224,7 @@ namespace S2A.Services
         private static Switch _device;
         private static ControllerFeedback _feedback;
         private static delegate* unmanaged<ulong> _rumbleSession;
+        private static bool _motionOnly;
         private static delegate* unmanaged<PadSnapshot*, void> _padReadEx;
         private static delegate* unmanaged<ulong, ulong, int> _padWait;
         private static delegate* unmanaged<void> _padWake;
@@ -273,7 +276,11 @@ namespace S2A.Services
 
         private static void RefreshFeedback(Switch device)
         {
-            if (_rumbleSession == null) return;
+            if (_rumbleSession == null)
+            {
+                if (_motionOnly && _feedback == null) _feedback = new ControllerFeedback(device, _player);
+                return;
+            }
             // 与改配、逐请求反馈共用 Npad 锁。会话代次由现有对象在每个请求前复核，
             // 不因 READY 到 READY 的代次切换重建对象、清掉刚接受的新帧。
             lock (device.Hid.Npads.RumbleSyncRoot)

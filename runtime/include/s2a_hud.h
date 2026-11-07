@@ -6,7 +6,7 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
-// metal_hud_requested 表示启动配置请求官方 HUD，不代表已观察到它显示；此时省去 FPS 数字 / 内存，保留目标与慢帧口径。
+// metal_hud_requested 表示启动配置请求官方 HUD，不代表已观察到它显示；S2Arm 仍显示自采 FPS 与内存。
 typedef struct { const char *thermal, *build_id; double battery_rate_pm, screen_w, screen_h, battery_level; int metal_hud_requested; } s2a_hud_host;
 int s2a_hud_on(void);
 void s2a_hud_frame(void);                                              // 每上屏一帧（ap_host.c s2a_frame_presented）

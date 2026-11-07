@@ -195,6 +195,9 @@ async fn run(a: &[String]) -> Result<(), String> {
             if afc.get_file_info(remote.clone()).await.is_ok() { afc.remove_all(remote.clone()).await.map_err(|e| format!("删 {remote} 失败：{e}"))?; }
             println!("rm {remote}");
         }
+        "free" => {   // 手机可写字节（推包前核空间）；调用约定与其它操作同，第 5 个参数占位
+            let i = afc.get_device_info().await.map_err(|e| e.to_string())?; println!("{}", i.free_bytes);
+        }
         "ls" => {
             for n in afc.list_dir(a[4].trim_start_matches('/').to_string()).await.map_err(|e| e.to_string())? { println!("{n}"); }
         }

@@ -176,7 +176,7 @@ mkdir -p $P/.incoming; (cd $J/pack && COPYFILE_DISABLE=1 tar -cf $P/.incoming/1_
 echo 上次没解完 > $P/.applied; echo "10-21 00:56:58 解包失败：解 1_001.tar（截短包，已删，下次部署补推） 返回 -4（已解 0 个包 2 个文件）" >> $P/../unpack.log
 run; ck "上次解包撞截短包 → 不信 .pushed：补推残包里的 f1（推 1 个）、解包后机上有 f1" '[[ $RES == RESULT=done* ]] && grep -q "资源包：推 1 个文件" $OUT/run.log && grep -q "不信 .pushed" $OUT/run.log && [ "$(cat $P/romfs/f1.bin 2>/dev/null)" = "file 1" ]'
 }
-g_stale() { grp stale   # 10-26 运维线（测试设备2 巫师3）：重启打断推送，.incoming 留下截短批、.pushed 记着那批的文件 → 下一局先盖掉残批、不信 .pushed、补推缺的，App 不撞截短
+g_stalepush() { grp stalepush   # 10-26 运维线（测试设备2 巫师3）：重启打断推送，.incoming 留下截短批、.pushed 记着那批的文件 → 下一局先盖掉残批、不信 .pushed、补推缺的，App 不撞截短
 run; ck "残批组首局 → done" '[[ $RES == RESULT=done* ]]'
 P=$DV/apps/com.s2arm.test/Documents/资源包; grep -v romfs/f2.bin $P/index.tsv > $P/index.applied.tsv; rm -f $P/romfs/f2.bin
 mkdir -p $P/.incoming; (cd $J/pack && COPYFILE_DISABLE=1 tar -cf $T/full.tar romfs/f2.bin) && head -c 700 $T/full.tar > $P/.incoming/1792980305_002.tar; grep romfs/f2.bin $J/pack/index.tsv | cut -f1,3 > $P/.pushed
@@ -392,11 +392,13 @@ g_stream() { grp stream
   S2A_DEVPUSH=$G/s2a-devpush FAKE_DEVPUSH_DIR=$DV FAKE_DEVPUSH_FAIL=1 run
   ck "流式推包这批失败 → 退回 devicectl、done" '[[ $RES == RESULT=done* ]] && grep -q "流式推 .* 没成" $OUT/run.log && grep -q "流式 s2a-devpush 0 批 / devicectl 1 批" $OUT/run.log && [ "$(cat $DV/apps/com.s2arm.test/Documents/资源包/romfs/f3.bin)" = changed2 ]'
 }
-GS=${DEV_RUN_GROUPS:-"stream ${S2A_PRIVATE_TOOLS:+prune }incr vpush shot hang gc stall stall2 gpuhang procs crash nomark restart guard apq trunc stale livef lag stale recheck screen batt con shc apcrash smoke ownplay alt wire dlib own space vbr pso psod vkspv"}   # 单跑某组：DEV_RUN_GROUPS=hang
+GS=${DEV_RUN_GROUPS:-"stream ${S2A_PRIVATE_TOOLS:+prune }incr vpush shot hang gc stall stall2 gpuhang procs crash nomark restart guard apq trunc stalepush livef lag stale recheck screen batt con shc apcrash smoke ownplay alt wire dlib own space vbr pso psod vkspv"}   # 单跑某组：DEV_RUN_GROUPS=hang
 # 组并行限流（11-02 体验线定因：每组执行器按 0.2 秒轮询、每轮起一个 python 假 devicectl，单份约 150 个滚动短命进程；
 #   30 组全并行、门禁里两三份并发把 gate-host 负载顶到 200+）：同时最多 DEV_RUN_PAR 组，缺省核数 × 2/3（2–8；本机 18 核 / gate-host 12 核都是 8）。
 #   同负载实测（本机）：全并行 84 秒、子孙进程峰值 244 → 限 8 组 82 秒、峰值 82；限 6 组 93 秒、峰值 60。轮询间隔不动（alt / lag 等组的时序断言按 0.2 秒算）
 NP=${DEV_RUN_PAR:-$(( $(sysctl -n hw.ncpu 2> /dev/null || nproc 2> /dev/null || echo 12) * 2 / 3 ))}; [ "$NP" -lt 2 ] && NP=2; [ "$NP" -gt 8 ] && NP=8
+# 组名 / 组函数不许重复（11-09：两个 g_stale 同名、清单里 stale 列了两次 → 同一组并行起两份、共用组目录与假设备互相清状态，门禁随机红；前一组用例被遮住从没跑过）
+d=$( { tr ' ' '\n' <<< "$GS" | grep .; } | sort | uniq -d; grep -o '^g_[a-z0-9_]*()' "$0" | sort | uniq -d); [ -z "$d" ] || { echo "不通 组名或组函数重复：$(echo $d)"; bad=1; }
 for g in $GS; do while [ "$(jobs -rp | wc -l)" -ge "$NP" ]; do sleep 0.2; done; ( g_$g ) > $T/out_$g 2>&1 & done; wait
 for g in $GS; do cat $T/out_$g; done; grep -q '^不通' $T/out_* && bad=1
 for g in $GS; do grep -q '^通' $T/out_$g || { echo "不通 组 $g 一条结果都没出（组脚本中途出错？）"; tail -3 $T/out_$g | sed 's/^/    | /'; bad=1; }; done   # 组脚本自己出错时没有「不通」行，不能算绿

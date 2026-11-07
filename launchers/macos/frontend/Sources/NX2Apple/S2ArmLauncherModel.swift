@@ -184,6 +184,12 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     public func refresh() {
         guard !loading else { return }
+        // 启动时先显示上次的列表，不等作业；能不能玩在真正启动时还会完整校验
+        if !libraryLoaded, games.isEmpty, let known = provider.library.lastKnownGames(), !known.isEmpty {
+            games = known
+            selectedID = known.first?.id
+            libraryLoaded = true
+        }
         loading = true
         provider.library.load { [weak self] result in
             guard let self else { return }
@@ -245,13 +251,13 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// 换游戏库：setup 作业（作业层拦非 APFS、云盘同步目录、非空的生文件夹）→ 写回偏好、重读游戏库、重新检查环境。
     /// 作业跑在作业页，没成的原因（如选的还在云盘里）在作业页显示；成了作业页可在访达中显示新游戏库。
-    func changeLibrary(to url: URL) {
+    func changeLibrary(to url: URL, move: Bool = false) {
         guard !busy else { return }
         showEnvironment = false
         failAction(nil, game: nil)
         start(.setupLibrary, game: nil, name: url.lastPathComponent) { [weak self] sink in
             guard let self else { return nil }
-            let library = try await self.provider.library.change(to: url, events: sink)
+            let library = try await self.provider.library.change(to: url, moveFrom: move ? self.provider.client.environment.library : nil, events: sink)
             self.games = []; self.selectedID = nil; self.libraryLoaded = false
             self.checks = (try? await self.provider.environment.check()) ?? self.checks
             return library
@@ -518,11 +524,19 @@ public final class S2ArmLauncherModel: ObservableObject {
         installGameID == gameID && (installReadiness?.ready == true || (installReadiness == nil && installError != nil))
     }
 
-    func install(_ game: GameSummary) {
+    /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
+    func openSigningProject() {
+        Task {
+            do { NSWorkspace.shared.open(URL(fileURLWithPath: try await provider.signingProject())) }
+            catch { installError = error.localizedDescription }
+        }
+    }
+
+    func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil) {
         guard !busy, installAllowed(game.id) else { return }
         failAction(nil, game: nil)
         start(.install, game: game, name: game.name) { [weak self] sink in
-            _ = try await self?.provider.install(gameId: game.id, events: sink)
+            _ = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, events: sink)
             return nil
         }
     }
@@ -635,9 +649,11 @@ public final class S2ArmLauncherModel: ObservableObject {
                 self.control = nil
                 if !ControlPort.forced { try? self.provider.settings.setAIControl(false); self.aiControl = false }
                 self.aiControlError = why
+                ControlPort.reportStartFailure(privateRoot: self.provider.client.environment.privateRoot, why: why)
             }
         } catch {
             aiControlError = error.localizedDescription
+            ControlPort.reportStartFailure(privateRoot: provider.client.environment.privateRoot, why: error.localizedDescription)
             if !ControlPort.forced { try? provider.settings.setAIControl(false); aiControl = false }
         }
     }

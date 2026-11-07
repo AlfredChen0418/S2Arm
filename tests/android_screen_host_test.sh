@@ -9,11 +9,11 @@ A=$H/android; CC=${CC:-cc}
 ldflag=-Wl,--gc-sections; [ "$(uname -s)" != Darwin ] || ldflag=-Wl,-dead_strip
 libm=; [ "$(uname -s)" != Linux ] || libm=-lm   # Linux 上 widen.c 的 floorf 要 libm
 "$CC" -std=gnu11 -D__ANDROID__ -ffunction-sections -fdata-sections -I "$H/runtime/include" -I "$H/runtime/src" \
-    "$A/tests/screen_widen_test.c" "$H/runtime/src/widen.c" "$H/runtime/src/patch.c" "$A/runtime/screen_metrics.c" "$ldflag" -o "$T/screen-widen-test" \
+    "$A/tests/screen_widen_test.c" "$H/runtime/src/widen.c" "$H/runtime/src/patch.c" "$A/native/screen_metrics.c" "$ldflag" -o "$T/screen-widen-test" \
     || { echo "【红】screen-widen-test 编不过"; exit 1; }
 o1=$("$T/screen-widen-test" 2>&1) || { echo "$o1" | tail -5; echo "【红】screen-widen-test 跑不过"; exit 1; }
 "$CC" -std=gnu11 -D__ANDROID__ -I "$H/runtime/include" -I "$H/runtime/src" \
-    "$H/runtime/tests/t_widen.c" "$H/runtime/src/widen.c" "$H/runtime/src/patch.c" "$A/runtime/screen_metrics.c" -o "$T/widen-loader-test" ${libm:+"$libm"} \
+    "$H/runtime/tests/t_widen.c" "$H/runtime/src/widen.c" "$H/runtime/src/patch.c" "$A/native/screen_metrics.c" -o "$T/widen-loader-test" ${libm:+"$libm"} \
     || { echo "【红】widen-loader-test 编不过"; exit 1; }
 o2=$("$T/widen-loader-test" 2>&1) || { echo "$o2" | tail -5; echo "【红】widen-loader-test 跑不过"; exit 1; }
 echo "$o1" | tail -1; echo "$o2" | tail -1

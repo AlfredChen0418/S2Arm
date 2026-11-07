@@ -7,6 +7,7 @@
 #   ⑥ 镜像里没有 K、K 只在代码构造候选 first 里且排在扫描扫完之后才轮到（first 先慢慢给 3 个假钥）：8 路也必须找到 K（11-02 小小梦魇3 漏钥）。
 #   ⑦ 工作进程扫到非首段就异常退出（模拟被杀 / 崩溃；11-04、11-05 gate-host 门禁两次本单测 120 秒超时、日志全空）：8 路仍须在 30 秒内返回——
 #      K 在中段 → 找到 K；镜像里没有 K → None。旧实现（multiprocessing.Pool）丢段永等，30 秒闹钟到点判不通
+#   ⑧ 上面各例跑完后本进程没有未回收的子进程（11-09 根修：执行器 fork 子进程卡锁，打完「失败 0」退出时永等）
 import os, sys, struct, hashlib, subprocess, io, contextlib
 H = os.path.dirname(os.path.dirname(os.path.abspath(__file__))); sys.path.insert(0, H)
 import pak_crypto as P
@@ -57,5 +58,9 @@ try:
 except _Late: r7['超时'] = True
 finally: signal.alarm(0); P._scan_range = real_range
 ck(r7.get('中段') == K and '没有' in r7 and r7['没有'] is None and '超时' not in r7, '⑦ 工作进程异常退出：30 秒内返回，中段找到 K、没有的返回 None（不丢段永等）')
+def _kids_left():   # 本进程还有没回收的子进程（活的或僵尸）
+    try: os.waitpid(-1, os.WNOHANG); return True
+    except ChildProcessError: return False
+ck(not _kids_left(), '⑧ 返回后不留子进程：命中、扫完、工作进程异常退出各路都已杀掉并回收（11-09 gate-host 两次打完「失败 0」仍退出 124：退出时 join 卡在 fork 时锁住的子进程）')
 print(f't_keyscan：失败 {fail}')
 sys.exit(1 if fail else 0)

@@ -1,5 +1,5 @@
 // 开发浮层（S2A_HUD=1，缺省关；iOS 设置页「开发浮层」、Mac 启动器开关都落到这个环境变量）：给手动测试的开发者看局内读数。
-// 界面每 0.5 秒取诊断文字；请求 Metal HUD 时不重复显示 FPS 数字 / 内存，保留游戏目标与慢帧口径。
+// 界面每 0.5 秒取诊断文字；无论是否请求 Metal HUD，都显示 S2Arm 自采的 FPS 与内存。
 // 浮层画在系统界面层（UIView / NSView），不进游戏画面：截图、存帧、自动玩家看图都从 Metal 贴图读回（gal_present.m screenshot、
 //   host_adapt.m s2a_direct_screenshot），不含视图叠层。读不到的项写明为什么读不到（如「iOS 不给」），不猜、不写空的「无」。
 // 唯一新加的逐帧开销：浮层开着时，每上屏一帧记一个时间戳进 10 秒环（ap_host.c s2a_frame_presented）；关着时只读一个缓存的开关
@@ -59,7 +59,7 @@ static int cmp_u64(const void *a, const void *b) { uint64_t x = *(const uint64_t
 // 60 帧降档原因（runtime/src/fps.c：热状态危急 / 低电量模式时自动按关生效）：弱定义缺省 0，fps.c 的强定义覆盖（单测只链本文件时用缺省）
 __attribute__((weak)) int s2a_fps_cap_reason(void) { return 0; }
 static const char *cap_note(void) { int r = s2a_fps_cap_reason(); return r == 1 ? "　60 帧降档：热" : r == 2 ? "　60 帧降档：低电量" : r == 3 ? "　60 帧：同局 A/B 测原帧率" : ""; }
-static void line_fps(char *o, size_t n, int show_fps) {
+static void line_fps(char *o, size_t n) {
     uint64_t end = atomic_load_explicit(&g_fn, memory_order_acquire), now = mono_ns();
     static uint64_t itv[HR]; int k = 0; uint64_t f1 = 0, prev = 0;
     for (uint64_t i = end; i > 0 && end - i < HR - 1; i--) {
@@ -72,8 +72,7 @@ static void line_fps(char *o, size_t n, int show_fps) {
     int tgt = hud_target();   // 有效目标同时决定显示和慢帧阈值
     char t[48]; if (tgt) snprintf(t, sizeof t, "%d", tgt); else snprintf(t, sizeof t, "未取得");
     char lead[160];
-    if (show_fps) snprintf(lead, sizeof lead, "帧率 %llu / 目标 %s%s", (unsigned long long)f1, t, cap_note());
-    else snprintf(lead, sizeof lead, "目标 %s%s", t, cap_note());
+    snprintf(lead, sizeof lead, "帧率 %llu / 目标 %s%s", (unsigned long long)f1, t, cap_note());
     if (!k) { snprintf(o, n, "%s　慢帧 未测（近 10 秒不到两帧）", lead); return; }
     uint64_t lim; const char *how;
     if (tgt) { lim = 1500000000ull / (uint64_t)tgt; how = "> 1.5 倍目标间隔"; }
@@ -209,15 +208,14 @@ static void line_mem(char *o, size_t n) {
 int s2a_hud_text(char *out, size_t n, const s2a_hud_host *h) {
     char l[8][512];
     int metal = h && h->metal_hud_requested;
-    line_fps(l[0], sizeof l[0], !metal);
+    line_fps(l[0], sizeof l[0]);
     line_energy(l[1], sizeof l[1], h);
     line_fit(l[2], sizeof l[2], h);
     int direct = s2a_gfx_mode() == S2A_GFX_DIRECT;
     snprintf(l[3], sizeof l[3], "S2Arm · %s %s", direct ? "直连" : "通用", s2a_gfx_mode_brief());
     line_first(l[4], sizeof l[4]);
     line_audio(l[5], sizeof l[5]);
-    if (metal) l[6][0] = 0;
-    else line_mem(l[6], sizeof l[6]);
+    line_mem(l[6], sizeof l[6]);
     snprintf(l[7], sizeof l[7], "包 %s%s", h && h->build_id && *h->build_id ? h->build_id : "未记录", metal ? " · Metal HUD 已请求" : "");
-    return snprintf(out, n, "%s\n%s\n%s\n\n%s\n%s\n\n%s\n%s%s%s", l[3], l[7], l[0], l[1], l[2], l[4], l[5], metal ? "" : "\n", l[6]);
+    return snprintf(out, n, "%s\n%s\n%s\n\n%s\n%s\n\n%s\n%s\n%s", l[3], l[7], l[0], l[1], l[2], l[4], l[5], l[6]);
 }

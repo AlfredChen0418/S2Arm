@@ -19,7 +19,8 @@
 //   客体线程没有会排空的自动释放池（main 外层这个池同样到进程结束才排空），本层在其上建的命令缓冲 / 编码器 / 渲染遍描述若进了它，
 //   就连同引用到的每帧新贴图一起活到线程结束。两种写法各跑 600 帧（glTexImage2D 每帧换存储；glTexSubImage2D 改在途贴图也换存储），
 //   每帧采样那张贴图画满表面再 eglSwapBuffers。期望：预热 60 帧后再 600 帧，glFinish 等完、Metal 释放落定后，
-//   设备已分配增量 ≈ 0（容差 8 MB，约 24 张 384×224×4 = 336 KB 的贴图），进程堆增量 ≈ 0（容差 2 MB）；
+//   设备已分配增量 ≈ 0（容差 8 MB，约 24 张 384×224×4 = 336 KB 的贴图），进程堆增量 ≈ 0（容差 32 MB：11-09 高负载 64 次实测堆抖动最大 3.7 MB，原容差 2 MB 误红；
+//   事故本体是贴图被拽住、看设备已分配，堆这条仍能抓每帧 ≥ 55 KB 的堆漏）；两项都等读数落定再读
 //   漏的话增量 ≥ 600 × 336 KB ≈ 197 MB（与次数成正比）。
 // M 多线程共享上下文（11-02 火影忍者 终极风暴羁绊：另一线程建共享上下文、无表面 MakeCurrent 后渲染线程清除落到 0 号帧缓冲 0x502，随后崩）：
 //   主线程（上下文 A + 窗口表面）与线程 B（共享 A 的上下文 B、不绑表面）用信号量严格交替，同画一个 64×64 帧缓冲对象，各用自己上下文的 0 号顶点数组；
@@ -495,6 +496,13 @@ static void t_names_programs(void) {
 
 // ---------- L 逐帧换贴图存储不漏 ----------
 static size_t heap_in_use(void) { malloc_statistics_t st; malloc_zone_statistics(NULL, &st); return st.size_in_use; }
+// 进程堆也等落定再读（11-09 根修）：glFinish 只等到 GPU 做完，命令缓冲的完成回调在 Metal 自己的线程上随后才跑、才放掉最后几帧的命令缓冲 / 贴图 / 拷贝缓冲；
+//   负载高时回调晚到，立刻读会多出几 MB（守望 11-09 一次、本机 16 路并发 8/16 读到 4 MB 判红）。漏是与帧数成正比的 ≥ 197 MB，等不掉
+static size_t settled_heap_bytes(void) {
+    size_t last = heap_in_use(); int same = 0;
+    for (int i = 0; i < 300 && same < 5; i++) { usleep(10000); size_t now = heap_in_use(); same = (now > last ? now - last : last - now) < 65536 ? same + 1 : 0; last = now; }
+    return last;
+}
 // glFinish 之后命令缓冲的完成回调与资源释放还可能晚一点落定：等已分配字节连续 5 次（50 ms）不变
 // ---------- M 多线程共享上下文 ----------
 static EGLConfig g_cfg;
@@ -581,15 +589,15 @@ static void t_frame_storage(void) {
         glTexImage2D(0x0DE1, 0, 0x1908, W, H, 0, 0x1908, 0x1401, pix);
         size_t d0 = 0, h0 = 0;
         for (int f = 0; f < WARM + N; f++) {
-            if (f == WARM) { glFinish(); d0 = settled_device_bytes(); h0 = heap_in_use(); }
+            if (f == WARM) { glFinish(); d0 = settled_device_bytes(); h0 = settled_heap_bytes(); }
             pix[0] = (uint8_t)f;
             if (mode == 0) glTexImage2D(0x0DE1, 0, 0x1908, W, H, 0, 0x1908, 0x1401, pix);   // 每帧重新指定：必换新存储
             else glTexSubImage2D(0x0DE1, 0, 0, 0, W, H, 0x1908, 0x1401, pix);              // 上一帧的绘制还在途：换新存储
             glDrawArrays(4, 0, 6); eglSwapBuffers(g_dpy, g_sf);
         }
-        glFinish(); size_t d1 = settled_device_bytes(), h1 = heap_in_use();
+        glFinish(); size_t d1 = settled_device_bytes(), h1 = settled_heap_bytes();
         double dmb = ((double)d1 - (double)d0) / 1048576, hmb = ((double)h1 - (double)h0) / 1048576;
-        CHECK(dmb < 8 && hmb < 2 && !glGetError(), "%s 每帧换存储 %d 帧：设备已分配增量 %.1f MB（< 8）、进程堆增量 %.2f MB（< 2）；漏则 ≥ %.0f MB",
+        CHECK(dmb < 8 && hmb < 32 && !glGetError(), "%s 每帧换存储 %d 帧：设备已分配增量 %.1f MB（< 8）、进程堆增量 %.2f MB（< 32）；漏则 ≥ %.0f MB",
               mode ? "glTexSubImage2D（改在途贴图）" : "glTexImage2D", N, dmb, hmb, N * (double)(W * H * 4) / 1048576);
         glDeleteTextures(1, &tex);
     }

@@ -439,10 +439,10 @@ class EnvironmentTests(unittest.TestCase):
             "metal": {"output": "Apple metal version 99.1 (fixture-only)\n"},
             "usbmux_port": {"connected": True},
             "usb_devices": {"USB": 1, "Network": 0},
-            "icloud": {"packages": [{"Name": "AppleInc.iCloud", "Publisher":
-                "CN=Apple Inc., O=Apple Inc., L=Cupertino, S=California, C=US",
+            "icloud": {"packages": [{"Name": "AppleInc.iCloud", "Publisher":   # 取自玩家机器 Get-AppxPackage 实际输出（#165）
+                "CN=5BD5593D-A41B-4F89-884E-B4F3E0FBAA75",
                 "SignatureKind": "Store", "Status": "Ok",
-                "PackageFamilyName": "AppleInc.iCloud_fixturepublisher", "Version": "15.0.0.0"}],
+                "PackageFamilyName": "AppleInc.iCloud_nzyj5cx40ttqa", "Version": "15.10.39.0"}],
                 "legacy": []},
         })
         previous = self.mod._text
@@ -560,6 +560,12 @@ class EnvironmentTests(unittest.TestCase):
         self.probe.values["icloud"] = {"packages": [], "legacy": [{"DisplayName": "iCloud", "Publisher": "Apple Inc."}]}
         item = self.item(self.report(anisette={"source": "local"}), "anisette")
         self.assertEqual(item["status"], "ok")   # 官方传统安装版（非商店）也算装好（11-08 维护者 实机）
+        real = {"Name": "AppleInc.iCloud", "Publisher": "CN=5BD5593D-A41B-4F89-884E-B4F3E0FBAA75", "SignatureKind": "Store", "Status": "Ok",
+                "PackageFamilyName": "AppleInc.iCloud_nzyj5cx40ttqa", "Version": "15.10.39.0"}   # #165 玩家机器的实际输出：商店版发布者不是 Apple Inc.
+        for change, want in (({}, "ok"), ({"SignatureKind": "Developer"}, "unverified"), ({"Status": "Tampered"}, "unverified"),
+                             ({"PackageFamilyName": "AppleInc.iCloud_aaaaaaaaaaaaa", "Publisher": "CN=Apple Inc., O=Apple Inc."}, "unverified")):
+            self.probe.values["icloud"] = {"packages": [{**real, **change}], "legacy": []}
+            self.assertEqual(self.item(self.report(anisette={"source": "local"}), "anisette")["status"], want, change)
         self.probe.values["icloud"] = {"packages": [], "legacy": [{"DisplayName": "iCloud", "Publisher": "Someone Else"}]}
         self.assertEqual(self.item(self.report(anisette={"source": "local"}), "anisette")["status"], "unverified")
 

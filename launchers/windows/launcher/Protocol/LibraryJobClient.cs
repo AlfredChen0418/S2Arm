@@ -9,7 +9,7 @@ public sealed record LibraryJobOutput(LibraryJobResult Report, ProbeOutput Outpu
 public static class LibraryJobClient
 {
     public static async Task<LibraryJobOutput> RunAsync(LauncherPaths paths, string privateRoot, string library,
-        string? libraryId, string operation, IReadOnlyList<string>? selectedPaths, CancellationToken cancellationToken)
+        string? libraryId, string operation, IReadOnlyList<string>? selectedPaths, CancellationToken cancellationToken, string? moveFrom = null)
     {
         if (operation is not ("setup" or "catalog" or "keys" or "import" or "diagnostics"))
             throw new ArgumentException("Unsupported library operation.", nameof(operation));
@@ -23,6 +23,7 @@ public static class LibraryJobClient
             ["engineDir"] = Path.GetFullPath(paths.Engine), ["libraryId"] = libraryId
         };
         if (selectedPaths is not null) payload["paths"] = selectedPaths;
+        if (moveFrom is not null) payload["moveFrom"] = Path.GetFullPath(moveFrom);
         if (operation is "keys" or "diagnostics")
         {
             if (selectedPaths?.Count != 1) throw new ArgumentException("Choose exactly one file.");

@@ -21,7 +21,8 @@
 #   抽取只用产物根里抽取阶段的 extract/（pack/refresh.sh 安卓分支在直连库之前跑 pack/stage_extract.sh：兄弟平台根克隆来的键相同就跳过，没有才抽），这里不另抽，没有就按内容缺口退 3；Vulkan / OpenGL 款安卓运行时自己编，退 0 不出库
 # 配置由 game.py dir 选择，支持既有 DM_GAMES_DIR/DM_GAMES_FIRST；缺档明确失败。
 set -u
-ROOT=$(cd "${1:?产物根}" && pwd -P) || exit 1; OUT=${2:?输出目录}
+PD=-P; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PD=-L;; esac   # Windows 工作区走短根联接，-P 会展开回长路径
+ROOT=$(cd "${1:?产物根}" && pwd $PD) || exit 1; OUT=${2:?输出目录}
 R=$(cd "$(dirname "$0")/../../.." && pwd); NX=$R/graphics/nvn
 # Windows（Git Bash / MSYS）：pwd 给的是 /r/... 写法，只有命令行参数会被自动转成 R:/...，经环境变量或文件交给 Windows 原生 Python 的不会转
 #   （11-04 Windows 出包机旷野之息：shader_split 读 /r/.../exefs/main 报找不到路径）。产物根、输出目录、仓库路径统一换成 R:/... 混合写法（bash 自己也认）

@@ -5208,6 +5208,10 @@
   "en": "Re-sign with Xcode (a free Apple ID works) or AltStore Classic v2.3. SideStore 0.7.0 free signing loses this entitlement; GetMoreRam can repair the App ID before reinstalling."
  },
  {
+  "source": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
+  "en": "The resource pack is already on your iPhone, so there is no need to send it again. Open S2Arm on your iPhone, choose this game, keep it in the foreground with the screen on, and it will be ready once the import finishes."
+ },
+ {
   "source": "换一根支持 USB 3 的 USB-C 数据线，直接插 Mac 上的 USB-C / 雷雳口（不经扩展坞、集线器、显示器上的口），再装下一款；iPhone 15 Pro 及更新的 Pro 机型才支持 USB 3，其它机型只能 USB 2.0。",
   "en": "Use a USB 3 data cable directly in a Mac USB-C or Thunderbolt port without a hub or display. Only iPhone 15 Pro and newer Pro models support USB 3; other models use USB 2.0."
  },
@@ -6296,20 +6300,12 @@
   "en": "{0} runs iOS {1}; S2Arm needs iOS {2} or later. Update the system first."
  },
  {
-  "source": "解包与构建缓存",
-  "en": "Unpacked files and build cache"
+  "source": "旧版残留",
+  "en": "Leftovers from older versions"
  },
  {
-  "source": "下次出包会重新解包（多花几分钟）",
-  "en": "The next build unpacks the game again (a few more minutes)"
- },
- {
-  "source": "出包中间产物",
-  "en": "Intermediate build files"
- },
- {
-  "source": "下次出包会重新生成（多花几分钟到几十分钟）",
-  "en": "The next build regenerates them (a few to several tens of minutes more)"
+  "source": "旧版本留下的解包和中间文件，出包成功后不再保留；删了不影响已出好的包和 Mac 版本",
+  "en": "Unpacked and intermediate files left by older versions, which are no longer kept after a successful export. Deleting them does not affect finished packages or the Mac version."
  },
  {
   "source": "着色器与出包缓存",
@@ -6468,12 +6464,12 @@
   "en": "You're not signed in to an Apple ID. Open Xcode, choose Xcode › Settings › Apple Accounts, click + and add your Apple ID (a free one is fine), select it, wait for the team list to appear, then check again. With several Xcode versions, signing in to one is enough."
  },
  {
-  "source": "Apple ID 已经登录，团队还没同步下来：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，等团队列表显示出来，再回来重新检查。",
-  "en": "Your Apple ID is signed in but its team hasn't synced. Open Xcode, choose Xcode › Settings › Apple Accounts, select your account, wait for the team list to appear, then check again."
+  "source": "Apple ID 已经登录，但这台 Mac 还没有签名团队：点「解决办法」打开现成的引导项目，在 Xcode 里选 Personal Team，连上手机点运行一次，回来会自动打勾。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。",
+  "en": "Your Apple ID is signed in, but this Mac has no signing team yet. Click How to fix to open the ready-made helper project, choose Personal Team in Xcode, connect your phone and run it once; this page updates by itself. You can also check whether the team list appears under Xcode › Settings › Apple Accounts."
  },
  {
-  "source": "打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，等团队列表显示出来，再点一次「装到 iPhone」。",
-  "en": "Open Xcode, choose Xcode › Settings › Apple Accounts, select your account, wait for the team list to appear, then install again."
+  "source": "在装机页点「解决办法」打开引导项目，在 Xcode 里选 Personal Team，连上手机点运行一次，再点一次「装到 iPhone」。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。",
+  "en": "On the install page, click How to fix to open the helper project, choose Personal Team in Xcode, connect your phone and run it once, then install again. You can also check whether the team list appears under Xcode › Settings › Apple Accounts."
  },
  {
   "source": "打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中账号后点 Manage Certificates，点 + 选 Apple Development，再点一次「装到 iPhone」。",
@@ -6570,5 +6566,125 @@
  {
   "source": "无法读取游戏内容：可能是文件不完整、缺票据或密钥不匹配。请核对原始文件；若已确认 Switch 密钥版本不足，再重新导出，到「设置 → 玩家密钥」重新导入。",
   "en": "Could not read the game content. The file might be incomplete, a ticket may be missing, or the keys may not match. Check the original file. If you have confirmed the Switch keys are outdated, export them again and add them in Settings → Player keys."
+ },
+ {
+  "source": "读不到设备列表：打开一次 Xcode，等它装完附加组件后再试。",
+  "en": "Can't read the device list. Open Xcode once, wait for its additional components to install, then try again."
+ },
+ {
+  "source": "同一网络上有多台配对过的 iPhone / iPad：用数据线连上要装的那一台。",
+  "en": "Several paired iPhones / iPads are on this network. Connect the one you want to install on with a cable."
+ },
+ {
+  "source": "读取设备列表超时：解锁手机，重新插一次数据线再试。",
+  "en": "Reading the device list timed out. Unlock the phone, plug the cable in again and retry."
+ },
+ {
+  "source": "这台 Mac 的 USB 上没看到 iPhone / iPad：换一根能传数据的线（充电线不行）、换个接口直连 Mac，并解锁手机。",
+  "en": "This Mac doesn't see an iPhone / iPad on USB. Use a cable that carries data (a charge-only cable won't work), plug directly into the Mac, and unlock the phone."
+ },
+ {
+  "source": "这台 Mac 看到手机插着，但设备服务还没列出它：解锁手机，在弹出的框里点「信任」；还不行就拔掉重插一次。",
+  "en": "This Mac sees a phone plugged in, but the device service hasn't listed it yet. Unlock the phone and tap Trust. If that fails, unplug it and plug it in again."
+ },
+ {
+  "source": "之前选的设备「{0}」现在不在，可选：{1}。用数据线只连要装的那一台再试。",
+  "en": "The device you chose before, \"{0}\", isn't available. Available: {1}. Connect only the one you want with a cable and try again."
+ },
+ {
+  "source": "和手机建立开发连接失败：解锁手机后再试；走无线的话换成数据线。",
+  "en": "Couldn't open a development connection to the phone. Unlock it and try again. If it's on Wi-Fi, use a cable."
+ },
+ {
+  "source": "手机的开发者服务没准备好：解锁手机后再试；还不行就重启手机。",
+  "en": "The phone's developer services aren't ready. Unlock it and try again. If that fails, restart the phone."
+ },
+ {
+  "source": "iPhone 已准备好安装",
+  "en": "iPhone is ready to install"
+ },
+ {
+  "source": "正在请手机信任这台 Mac",
+  "en": "Asking the phone to trust this Mac"
+ },
+ {
+  "source": "正在和手机建立开发连接",
+  "en": "Opening a development connection to the phone"
+ },
+ {
+  "source": "正在准备手机的开发者服务",
+  "en": "Preparing the phone's developer services"
+ },
+ {
+  "source": "手机还没准备好",
+  "en": "iPhone isn't ready"
+ },
+ {
+  "source": "按上面的提示做完，再点一次安装。",
+  "en": "Follow the steps above, then tap Install again."
+ },
+ {
+  "source": "原来的位置不是可搬的游戏库。",
+  "en": "The current location isn't a library that can be moved."
+ },
+ {
+  "source": "新位置不能在原来的游戏库里面，也不能包含它。",
+  "en": "The new location can't be inside the current library or contain it."
+ },
+ {
+  "source": "旧游戏库还有任务在跑，等它结束再搬。",
+  "en": "A task is still running in the current library. Wait for it to finish, then move."
+ },
+ {
+  "source": "新位置空间不够，游戏库没有搬。",
+  "en": "Not enough space at the new location. The library wasn't moved."
+ },
+ {
+  "source": "拷到新位置后校验不一致：{0}",
+  "en": "Verification failed after copying to the new location: {0}"
+ },
+ {
+  "source": "把游戏库拷到新位置",
+  "en": "Copying the library to the new location"
+ },
+ {
+  "source": "把游戏库放到新位置",
+  "en": "Placing the library at the new location"
+ },
+ {
+  "source": "游戏库已经搬好，旧位置有文件没删掉，可以手动删除：{0}",
+  "en": "The library has moved, but some files at the old location couldn't be deleted. You can delete them yourself: {0}"
+ },
+ {
+  "source": "这个文件夹里已有别的文件：请选空文件夹，或者已有的 S2Arm 游戏库。文件都没动。",
+  "en": "This folder already has other files. Choose an empty folder or an existing S2Arm library. Nothing was changed."
+ },
+ {
+  "source": "游戏库还在原来的位置，什么都没有丢：按上面的原因处理后再搬一次。",
+  "en": "The library is still where it was and nothing was lost. Fix the problem above and move it again."
+ },
+ {
+  "source": "游戏库没有搬成",
+  "en": "Library wasn't moved"
+ },
+ {
+  "source": "「{0}」已从游戏库删除，新版 S2Arm 里不再包含它们；手机上的存档还在。",
+  "en": "\"{0}\" was removed from the library, so the new S2Arm no longer includes it. Its saves stay on the phone."
+ },
+ {
+  "source": "这款游戏在这台电脑上还没玩过：存档会在下次启动游戏时放进去。",
+  "en": "You haven't played this game on this Mac yet. The save will be added the next time you start the game."
+ },
+ {
+  "source": "这款还没有做好 Mac 版，或者是旧版本做的：重新准备后可用。",
+  "en": "This game has no Mac build yet, or it was built by an older version. Available after you prepare it again."
+ },
+ {
+  "source": "这款游戏没有可用的 60 帧方案。",
+  "en": "No 60 FPS option is available for this game."
+ },
+ {
+  "source": "这款游戏没有走直连渲染，用不了 MetalFX 放大。",
+  "en": "This game doesn't use direct rendering, so MetalFX upscaling isn't available."
  }
 ]

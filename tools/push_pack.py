@@ -17,7 +17,7 @@
   ⑥ ≤1 GB 一批（单个超 1 GB 的文件自成一批）；每批 s2a-devpush put-tar 边读边打 pax tar 直接写进 .incoming（本机盘不落临时 tar）；
      Mac 上没工具 / 不知道 UDID / 这批流式写失败 → 这批打 tar + devicectl copy（同名覆盖半截包）
   ⑦ 每推完一批把「路径 \\t sha」追加进 .pushed 并推上机（中断续推 / 出包重叠早推后补差量）；最后推 index.tsv 与 manifest.json
-  ⑧ 推之前核剩余空间：待推量 × 2（.incoming 里的 tar 与解开的文件同时在）+ S2A_PUSH_SPARE_GB（缺省 1）GB；读不到照推
+  ⑧ 推之前核剩余空间：待推量 + 最大一批 + 每文件 4 KB + S2A_PUSH_SPARE_GB（缺省 1）GB（need_bytes）；读不到照推
 
 设备操作两种（同一个 Dev 接口）：
   Devpush：s2a-devpush 走 usbmuxd + house_arrest + AFC（Windows 只有它；Mac 上手机连 usbmuxd 时也能用）
@@ -64,6 +64,10 @@ EXE = "s2a-devpush.exe" if os.name == "nt" else "s2a-devpush"
 
 class Fail(Exception):
     """推包失败：reason 是给调用方 fin / 启动器看的一句话"""
+
+
+class NeedsPlayer(Fail):
+    """资源已传完，只差玩家在手机上打开 App 解开（电脑拉不起 App，#192）：不是传输失败，调用方按「需要玩家操作」收尾"""
 
 
 def devpush_path(given=None, env=None):
@@ -129,8 +133,9 @@ class Devpush:
     def listing(self):   # 机上整个资源包目录的「路径 → 大小」：AFC 列表不带大小，读不到
         return None
 
-    def free(self):
-        return None
+    def free(self):   # 机上可写字节（AFC 设备信息）；工具太旧或读不到 → None，调用方照推
+        rc, out = self.call("free", "x")
+        return int(out.strip()) if rc == 0 and re.fullmatch(r"\d+", out.strip()) else None
 
     def nospc(self):
         return False
@@ -366,10 +371,20 @@ def spot_check(dev, pack, work, have, say):
     return keep
 
 
-def space(dev, nbytes, env=None):
-    """→ (可写字节或 None, 要的字节)：要的 = 待推量 × 2 + S2A_PUSH_SPARE_GB（缺省 1）GB"""
+def need_bytes(work, nbytes, env=None):
+    """机上要的可写字节 = 待推量 + 最大一批（解开时这批的 tar 和解开的文件同时在，解完一批删一批）+ 每文件 4 KB（块取整）+ S2A_PUSH_SPARE_GB（缺省 1）GB。
+    实测（11-08 测试设备2）：动森 11.37 GB、10.5 万文件，峰值 12.40 GB，本式 13.95 GB；原先按待推量 × 2 要 23.8 GB，多拦了空间够的玩家"""
     spare = int((env or os.environ).get("S2A_PUSH_SPARE_GB", "1"))
-    return dev.free(), nbytes * 2 + spare * (1 << 30)
+    biggest = files = 0
+    for f in Path(work).glob("push_*.tsv"):
+        rows = [l.split("\t") for l in f.read_text(encoding="utf-8").splitlines() if l]
+        biggest = max(biggest, sum(int(w[1]) for w in rows)); files += len(rows)
+    return nbytes + biggest + files * 4096 + spare * (1 << 30)
+
+
+def space(dev, nbytes, work, env=None):
+    """→ (可写字节或 None, 要的字节)"""
+    return dev.free(), need_bytes(work, nbytes, env)
 
 
 def send(dev, pack, work, say=print):
@@ -411,6 +426,7 @@ def send(dev, pack, work, say=print):
 #   STALL_S = 180 的依据：同一次实测 unpack.log 单包（≤1 GB）最慢 43.5 秒（第 14 包 7728 个文件 1023 MB），App 冷起到第一行进度 38 秒（含第 1 包 33.1 秒）；
 #   取单包最慢的约 4 倍，比任何一包正常耗时都长，又不至于真卡住时让玩家干等十几分钟
 STALL_S = 180
+OPEN_BY_HAND = "在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩"
 PROGRESS = re.compile(r"进度：解开 \S+（(\d+)/(\d+)）")
 
 
@@ -426,7 +442,11 @@ def apply(dev, pack, work, nb, say=print, sleep=time.sleep, now=time.time, stall
     u0 = len((read(dev, unpack_log(dev), work, "r.unpack0") or "").splitlines())
     done = re.compile(r"解开 \d+ 个包 .*\.applied = " + re.escape(want or "-"))
     say("起一次 App 解开推送包（S2A_PACK_APPLY_ONLY=1）")
-    dev.launch({"S2A_PACK_APPLY_ONLY": "1", **({"S2A_LAUNCH_CTX": dev.ctx} if dev.ctx else {})})   # 容器：起哪一款由启动上下文定
+    cant_open = None
+    try:
+        dev.launch({"S2A_PACK_APPLY_ONLY": "1", **({"S2A_LAUNCH_CTX": dev.ctx} if dev.ctx else {})})   # 容器：起哪一款由启动上下文定
+    except Fail as e:   # 拉起靠电脑侧的设备服务，玩家机上常常没有（#192）；资源已在手机上，照样等玩家手动打开后解完
+        cant_open = str(e); say(f"资源包已传完。{OPEN_BY_HAND}")
     seen, last = 0, now()
     while True:
         new = (read(dev, unpack_log(dev), work, "r.unpack1") or "").splitlines()[u0:]
@@ -438,6 +458,8 @@ def apply(dev, pack, work, nb, say=print, sleep=time.sleep, now=time.time, stall
         elif now() - last > stall:
             break
         sleep(3)
+    if cant_open:
+        raise NeedsPlayer(f"资源包已传完，还差最后一步：{OPEN_BY_HAND}（电脑这边打不开手机上的 App：{cant_open}）")
     raise Fail(f"资源包推进去了，但机上解包 {stall} 秒没有新进展（停在第 {seen} 包）：打开这款游戏、保持在前台等它导入完" if seen else
                f"资源包推进去了，但起 App 后 {stall} 秒机上解包没有开始：打开这款游戏、保持在前台等它导入完")
 
@@ -447,10 +469,10 @@ def run(dev, pack, work, full=False, say=print, env=None, on_plan=None):
     nb, nt, nbytes = plan(dev, pack, work, full, say)
     if on_plan: on_plan(nb, nt, nbytes)
     if nbytes:
-        fb, need = space(dev, nbytes, env)
+        fb, need = space(dev, nbytes, work, env)
         if fb is None: say("🟡 读不到测试设备剩余空间，不核、照推")
         elif fb < need:
-            say(f"【红】测试设备剩余空间不足：可写 {fb >> 30} GB < 要 {need >> 30} GB（待推 {nbytes >> 30} GB × 2 + 余量）；先卸掉机上不用的包")
+            say(f"【红】测试设备剩余空间不足：可写 {fb >> 30} GB < 要 {need >> 30} GB（待推 {nbytes >> 30} GB + 解开时最大一批 + 余量）；先卸掉机上不用的包")
             raise Fail("测试设备空间不足")
     send(dev, pack, work, say)
     return nb, nt, nbytes
@@ -460,7 +482,7 @@ def main(argv=None):
     for s in (sys.stdout, sys.stderr):
         if hasattr(s, "reconfigure"): s.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="推资源包（Mac / Windows 共用）")
-    ap.add_argument("op", choices=("run", "plan", "free", "send")); ap.add_argument("device"); ap.add_argument("bundle_id"); ap.add_argument("pack")
+    ap.add_argument("op", choices=("run", "plan", "free", "send", "need")); ap.add_argument("device"); ap.add_argument("bundle_id"); ap.add_argument("pack")
     ap.add_argument("--work"); ap.add_argument("--full", action="store_true"); ap.add_argument("--udid"); ap.add_argument("--devpush")
     ap.add_argument("--via", choices=("devpush", "devicectl")); ap.add_argument("--apply", action="store_true")
     ap.add_argument("--docs", default=DOCS); ap.add_argument("--launch-ctx")   # 多款容器：本款设备侧文档根 Documents/games/<游戏号>、起 App 解包时的 S2A_LAUNCH_CTX   # run 推完起一次 App 只解包并等解完（s2armctl push-pack / Windows 装机）
@@ -479,6 +501,8 @@ def main(argv=None):
         dev = device(a.device, a.bundle_id, work, a.udid, a.devpush, a.via, say=say, docs=a.docs.rstrip("/"), ctx=a.launch_ctx)
         if a.op == "free":
             fb = dev.free(); print(fb if fb is not None else "", flush=True); return 0
+        if a.op == "need":   # plan 之后：机上要的可写字节（tools/push_pack.sh）
+            print(need_bytes(work, int((state.read_text().split() + ["0"] * 4)[3])), flush=True); return 0
         if a.op == "plan":
             nb, nt, nbytes = plan(dev, pack, work, a.full, say); state.write_text(f"PLAN {nb} {nt} {nbytes}\n"); return 0
         if a.op == "send":

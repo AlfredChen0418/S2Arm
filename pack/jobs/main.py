@@ -21,6 +21,10 @@ import time
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if os.name == "nt":   # 作业主程序自己也要长路径处理：子 Python 进程靠 sitecustomize 装，主进程没人装（注册表 LongPathsEnabled 关着时，数据目录 ~200 字符起启动器后端就起不来）
+    sys.path.insert(1, str(Path(__file__).resolve().parents[2]))
+    from pack.orch import winlong as _winlong
+    _winlong.install()
 import community
 import diag
 import embedded
@@ -38,6 +42,7 @@ import build
 
 
 def run_request(request_path, *, context_class=Context, operation_overrides=None):
+    winproc.prepare_child_environment()
     path = Path(request_path)
     if not winproc.request_is_private(path):
         raise SystemExit("request must be owned by this user and private (0600)")
@@ -71,7 +76,7 @@ def run_request(request_path, *, context_class=Context, operation_overrides=None
                   "catalog": library.catalog, "customize": library.customize, "remove": library.remove, "delete": library.delete, "clean": library.clean,
                   "spaceSurvey": library.space_survey, "spaceFree": library.space_free,
                   "diagnostics": library.diagnostics, "saveInput": library.save_input,
-                  "build": build.prepare, "launch": build.launch, "pullDiagnostics": diag.pull, "ipa": ipa.build, "install": install.install, "installRemove": install.remove_from_phone, "installCheck": install.readiness, "installDotnet": toolchain.install_dotnet, "targetDevice": target.probe,
+                  "build": build.prepare, "launch": build.launch, "pullDiagnostics": diag.pull, "ipa": ipa.build, "install": install.install, "installRemove": install.remove_from_phone, "installCheck": install.readiness, "signingProject": install.signing_project, "installDotnet": toolchain.install_dotnet, "targetDevice": target.probe,
                   "saveStatus": saves.status, "saveBackup": saves.backup, "saveInspect": saves.inspect, "saveRestore": saves.restore,
                   "community": community.listing, "communitySave": community.save}
     if operation_overrides:
@@ -95,6 +100,8 @@ def run_request(request_path, *, context_class=Context, operation_overrides=None
         # 一局被停是玩家自己关游戏，不是「任务取消」（11-07 新前端验收）
         # 下载 Xcode 组件的传输由系统资产服务持有：停掉本进程只是不再等，传输可能还在继续（实测 11-08：取消后 Xcode 仍在下载）
         waiting = c.operation in ("downloadIosPlatform", "downloadMetal")
+        if c.operation in CLEANS_AFTER_STOP:
+            library.clean_after_stop(c)
         c.finish("cancelled", "游戏已停止。" if c.operation == "launch" else
                  "已停止等待：Xcode 的下载可能仍在继续（可在 Xcode → 设置 → Components 里查看）。" if waiting else
                  "任务已取消；上次成功的运行版本和存档已保留。")
@@ -109,10 +116,15 @@ def run_request(request_path, *, context_class=Context, operation_overrides=None
             c.last_log = log
         diagnostic = c.report_failure(error)
         message = diagnostic["summary"]
+        if c.operation in CLEANS_AFTER_STOP:   # 错误摘要要读产物根里的日志，所以排在它后面
+            library.clean_after_stop(c)
         c.finish("failed", message)
         return 1
     finally:
         ended.set()
+
+
+CLEANS_AFTER_STOP = ("build", "ipa")
 
 
 def parser():

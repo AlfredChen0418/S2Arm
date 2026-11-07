@@ -142,7 +142,7 @@ are separate. Passing original cropped SPS as the requested coded-size native
 contract is a negative test; the production Nvdec path uses its real reconstructed
 uncropped SPS and compares all 1088 rows against the independent reference.
 
-To seed an offline build, place `opus-1.6.1.tar.gz`, `libvpx-1.15.0.tar.gz` and
+To seed an offline build, place `opus-1.6.1.tar.gz`, `libvpx-1.17.0.tar.gz` and
 `libavc-d380d04a78c6c08702e36aca86d0fd4baee390f9.tar.gz` in one local directory,
 then run the explicit preparation command against the cache used by the build.
 Sources may also be imported into the Docker cache volume using the fixed build

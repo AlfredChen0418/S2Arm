@@ -397,8 +397,7 @@ def cmd_container_drop(a):
     left = [e for e in cat.get("games", []) if e.get("title_id") != a.game]
     if len(left) == len(cat.get("games", [])):
         red(f"容器里没有 {a.game}")
-    if not left:
-        red("不能摘掉最后一款（宿主没有空库形态）")
+    # 摘到 0 款也行（#227）：空容器只作游戏库里下次加款的底子，装机端不装它（pack/jobs/install.py remove_from_phone）
     work = Path(tempfile.mkdtemp(prefix=".container-", dir=out.parent))
     try:
         app = work / "S2Arm.app"

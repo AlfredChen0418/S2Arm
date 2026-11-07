@@ -101,7 +101,7 @@ int s2a_compile_export_request(const char *root, unsigned long long session,
     if (!root || root[0] != '/' || !session || !generation || !abi || !parser_version ||
         !closure || !*closure || !profile_hash || !*profile_hash || !export_safe_id(request_id) ||
         !identity || !json || !json_bytes || json_bytes > EXPORT_LIMIT_BYTES) return -1;
-    int rootfd = -1, dirfd = -1, lockfd = -1, tempfd = -1, result = -1;
+    int rootfd = -1, dirfd = -1, locked = 0, tempfd = -1, result = -1;
     DIR *scan = NULL;
     char temp[80] = {0}, final[224], setname[160], cohort[65], identity_hex[65];
     unsigned char digest[32];
@@ -122,8 +122,10 @@ int s2a_compile_export_request(const char *root, unsigned long long session,
     if (mkdirat(rootfd, setname, 0700) && errno != EEXIST) goto done;
     dirfd = openat(rootfd, setname, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (dirfd < 0) goto done;
-    lockfd = openat(dirfd, ".lock", O_CREAT | O_RDWR | O_NOFOLLOW | O_CLOEXEC, 0600);
-    if (lockfd < 0 || flock(lockfd, LOCK_EX)) goto done;
+    // 锁目录本身，不另建 .lock 文件（11-09 根修）：多个进程在刚建好的目录里同时 O_CREAT 同一个 .lock，macOS APFS 会偶发给其中一个回 ENOENT，
+    //   门禁 compile_export_test 12 进程并发发布偶发一个子进程失败（守望 eefdea169；本机 40 路 ×3 轮 11/120 红）。flock 对目录描述符在 Linux / 安卓 / macOS 都有效
+    if (flock(dirfd, LOCK_EX)) goto done;
+    locked = 1;
     scan = fdopendir(dup(dirfd));
     if (!scan) goto done;
     unsigned files = 0; uint64_t bytes = 0; int duplicate = 0;
@@ -132,7 +134,7 @@ int s2a_compile_export_request(const char *root, unsigned long long session,
     snprintf(suffix, sizeof suffix, "-%s.compile-request.json", identity_hex);
     errno = 0;
     while ((entry = readdir(scan))) {
-        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..") || !strcmp(entry->d_name, ".lock")) continue;
+        if (!strcmp(entry->d_name, ".") || !strcmp(entry->d_name, "..")) continue;
         struct stat st;
         if (fstatat(dirfd, entry->d_name, &st, AT_SYMLINK_NOFOLLOW) || !S_ISREG(st.st_mode) || st.st_size < 0) goto done;
         if (++files > EXPORT_LIMIT_FILES || (uint64_t)st.st_size > EXPORT_LIMIT_BYTES - bytes) goto done;
@@ -183,7 +185,7 @@ done:
     if (tempfd >= 0) close(tempfd);
     if (temp[0] && dirfd >= 0) unlinkat(dirfd, temp, 0);
     if (scan) closedir(scan);
-    if (lockfd >= 0) { flock(lockfd, LOCK_UN); close(lockfd); }
+    if (locked) flock(dirfd, LOCK_UN);
     if (dirfd >= 0) close(dirfd);
     if (rootfd >= 0) close(rootfd);
     return result;

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 import ctypes as C
+from .winlong import long_path   # Win32 路径入口（CreateFileW / CopyFile2 / SetFileSecurityW / GetVolumePathNameW）不吃 Python 层的前缀补丁：>240 字符必须自己过 long_path
 from ctypes import wintypes as W
 import errno
 import os
@@ -71,7 +72,7 @@ def _api(dll, name, result, *args):
 def _handle(path, access):
     f = _api('kernel32', 'CreateFileW', W.HANDLE, W.LPCWSTR, W.DWORD,
              W.DWORD, C.c_void_p, W.DWORD, W.DWORD, W.HANDLE)
-    h = f(str(Path(path).absolute()), access, 7, None, 3, 0x02200000, None)
+    h = f(long_path(str(Path(path).absolute())), access, 7, None, 3, 0x02200000, None)
     if h == C.c_void_p(-1).value:
         raise C.WinError(C.get_last_error())
     try:
@@ -148,7 +149,7 @@ def refs_same_volume(source, dest):
     roots = []
     for p in (source, Path(dest).parent):
         root = C.create_unicode_buffer(1024)
-        if not getpath(os.path.realpath(p), root, len(root)):   # 先解开目录联接（同 tools/refs_clone.py：作业目录是指到别的卷的联接时，按字面路径判错卷）
+        if not getpath(long_path(getattr(os.path.realpath, 'long', os.path.realpath)(p)), root, len(root)):   # 先解开目录联接（入口在系统盘，目标可能在别的盘；作业目录是指到别的卷的联接时，按字面路径判错卷）
             raise C.WinError(C.get_last_error())
         roots.append(root.value)
     if os.path.normcase(roots[0]) != os.path.normcase(roots[1]):
@@ -193,7 +194,7 @@ def copy_file(source, dest):
                         ('cancel', C.c_void_p), ('progress', C.c_void_p), ('context', C.c_void_p)]
         params = Params(C.sizeof(Params), 1, None, None, None)
         f = _api('kernel32', 'CopyFile2', C.c_long, W.LPCWSTR, W.LPCWSTR, C.POINTER(Params))
-        rc = f(str(source), str(dest), C.byref(params))
+        rc = f(long_path(str(source)), long_path(str(dest)), C.byref(params))
         if rc < 0:
             raise OSError(rc, 'ReFS CopyFile2 失败；不悄悄转实拷')
         _win_acl(dest, False)
@@ -225,9 +226,10 @@ def _win_acl(path, sealed):
             owner = C.wstring_at(ptr)
         finally:
             free(ptr)
-        # Deny only mutation, not GENERIC_WRITE (which also includes SYNCHRONIZE
-        # and would reject ordinary read handles). Keep owner WRITE_DAC for GC.
-        deny = f'(D;OICI;0x00010156;;;{owner})' if sealed else ''
+        # Deny writes only, not GENERIC_WRITE (which also includes SYNCHRONIZE and
+        # would reject ordinary read handles). Delete stays allowed so players can
+        # always remove leftovers from Explorer; owner WRITE_DAC is kept for GC.
+        deny = f'(D;OICI;0x00000116;;;{owner})' if sealed else ''
         sddl = f'D:P{deny}(A;OICI;GA;;;{owner})(A;OICI;GA;;;SY)(A;OICI;GA;;;BA)'
         sd = C.c_void_p()
         convert = _api('advapi32', 'ConvertStringSecurityDescriptorToSecurityDescriptorW', W.BOOL,
@@ -236,7 +238,7 @@ def _win_acl(path, sealed):
             raise C.WinError(C.get_last_error())
         _ACL_SD[sealed] = sd   # 进程内常驻（两个，几百字节），不 LocalFree
     setsecurity = _ACL_SD.get('set') or _ACL_SD.setdefault('set', _api('advapi32', 'SetFileSecurityW', W.BOOL, W.LPCWSTR, W.DWORD, C.c_void_p))
-    if not setsecurity(str(path), 0x80000004, sd):
+    if not setsecurity(long_path(str(path)), 0x80000004, sd):
         raise C.WinError(C.get_last_error())
 
 

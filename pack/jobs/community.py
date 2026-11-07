@@ -9,7 +9,8 @@
   画面：补丁应用层（直连线）出的 graphics/community/other_gfx.tsv：程序号 版本 编号 名称 互斥组 已验证(0/1) 来源
 玩家的选择存在游戏库 games/<程序号>/community.json：{"schema":2,"widescreen":真/假,"fps60":真/假,"enabled":{画面编号:真/假}}。
   宽屏 / 60 帧只是宿主设置：Mac 启动时由 build.launch 转成 S2A_WIDESCREEN=0 / S2A_FPS60=0；iPhone 在 App 设置页（Settings.bundle）开关
-  S2AWidescreen / S2AFps60（ios/settings.m 映射成同名环境变量）。"""
+  S2AWidescreen / S2AFps60（ios/settings.m 映射成同名环境变量）。
+Mac 设置页多两项：widenForce（同 iPhone「宽屏强制启用」）、metalfx（只 Mac，缺省关）；schema 3 起只存玩家明确选过的，没选的跟能力清单走。"""
 from __future__ import annotations
 
 import csv
@@ -63,6 +64,45 @@ def _indexes():
     return [p for p in sorted([*d.glob("*/full/*/INDEX.tsv"), *d.glob("*/*/INDEX.tsv")]) if not p.relative_to(d).parts[0].endswith("-lite")]
 
 
+def _saved(c, gid):
+    try:
+        data = json.loads(contained(c.library, c.library / "games" / gid / "community.json").read_text())
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def runtime_caps(c, gid):
+    """这款 Mac 运行版本的能力清单 s2a_caps.tsv（出包时生成）：{能力: 值}。没有清单 = 这款还没有 Mac 运行版本或版本太旧"""
+    try:
+        text = contained(c.library, c.library / "games" / gid / "current" / "s2a_caps.tsv").read_text(encoding="utf-8")
+    except (OSError, ValueError, UnicodeError):
+        return {}
+    rows = (line.split("#", 1)[0].split("\t") for line in text.splitlines() if not line.startswith("#"))
+    return {r[0].strip(): r[1].strip() for r in rows if len(r) >= 2 and r[0].strip()}
+
+
+def manual_fps60(saved):
+    """玩家在设置页明确开过 60 帧。schema 2 时存盘总带 fps60=真（旧界面改别的开关也会写），不算玩家选的"""
+    return saved.get("schema") == 3 and saved.get("fps60") is True
+
+
+NO_RUNTIME = "这款还没有做好 Mac 版，或者是旧版本做的：重新准备后可用。"
+NO_FPS60 = "这款游戏没有可用的 60 帧方案。"
+NO_DIRECT = "这款游戏没有走直连渲染，用不了 MetalFX 放大。"
+
+
+def mac_settings(c, gid):
+    """Mac 设置页的三个开关：每项 {available, enabled, reason}。缺省跟能力清单走（60 帧一般开，满屏强制和 MetalFX 关）"""
+    caps, saved = runtime_caps(c, gid), _saved(c, gid)
+    def row(available, enabled, reason):
+        return dict(available=available, enabled=available and enabled, reason="" if available else (NO_RUNTIME if not caps else reason))
+    fps = saved.get("fps60") is not False and (manual_fps60(saved) or caps.get("fps60") == "1")
+    return dict(fps60=row("fps60" in caps, fps, NO_FPS60),
+                widenForce=row(bool(caps), saved.get("widenForce") is True, ""),
+                metalfx=row(caps.get("direct") == "1", saved.get("metalfx") is True, NO_DIRECT))
+
+
 def selection(c, gid):
     """玩家选择；读不到 / 旧格式按缺省（宽屏、60 帧开）"""
     try:
@@ -112,7 +152,7 @@ def describe_game(c, game):
         a[key]["enabled"] = a[key]["available"] and s[key]
     for it in a["graphics"]:
         it["enabled"] = bool(s["enabled"].get(it["id"], it["state"] == "verified"))
-    return dict(gameId=game["id"], version=_version(game), **a)
+    return dict(gameId=game["id"], version=_version(game), mac=mac_settings(c, game["id"]), **a)
 
 
 def listing(c):
@@ -141,13 +181,27 @@ def save(c):
             for other in every.values():
                 if other["exclusive"] == it["exclusive"] and other["id"] != key:
                     s["enabled"][other["id"]] = False
-    atomic(contained(c.library, c.library / "games" / game["id"] / "community.json"), dict(schema=2, **s))
+    saved = _saved(c, game["id"])
+    out = dict(schema=3, enabled=s["enabled"])
+    for key in ("widescreen", "fps60", "widenForce", "metalfx"):   # 只存玩家明确选过的；没选的继续跟能力清单走
+        if key in c.r:
+            out[key] = bool(c.r[key])
+        elif key in saved and not (key == "fps60" and saved[key] is True and saved.get("schema") != 3):
+            out[key] = saved[key]
+    atomic(contained(c.library, c.library / "games" / game["id"] / "community.json"), out)
     return describe_game(c, game)
 
 
 def launch_env(c, gid):
     """Mac 启动时的宿主开关（关掉的才设；与 iPhone 设置页同口径）"""
-    s, env = selection(c, gid), {}
+    s, env, saved, caps = selection(c, gid), {}, _saved(c, gid), runtime_caps(c, gid)
+    if manual_fps60(saved) and caps.get("fps60") == "0":
+        env["S2A_FPS60"] = "1"            # 清单因强信号关了 60 帧，玩家手动打开（同 iPhone 设置页）
+    if saved.get("widenForce") is True:   # 同 iPhone「宽屏强制启用」：没验证过的也铺满，画面被拉伸会自动退回 16:9
+        env["S2A_WIDEN_VERIFIED"] = "1"
+        env["S2A_WIDESCREEN"] = "1"
+    if saved.get("metalfx") is True and caps.get("direct") == "1":
+        env["S2A_SCALING_FILTER"] = "MetalFX"   # 直连上屏 MetalFX 空间放大（graphics/nvn/gfx/nvn/nvn_present_fx.inc）
     if not s["widescreen"]:
         env["S2A_WIDESCREEN"] = "0"       # 宽屏关：宿主宽屏开关（直连线 widen/setting；不用判定局专用的 S2A_WIDEN_VERIFIED，它会盖掉名单门）
     if not s["fps60"]:

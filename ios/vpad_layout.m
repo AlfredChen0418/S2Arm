@@ -150,9 +150,15 @@ static CGRect normalized_rect(NSDictionary *value) {
     return CGRectMake(MAX(CGRectGetMinX(rect), MIN(x, CGRectGetMaxX(rect) - w)),
                       MAX(CGRectGetMinY(rect), MIN(y, CGRectGetMaxY(rect) - h)), w, h);
 }
-- (nullable NSString *)buttonAt:(CGPoint)p safeRect:(CGRect)rect slop:(CGFloat)slop {
-    for (NSDictionary *button in _buttons)
-        if (CGRectContainsPoint(CGRectInset([self frameForButton:button safeRect:rect], -slop, -slop), p)) return button[@"id"];
+- (nullable NSString *)buttonAt:(CGPoint)p safeRect:(CGRect)rect slop:(CGFloat)slop { return [self buttonAt:p safeRect:rect slop:slop scales:nil]; }
+- (nullable NSString *)buttonAt:(CGPoint)p safeRect:(CGRect)rect slop:(CGFloat)slop scales:(NSDictionary<NSString *, NSNumber *> *)scales {
+    for (NSDictionary *button in _buttons) {
+        NSNumber *scale = scales[button[@"id"]] ?: scales[@"*"]; CGFloat s = scale ? scale.doubleValue : 1;
+        if (s <= 0) continue;
+        CGRect f = [self frameForButton:button safeRect:rect];
+        f = CGRectInset(f, f.size.width * (1 - s) / 2, f.size.height * (1 - s) / 2);
+        if (CGRectContainsPoint(CGRectInset(f, -slop, -slop), p)) return button[@"id"];
+    }
     return nil;
 }
 - (CGRect)activationForStick:(NSDictionary *)stick safeRect:(CGRect)rect {
@@ -199,6 +205,10 @@ static BOOL stick_values(CGFloat deadzone, CGFloat saturation, CGFloat exponent)
         isfinite(saturation) && saturation >= .5 && saturation <= 1 &&
         isfinite(exponent) && exponent >= .5 && exponent <= 3;
 }
+CGPoint S2AVPadStickSensitivity(CGPoint input, CGFloat sensitivity) {
+    CGFloat x = input.x * sensitivity, y = input.y * sensitivity, m = hypot(x, y);
+    return m > 1 ? CGPointMake(x / m, y / m) : CGPointMake(x, y);
+}
 CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation, CGFloat exponent) {
     CGFloat radius = hypot(input.x, input.y);
     if (!isfinite(radius) || radius <= deadzone || !stick_values(deadzone, saturation, exponent)) return CGPointZero;
@@ -224,6 +234,10 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     NSString *_selectionProblem;
     NSString *_hapticProblem;
     NSString *_holdLockProblem;
+    NSString *_keyStyleProblem;
+    NSString *_stickModeProblem;
+    CGPoint _stickCenters[2];
+    NSMutableDictionary<NSString *, NSDictionary *> *_keyStyles;
 
     NSString *_stickProblem;
     NSString *_visibilityProblem;
@@ -238,6 +252,7 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     _holdLockEnabled = YES;
     if (read_enabled([_directory URLByAppendingPathComponent:@".hold_lock.json"], &_holdLockEnabled) < 0)
         _holdLockProblem = @"F01.holdLock：按住锁定设置损坏，暂用默认开启；原记录保留至重新设置成功";
+    [self loadKeyStyles]; [self loadStickMode];
     _idleKeyOpacity = 0.25;
     NSURL *visibility = [_settingsDirectory URLByAppendingPathComponent:@".visibility.json"];
     if ([NSFileManager.defaultManager fileExistsAtPath:visibility.path]) {
@@ -301,6 +316,8 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     if (_selectionProblem) [problems addObject:_selectionProblem];
     if (_hapticProblem) [problems addObject:_hapticProblem];
     if (_holdLockProblem) [problems addObject:_holdLockProblem];
+    if (_keyStyleProblem) [problems addObject:_keyStyleProblem];
+    if (_stickModeProblem) [problems addObject:_stickModeProblem];
     if (_stickProblem) [problems addObject:_stickProblem];
     if (_visibilityProblem) [problems addObject:_visibilityProblem];
     NSError *error; NSArray *urls = [NSFileManager.defaultManager contentsOfDirectoryAtURL:_directory includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:&error];
@@ -345,6 +362,89 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"enabled": (enabled ? @YES : @NO)} options:0 error:error];
     if (!data || ![data writeToURL:[_directory URLByAppendingPathComponent:@".hold_lock.json"] options:NSDataWritingAtomic error:error]) return NO;
     _holdLockEnabled = enabled; _holdLockProblem = nil; return YES;
+}
+- (NSURL *)stickModeFile { return [_directory URLByAppendingPathComponent:@".stick_mode.json"]; }
+- (void)loadStickMode {
+    _stickFixed = NO; _stickSensitivity = 1; _stickCenters[0] = CGPointMake(0.12, 0.66); _stickCenters[1] = CGPointMake(0.63, 0.66);
+    NSData *data = [NSData dataWithContentsOfURL:self.stickModeFile];
+    if (!data) return;
+    id doc = data.length <= 4096 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (!fields(doc, @[@"schemaVersion", @"fixed", @"sensitivity", @"left", @"right"]) || !number(doc[@"schemaVersion"], 1, 1) || !number(doc[@"sensitivity"], 0.5, 2) || ![doc[@"fixed"] isKindOfClass:NSNumber.class]) {
+        _stickModeProblem = @"F01.stickMode：摇杆模式设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+    NSArray *names = @[@"left", @"right"];
+    for (int i = 0; i < 2; i++) { NSArray *p = doc[names[i]];
+        if (![p isKindOfClass:NSArray.class] || p.count != 2 || !number(p[0], 0, 1) || !number(p[1], 0, 1)) { _stickModeProblem = @"F01.stickMode：摇杆模式设置损坏，暂用默认；原记录保留至重新设置成功"; return; } }
+    _stickFixed = [doc[@"fixed"] boolValue]; _stickSensitivity = [doc[@"sensitivity"] doubleValue];
+    for (int i = 0; i < 2; i++) { NSArray *p = doc[names[i]]; _stickCenters[i] = CGPointMake([p[0] doubleValue], [p[1] doubleValue]); }
+}
+- (BOOL)saveStickMode:(NSError **)error {
+    if (![self prepareDirectory:error]) return NO;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"fixed": @(_stickFixed), @"sensitivity": @(_stickSensitivity),
+        @"left": @[@(_stickCenters[0].x), @(_stickCenters[0].y)], @"right": @[@(_stickCenters[1].x), @(_stickCenters[1].y)]} options:0 error:error];
+    if (!data || ![data writeToURL:self.stickModeFile options:NSDataWritingAtomic error:error]) return NO;
+    _stickModeProblem = nil; return YES;
+}
+- (CGPoint)stickCenter:(int)side { return _stickCenters[side ? 1 : 0]; }
+- (BOOL)setStickFixed:(BOOL)fixed sensitivity:(CGFloat)sensitivity error:(NSError **)error {
+    if (!isfinite(sensitivity) || sensitivity < 0.5 || sensitivity > 2) return fail(error, @"F01.stickMode", @"灵敏度须为 0.5–2");
+    _stickFixed = fixed; _stickSensitivity = sensitivity; return [self saveStickMode:error];
+}
+- (BOOL)setStickCenter:(CGPoint)center side:(int)side error:(NSError **)error {
+    if (!isfinite(center.x) || !isfinite(center.y) || center.x < 0 || center.x > 1 || center.y < 0 || center.y > 1) return fail(error, @"F01.stickMode", @"摇杆位置超出屏幕");
+    _stickCenters[side ? 1 : 0] = center; return [self saveStickMode:error];
+}
+static BOOL key_style_valid(S2AVPadKeyStyle s) {
+    return isfinite(s.scale) && isfinite(s.opacity) && s.scale >= 0.6 && s.scale <= 1.6 && s.opacity >= 0.2 && s.opacity <= 1;
+}
+- (NSURL *)keyStyleFile { return [_directory URLByAppendingPathComponent:@".key_style.json"]; }
+- (void)loadKeyStyles {
+    _keyStyles = [NSMutableDictionary dictionary]; _keyTheme = 0; _globalScale = _globalOpacity = 1;
+    NSData *data = [NSData dataWithContentsOfURL:self.keyStyleFile];
+    id doc = data.length && data.length <= 65536 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (!doc) return;
+    if (!fields(doc, @[@"schemaVersion", @"theme", @"keys", @"globalScale", @"globalOpacity"]) || !number(doc[@"schemaVersion"], 1, 1) || !number(doc[@"theme"], 0, kS2AVPadKeyThemeCount - 1) || !number(doc[@"globalScale"], 0.6, 1.6) || !number(doc[@"globalOpacity"], 0.2, 1) || ![doc[@"keys"] isKindOfClass:NSDictionary.class]) {
+        _keyStyleProblem = @"F01.keyStyle：按键外观设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+    for (NSString *key in doc[@"keys"]) {
+        NSDictionary *v = doc[@"keys"][key];
+        if (!fields(v, @[@"scale", @"opacity", @"hidden"]) || !number(v[@"scale"], 0.6, 1.6) || !number(v[@"opacity"], 0.2, 1) || ![v[@"hidden"] isKindOfClass:NSNumber.class]) {
+            _keyStyles = [NSMutableDictionary dictionary]; _keyStyleProblem = @"F01.keyStyle：按键外观设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+        _keyStyles[key] = v;
+    }
+    _keyTheme = [doc[@"theme"] integerValue]; _globalScale = [doc[@"globalScale"] doubleValue]; _globalOpacity = [doc[@"globalOpacity"] doubleValue];
+}
+- (BOOL)saveKeyStyles:(NSError **)error {
+    if (![self prepareDirectory:error]) return NO;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"theme": @(_keyTheme), @"keys": _keyStyles, @"globalScale": @(_globalScale), @"globalOpacity": @(_globalOpacity)} options:0 error:error];
+    if (!data || ![data writeToURL:self.keyStyleFile options:NSDataWritingAtomic error:error]) return NO;
+    _keyStyleProblem = nil; return YES;
+}
+- (S2AVPadKeyStyle)keyStyle:(NSString *)identifier {
+    NSDictionary *v = _keyStyles[identifier];
+    return v ? (S2AVPadKeyStyle){[v[@"scale"] doubleValue], [v[@"opacity"] doubleValue], [v[@"hidden"] boolValue]} : (S2AVPadKeyStyle){1, 1, NO};
+}
+- (BOOL)setKeyStyle:(S2AVPadKeyStyle)style forKey:(NSString *)identifier persist:(BOOL)persist error:(NSError **)error {
+    if (!key_style_valid(style)) return fail(error, @"F01.keyStyle", @"大小须为 0.6–1.6，不透明度须为 0.2–1");
+    _keyStyles[identifier] = @{@"scale": @(style.scale), @"opacity": @(style.opacity), @"hidden": @(style.hidden)};
+    return persist ? [self saveKeyStyles:error] : YES;
+}
+- (BOOL)setKeyTheme:(NSInteger)theme error:(NSError **)error {
+    if (theme < 0 || theme >= kS2AVPadKeyThemeCount) return fail(error, @"F01.keyStyle", @"没有这个配色");
+    _keyTheme = theme; return [self saveKeyStyles:error];
+}
+- (BOOL)setGlobalScale:(CGFloat)scale opacity:(CGFloat)opacity persist:(BOOL)persist error:(NSError **)error {
+    S2AVPadKeyStyle check = {scale, opacity, NO};
+    if (!key_style_valid(check)) return fail(error, @"F01.keyStyle", @"大小须为 0.6–1.6，不透明度须为 0.2–1");
+    _globalScale = scale; _globalOpacity = opacity; return persist ? [self saveKeyStyles:error] : YES;
+}
+- (BOOL)resetKeyStyles:(NSError **)error { _keyStyles = [NSMutableDictionary dictionary]; _keyTheme = 0; _globalScale = _globalOpacity = 1; return [self saveKeyStyles:error]; }
+- (NSDictionary<NSString *, NSNumber *> *)keyScalesIncludingHidden:(BOOL)includeHidden {
+    NSMutableDictionary *out = [NSMutableDictionary dictionaryWithObject:@(_globalScale) forKey:@"*"];
+    for (NSString *key in _keyStyles) { S2AVPadKeyStyle s = [self keyStyle:key]; out[key] = @(s.hidden && !includeHidden ? 0 : s.scale * _globalScale); }
+    return out;
+}
+- (NSDictionary *)keyStyleSnapshot { return @{@"theme": @(_keyTheme), @"globalScale": @(_globalScale), @"globalOpacity": @(_globalOpacity), @"keys": [[NSDictionary alloc] initWithDictionary:_keyStyles copyItems:YES]}; }
+- (BOOL)restoreKeyStyleSnapshot:(NSDictionary *)snapshot error:(NSError **)error {
+    _keyTheme = [snapshot[@"theme"] integerValue]; _globalScale = [snapshot[@"globalScale"] doubleValue]; _globalOpacity = [snapshot[@"globalOpacity"] doubleValue]; _keyStyles = [snapshot[@"keys"] mutableCopy]; return [self saveKeyStyles:error];
 }
 - (BOOL)setStickDeadzone:(CGFloat)deadzone saturation:(CGFloat)saturation exponent:(CGFloat)exponent error:(NSError **)error {
     if (!stick_values(deadzone, saturation, exponent)) return fail(error, @"F01.stick", @"死区须为 0–0.4，外圈饱和须为 0.5–1，响应指数须为 0.5–3");

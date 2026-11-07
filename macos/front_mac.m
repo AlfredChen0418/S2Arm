@@ -6,6 +6,7 @@
 #import <GameController/GameController.h>
 #import <QuartzCore/CAMetalLayer.h>
 #include "../runtime/include/s2a_pad.h"
+#include "../runtime/include/phone_axes.h"
 #import "input_guide.h"
 #include <stdatomic.h>
 #include <stdint.h>
@@ -308,8 +309,45 @@ static GCExtendedGamepad *active_pad(NSArray *controllers) {
     }
     return best;
 }
+// 手柄六轴（同 iOS 的 s2a_pad_read_motion 约定）：游戏要六轴时才开传感器。主线程跟着输入采样读 GCMotion，游戏线程取最新一份
+static _Atomic int g_motion_wanted;
+static pthread_mutex_t g_motion_mu = PTHREAD_MUTEX_INITIALIZER;
+static s2a_pad_motion g_motion;
+static int g_motion_known;
+static GCMotion *g_motion_source;
+static void set_motion_source(GCMotion *source) {
+    if (source == g_motion_source) return;
+    if (g_motion_source.sensorsRequireManualActivation) g_motion_source.sensorsActive = NO;
+    g_motion_source = source;
+    if (source.sensorsRequireManualActivation) source.sensorsActive = YES;
+}
+static void sample_motion(GCExtendedGamepad *pad) {
+    GCMotion *m = atomic_load(&g_motion_wanted) ? pad.controller.motion : nil;
+    set_motion_source(m.hasRotationRate && m.hasGravityAndUserAcceleration ? m : nil);
+    s2a_pad_motion sample = {0};
+    int known = g_motion_source != nil;
+    if (known) {
+        double gravity[3] = {m.gravity.x, m.gravity.y, m.gravity.z}, user[3] = {m.userAcceleration.x, m.userAcceleration.y, m.userAcceleration.z};
+        double rotation[3] = {m.rotationRate.x, m.rotationRate.y, m.rotationRate.z};
+        float acceleration[3], gyro[3];
+        s2a_gc_motion_axes(gravity, user, rotation, acceleration, gyro);
+        sample = (s2a_pad_motion){clock_gettime_nsec_np(CLOCK_UPTIME_RAW) / 1000, acceleration[0], acceleration[1], acceleration[2], gyro[0], gyro[1], gyro[2]};
+    }
+    pthread_mutex_lock(&g_motion_mu);
+    g_motion = sample; g_motion_known = known;
+    pthread_mutex_unlock(&g_motion_mu);
+}
+__attribute__((visibility("default"), used)) void s2a_pad_set_motion_enabled(int enabled) { atomic_store(&g_motion_wanted, enabled != 0); }
+__attribute__((visibility("default"), used)) int s2a_pad_read_motion(s2a_pad_motion *out) {
+    pthread_mutex_lock(&g_motion_mu);
+    int known = g_motion_known;
+    *out = g_motion;
+    pthread_mutex_unlock(&g_motion_mu);
+    return known;
+}
 static void sample_input(void) {
     int32_t sticks[4] = {0}; uint32_t buttons = 0;
+    sample_motion(focused ? active_pad(GCController.controllers) : nil);
     if (!focused) { publish(0, sticks); return; }
     NSDictionary *keyboard = config[@"keyboard"];
     NSUInteger consumed = 0;

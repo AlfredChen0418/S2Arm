@@ -152,6 +152,28 @@ class Apply(Base):
     def test_pushed_waits_for_new_done_line(self):
         self.assertTrue(self.ap({}, 1, True)); self.assertEqual(self.dev.launches, [{"S2A_PACK_APPLY_ONLY": "1"}])
 
+    def cant_launch(self, player_opens_at=None):
+        """电脑拉不起 App（#192）；player_opens_at 给了就在该时刻起算玩家手动打开、解完。返回 (结果或异常, 结束时刻)"""
+        dev = Fake({}); self.dev = dev; clock = [0.0]
+        def boom(env): raise push.Fail("起 App 失败：RSD 里没有 app_service")
+        dev.launch = boom
+        def sleep(x):
+            clock[0] += x
+            if player_opens_at is not None and clock[0] >= player_opens_at:
+                dev.files[f"{RP}/.applied"] = self.WANT; dev.files["Documents/unpack.log"] = f"11-08 解开 1 个包 2 个文件 0 MB，.applied = {self.WANT}（0.2 秒）\n"
+        try: return push.apply(dev, self.pk, self.w, 1, say=self.log.append, sleep=sleep, now=lambda: clock[0]), clock[0]
+        except push.Fail as e: return e, clock[0]
+
+    def test_cant_launch_player_opens_by_hand(self):   # 玩家在第 60 秒手动打开：等到解完算装好，不报错
+        r, t = self.cant_launch(player_opens_at=60)
+        self.assertIs(r, True); self.assertGreaterEqual(t, 60); self.assertLess(t, 70)
+        self.assertTrue(any(l.startswith("资源包已传完。") and "打开 S2Arm" in l for l in self.log))
+
+    def test_cant_launch_nobody_opens_is_needs_player(self):   # 180 秒没人打开：需要玩家操作，文案不说失败，带原因
+        r, t = self.cant_launch()
+        self.assertIsInstance(r, push.NeedsPlayer); self.assertGreater(t, 180); self.assertLess(t, 190)
+        self.assertTrue(str(r).startswith("资源包已传完，还差最后一步：")); self.assertIn("app_service", str(r)); self.assertNotIn("失败，", str(r))
+
     def test_same_pack_repush_without_new_line_fails(self):   # .applied 推前已是本包、日志旧行也对得上，但这次没解 → 不能判装好
         old = {f"{RP}/.applied": self.WANT, "Documents/unpack.log": f"10-01 解开 3 个包 9 个文件 1 MB，.applied = {self.WANT}（0.2 秒）\n"}
         with self.assertRaises(push.Fail) as e: self.ap(old, 1, False)
@@ -210,6 +232,35 @@ class ContainerDocs(Base):
         self.assertEqual((d.docs, d.ctx), (self.D, self.CTX))
         d = push.device("C891", "s2arm.z.0100000000010000", self.w, via="devicectl", env={})
         self.assertEqual((d.docs, d.ctx), ("Documents", None))   # 单款缺省不变
+
+
+class SpaceNeed(Base):
+    def batches(self, *sizes):
+        for i, rows in enumerate(sizes):
+            (self.w / f"push_{i:03d}.tsv").write_text("".join(f"f{i}_{k}\t{n}\tsha\n" for k, n in enumerate(rows)))
+
+    def test_peak_not_double(self):   # 手算：10 GB 分两批（6、4 GB）、3 个文件 → 10 + 6 GB + 3 × 4096 + 余量 1 GiB
+        self.batches([6 * 10**9], [3 * 10**9, 10**9])
+        self.assertEqual(push.need_bytes(self.w, 10**10, {}), 10**10 + 6 * 10**9 + 3 * 4096 + (1 << 30))
+        self.assertEqual(push.need_bytes(self.w, 10**10, {"S2A_PUSH_SPARE_GB": "0"}), 10**10 + 6 * 10**9 + 3 * 4096)
+
+    def run_with_free(self, free):
+        self.dev = Fake({})
+        self.dev.free = lambda: free
+        return push.run(self.dev, self.pk, self.w, full=True, say=self.log.append, env={"S2A_PUSH_SPARE_GB": "0"})
+
+    # 手算：两个文件共 3 字节，一批 → 3 + 3 + 2 × 4096 = 8198
+    def test_exact_need_passes(self):
+        self.assertEqual(self.run_with_free(8198)[2], 3)
+
+    def test_one_byte_short_reports(self):
+        with self.assertRaises(push.Fail) as e: self.run_with_free(8197)
+        self.assertIn("空间不足", str(e.exception)); self.assertEqual(self.dev.puts, [])
+
+    def test_devpush_free_parses_or_none(self):
+        d = push.Devpush("exe", "U", "b", self.w)
+        d.call = lambda *a: (0, "1234\n"); self.assertEqual(d.free(), 1234)
+        d.call = lambda *a: (1, "不认识的操作 free"); self.assertIsNone(d.free())
 
 
 class SendFail(Base):

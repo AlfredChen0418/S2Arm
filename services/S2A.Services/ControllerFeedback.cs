@@ -39,6 +39,9 @@ namespace S2A.Services
         private bool _rumblePermitted;
         private volatile bool _stopped;
 
+        public static bool MotionExport(out nint motion) =>
+            NativeLibrary.TryGetExport(NativeLibrary.GetMainProgramHandle(), "s2a_pad_read_motion", out motion);
+
         public ControllerFeedback(Switch device, PlayerIndex player)
         {
             _npads = device.Hid.Npads;
@@ -61,7 +64,7 @@ namespace S2A.Services
                     _npads.RumblePermissionChanged = SetRumblePermitted;
                 }
             }
-            if (NativeLibrary.TryGetExport(program, "s2a_pad_read_motion", out nint motion))
+            if (MotionExport(out nint motion))
             {
                 _readMotion = (delegate* unmanaged<MotionSample*, int>)motion;
                 _setMotionEnabled = (delegate* unmanaged<int, void>)NativeLibrary.GetExport(program, "s2a_pad_set_motion_enabled");

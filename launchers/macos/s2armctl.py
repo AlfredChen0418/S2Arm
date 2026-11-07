@@ -42,7 +42,8 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   targets [--models|--json]         打 iPhone 包的目标设备：当前目标、连着的设备（含设备名）、可选系统；--models 列可选机型
   target probe | target <机型号> <系统大版本>   重新检测连着的设备 / 没连时选机型
   update [restart|retry]            新版后台下载的状态；restart = 重启并换上已下载好的新版，retry = 重试下载（出包中不能重启）
-  library <目录>                     换游戏库位置（外接盘也行，出包的工作文件和缓存跟着走；换后要重新放游戏）
+  library <目录> [--move]            换游戏库位置（外接盘也行）；--move 把现有游戏、成品、缓存和存档一起搬到这个空文件夹
+  display <游戏号> [--fps60 on|off] [--widen on|off] [--metalfx on|off]   看 / 改这款的画面设置，下次启动生效
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
   launch <游戏号>                    在 Mac 上启动游戏
@@ -53,6 +54,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   next [游戏号] [--json]             AI 代操作入口：现在走到哪一步、下一步做什么（命令）、由谁做（ai 自己做 / ask 问玩家要输入 /
                                     human 只能玩家本人做 / confirm 先征得玩家同意）、为什么；出错时带错误码、原因和处理办法
   logs <任务号|游戏号> [--lines N]    读这条任务（或这款游戏最近一条任务）的日志末尾（缺省 40 行）
+  install <游戏号> [--team 团队号] [--device UDID或设备名]   装到 iPhone（签名 + 装 App + 推资源包）；连着多台时用 --device 指定（同网配对的也行）
   device <游戏号>                    iPhone 连没连、这款游戏的 App 装没装（装机要玩家用 AltStore 登录 Apple ID，AI 不代做）
   push-pack <游戏号>                 App 装好后把资源包拷进 iPhone（同在访达里把「资源包」文件夹拖到 App 上），拷完逐文件核对
 
@@ -120,12 +122,24 @@ def launch_args(app, root=None, custom=None):
     if WINDOWS: return [app, '--control'] + ([f'--data-root={root}'] if custom else [])
     return ['open', app, '--args', '--control'] + ([f'--data-root={root}'] if custom else [])
 
+def start_failure(path, since):
+    # App 起不来控制口时把原因写在这里；只认这次启动之后写的
+    try:
+        if os.path.getmtime(path) <= since: return ''
+        with open(path, encoding='utf-8') as f: why = f.read().strip()
+    except OSError: return ''
+    if why.startswith('Private job root'):   # Windows 只接受 S2Arm 自己建的数据目录（权限不继承上级）
+        why += '（这个数据目录不是 S2Arm 自己建的：请把 --data-root 换成一个还不存在的路径，S2Arm 会自己建）'
+    return why
+
 def start(app):
     cj = os.path.join(ROOT, 'control.json')
+    err = os.path.join(ROOT, 'control.error')
     try:
         if alive(info()['pid']): call('GET', '/state', timeout=3); print(f'控制口已就绪：127.0.0.1:{info()["port"]}（pid {info()["pid"]}，数据目录 {ROOT}）'); return
     except SystemExit: pass
     old = os.path.getmtime(cj) if os.path.exists(cj) else 0
+    old_err = os.path.getmtime(err) if os.path.exists(err) else 0
     # 不加 -n：玩家的 S2Arm 已经开着就不再开第二个（已开着但没打开 AI 开关时，--control 不会生效，下面超时会提示）
     args = launch_args(app)
     if WINDOWS: subprocess.Popen(args, cwd=os.path.dirname(app), creationflags=0x00000008 | 0x00000200, close_fds=True)   # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：窗口不随本命令退出
@@ -135,6 +149,8 @@ def start(app):
         if os.path.exists(cj) and os.path.getmtime(cj) > old and alive(info()['pid']):
             try: call('GET', '/state', timeout=3); print(f'控制口就绪：127.0.0.1:{info()["port"]}（pid {info()["pid"]}，数据目录 {ROOT}）'); return
             except SystemExit: pass
+        why = start_failure(err, old_err)
+        if why: sys.exit(f'控制口没起来：{why}')
         time.sleep(0.5)
     sys.exit('60 秒内控制口没就绪：如果 S2Arm 已经开着，请在它的「设置 → 让 AI 帮你操作」打开「允许 AI 操作 S2Arm」')
 
@@ -191,8 +207,10 @@ DEFAULT_NEXT = ('ai', 's2armctl logs <任务号> 看原因，按日志末尾的�
 
 def task_log(task_id):
     d = os.path.join(ROOT, 'logs')
-    try: fs = [os.path.join(d, f) for f in os.listdir(d) if f.startswith(task_id) and f.endswith('.log')]
-    except OSError: return None
+    # Mac 构建各阶段写 logs/<任务>/，起游戏等作业写 logs/<任务>-*.log；两种布局都查。
+    prefix = os.path.join(glob.escape(d), glob.escape(task_id))
+    fs = glob.glob(prefix + '*.log') + glob.glob(os.path.join(prefix, '*.log'))
+    fs = [f for f in fs if os.path.isfile(f)]
     return max(fs, key=os.path.getmtime) if fs else None
 
 def logs(ref, n):
@@ -478,6 +496,7 @@ def install_check(gid, as_json, limit=40):
             for i in rd['items']:
                 mark = '✓' if i['ok'] else ('…' if i['waiting'] else '✗')
                 print(f'{mark} {i["title"]}' + (f'\n    {"玩家本人做" if i["who"] == "human" else "启动器做"}：{i["detail"]}' if not i['ok'] and not i['waiting'] else ''))
+            if rd.get('signing'): print('Xcode 签名：' + rd['signing'])
             print('可以装：s2armctl install ' + gid + '（✗ 的项先告诉玩家；失败时按错误提示处理）' if rd['ready'] else '这款的 iPhone 版还没做好：先出包，再 s2armctl install-check ' + gid)
             sys.exit(0 if rd['ready'] else 2)
         time.sleep(1)
@@ -526,6 +545,8 @@ def main():
         if '--reset-cover' in rest: body['coverPath'] = ''
         if len(body) == 1: sys.exit('要给 --name、--cover、--reset-name 或 --reset-cover')
         print(json.dumps(call('POST', '/customize', body), ensure_ascii=False)); return
+    if cmd == 'signing-project':
+        print(json.dumps(call('POST', '/signingProject', {}), ensure_ascii=False)); return
     if cmd == 'delete':
         before = {t['id'] for t in call('GET', '/state')['tasks']}
         call('POST', '/delete', {'gameId': rest[0]}); wait_op('delete', before); return
@@ -542,9 +563,15 @@ def main():
         if rest: print(json.dumps(call('POST', '/update', {'action': rest[0]}), ensure_ascii=False))
         else: print(json.dumps(call('GET', '/state').get('update'), ensure_ascii=False))
         return
+    if cmd == 'display':
+        names = {'--fps60': 'fps60', '--widen': 'widenForce', '--metalfx': 'metalfx'}
+        body = {'gameId': rest[0]}
+        for flag, key in names.items():
+            if flag in rest: body[key] = rest[rest.index(flag) + 1] == 'on'
+        print(json.dumps(call('POST', '/display', body), ensure_ascii=False, indent=1)); return
     if cmd == 'library':
         before = {t['id'] for t in call('GET', '/state')['tasks']}
-        call('POST', '/library', {'path': os.path.abspath(os.path.expanduser(rest[0]))}); wait_op('setup', before); return
+        call('POST', '/library', {'path': os.path.abspath(os.path.expanduser(rest[0])), 'move': '--move' in rest}); wait_op('setup', before); return
     if cmd == 'errors': errors(rest[0] if rest else None); return
     if cmd == 'install-check': install_check(rest[0], '--json' in rest); return
     if cmd == 'build':
@@ -579,7 +606,7 @@ def main():
         wait(rest[0], op, lim); return
     simple = {
               'fonts': ('/fonts', lambda r: {'path': os.path.abspath(r[0]) if r and r[0] else ''}),
-              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: {'gameId': r[0]}), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
+              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: {'gameId': r[0], **({'teamId': r[r.index('--team') + 1]} if '--team' in r else {}), **({'device': r[r.index('--device') + 1]} if '--device' in r else {})}), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
               'cancel': ('/cancel', lambda r: {'taskId': r[0]}), 'retry': ('/retry', lambda r: {'taskId': r[0]}),
               'select': ('/select', lambda r: {'selection': r[0], **({'gameId': r[1]} if len(r) > 1 else {})}),
               'onboarding': ('/onboarding', lambda r: {'action': r[0], **({'step': int(r[1])} if len(r) > 1 else {})}),

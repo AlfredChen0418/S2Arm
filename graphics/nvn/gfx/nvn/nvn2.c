@@ -202,17 +202,7 @@ static const struct { const char *n; const char *why; } g_ns2_red[] = {
     {"NvRmHost1xOpen", W_NVRM},
     {"NvRmHostModuleCheck", W_NVRM},
     {"_ZN2nn5album28InitializeMovieMakerInternalEONS_2sf13SharedPointerINS_6grcsrv11IMovieMakerEEEm", W_REC},
-    {"_ZN2nn6camera3sdk19CreateCameraContextEPNS_5gsdrv18UniqueNativeHandleE", W_CAM},
-    {"_ZN2nn6camera3sdk20DestroyCameraContextEv", W_CAM},
-    {"_ZN2nn6camera3sdk22CreateOutputBufferPoolEPNS_3gsv15UserImageHandleERKNS2_25CameraUserImagePreferenceEjNS2_16UserMemoryHandleE", W_CAM},
-    {"_ZN2nn6camera3sdk22CreateOutputBufferPoolEPNS_3gsv15UserImageHandleERKNS2_7imgdesc4impl4user5ounce25CameraUserImagePreferenceEjNS2_16UserMemoryHandleE", W_CAM},
-    {"_ZN2nn6camera3sdk23CalculateImageArraySizeEPNS_3gsv10MemorySizeES4_RKNS2_25CameraUserImagePreferenceEj", W_CAM},
-    {"_ZN2nn6camera3sdk23CalculateImageArraySizeEPNS_3gsv10MemorySizeES4_RKNS2_7imgdesc4impl4user5ounce25CameraUserImagePreferenceEj", W_CAM},
-    {"_ZN2nn6camera3sdk23DestroyOutputBufferPoolENS_3gsv15UserImageHandleE", W_CAM},
-    {"_ZN2nn6camera3sdk27CreateAliasOutputBufferPoolENS_3gsv15UserImageHandleEj", W_CAM},
-    {"_ZN2nn6camera3sdk28DestroyAliasOutputBufferPoolENS_3gsv15UserImageHandleE", W_CAM},
-    {"_ZN2nn4chat10InitializeEv", W_CHAT},
-    {"_ZN2nn4chat30InitializeWithoutVirtualCameraEv", W_CHAT},
+    // nn::camera::sdk 和 nn::chat 的其他接口保留红桩（游戏导入了但不在玩家日志的 8 个里）
     {"_ZN2nn4chat3gsv10InitializeEv", W_CHAT},
     {"_ZN2nn4chat3gsv16DestroyImagePoolEPNS1_13ImagePoolTypeE", W_CHAT},
     {"_ZN2nn4chat3gsv29CalculateRequiredBufferMemoryEPmS2_RKNS1_15ImagePreferenceEm", W_CHAT},
@@ -233,6 +223,64 @@ static const struct { const char *n; const char *why; } g_ns2_red[] = {
     {"_ZN2nn3gsv4shim21CalculateRequirementsEPmS2_RKNS1_30InterModuleUserImagePreferenceEj", W_GSV},
     {"_ZN2nn3gsv4shim6detail33InitializeInterModuleImageContextEv", W_GSV},
 };
+// ---------- nn::chat / nn::camera::sdk「服务不可用」实现 ----------
+// Initialize 类：成功返回；查询 / 创建类：返回「不可用」结果（尺寸 0、句柄无效）；Destroy 类：空操作。真实返回类型无公开文档（void 或 nn::Result），一律回 0
+static uint64_t chat_init(void) {
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::chat::Initialize：宿主没有 GameChat，成功返回让游戏走「无 GameChat」分支");
+    return 0;
+}
+static uint64_t chat_init_novirt(void) {
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::chat::InitializeWithoutVirtualCamera：宿主没有 GameChat，成功返回");
+    return 0;
+}
+static uint64_t cam_calc_size(void *out_size, void *out_align, const void *pref, uint32_t count) {
+    (void)pref; (void)count;
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::CalculateImageArraySize：宿主没有摄像头，输出参数写 0");
+    if (out_size) memset(out_size, 0, 8);
+    if (out_align) memset(out_align, 0, 8);
+    return 0;
+}
+static uint64_t cam_create_pool(void *out_handle, const void *pref, uint32_t count, void *mem_handle) {
+    (void)pref; (void)count; (void)mem_handle;
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::CreateOutputBufferPool：宿主没有摄像头，输出参数写 0（无效句柄）");
+    if (out_handle) memset(out_handle, 0, 2);
+    return 0;
+}
+static uint64_t cam_destroy_pool(uint16_t handle) {
+    (void)handle;
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::DestroyOutputBufferPool：宿主没有摄像头，空操作");
+    return 0;
+}
+static uint64_t cam_create_alias(void *out_handle, uint16_t source, uint32_t count) {
+    (void)source; (void)count;
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::CreateAliasOutputBufferPool：宿主没有摄像头，输出参数写 0");
+    if (out_handle) memset(out_handle, 0, 2);
+    return 0;
+}
+static uint64_t cam_destroy_alias(uint16_t handle) {
+    (void)handle;
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::DestroyAliasOutputBufferPool：宿主没有摄像头，空操作");
+    return 0;
+}
+static uint64_t cam_create_ctx(void **out_handle) {
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::CreateCameraContext：宿主没有摄像头，输出参数写 NULL");
+    if (out_handle) *out_handle = NULL;
+    return 0;
+}
+static uint64_t cam_destroy_ctx(void) {
+    static _Atomic int said;
+    if (!atomic_exchange(&said, 1)) LOG("nn::camera::sdk::DestroyCameraContext：宿主没有摄像头，空操作");
+    return 0;
+}
+
 void *s2a_nv_entry(const char *name) {
     if (!name || !nvn2_on()) return NULL;
     static const struct { const char *n; void *f; } t[] = {
@@ -259,6 +307,18 @@ void *s2a_nv_entry(const char *name) {
         {"_ZN2nn10streamplay21GetNativeWindowHandleENS0_7GuestIdE", (void *)nv_stpl_window},
     };
     for (unsigned i = 0; i < sizeof t / sizeof *t; i++) if (!strcmp(name, t[i].n)) return t[i].f;
+    // nn::chat / nn::camera::sdk「服务不可用」实现：chat Initialize 让游戏走无 GameChat 分支，其余接口返回「不可用」
+    if (!strcmp(name, "_ZN2nn4chat10InitializeEv")) return (void *)chat_init;
+    if (!strcmp(name, "_ZN2nn4chat30InitializeWithoutVirtualCameraEv")) return (void *)chat_init_novirt;
+    if (!strcmp(name, "_ZN2nn6camera3sdk23CalculateImageArraySizeEPNS_3gsv10MemorySizeES4_RKNS2_25CameraUserImagePreferenceEj")) return (void *)cam_calc_size;
+    if (!strcmp(name, "_ZN2nn6camera3sdk23CalculateImageArraySizeEPNS_3gsv10MemorySizeES4_RKNS2_7imgdesc4impl4user5ounce25CameraUserImagePreferenceEj")) return (void *)cam_calc_size;
+    if (!strcmp(name, "_ZN2nn6camera3sdk22CreateOutputBufferPoolEPNS_3gsv15UserImageHandleERKNS2_25CameraUserImagePreferenceEjNS2_16UserMemoryHandleE")) return (void *)cam_create_pool;
+    if (!strcmp(name, "_ZN2nn6camera3sdk22CreateOutputBufferPoolEPNS_3gsv15UserImageHandleERKNS2_7imgdesc4impl4user5ounce25CameraUserImagePreferenceEjNS2_16UserMemoryHandleE")) return (void *)cam_create_pool;
+    if (!strcmp(name, "_ZN2nn6camera3sdk23DestroyOutputBufferPoolENS_3gsv15UserImageHandleE")) return (void *)cam_destroy_pool;
+    if (!strcmp(name, "_ZN2nn6camera3sdk27CreateAliasOutputBufferPoolENS_3gsv15UserImageHandleEj")) return (void *)cam_create_alias;
+    if (!strcmp(name, "_ZN2nn6camera3sdk28DestroyAliasOutputBufferPoolENS_3gsv15UserImageHandleE")) return (void *)cam_destroy_alias;
+    if (!strcmp(name, "_ZN2nn6camera3sdk19CreateCameraContextEPNS_5gsdrv18UniqueNativeHandleE")) return (void *)cam_create_ctx;
+    if (!strcmp(name, "_ZN2nn6camera3sdk20DestroyCameraContextEv")) return (void *)cam_destroy_ctx;
     for (unsigned i = 0; i < sizeof g_ns2_red / sizeof *g_ns2_red; i++) if (!strcmp(name, g_ns2_red[i].n)) return nvn2_red(name, g_ns2_red[i].why);
     // streamplay 其余走服务层（stpl:u）、gsv 其余（IsInitialized / GetUserSession…）无会话时 sdk 如实回空：照原路径
     if (!strncmp(name, "_ZN2nv", 6)) LOG("【红】直连：Switch 2 游戏导入 %s，宿主没接管：照原路径进 sdk（会启动游戏自带的 NVN2 驱动）", name);

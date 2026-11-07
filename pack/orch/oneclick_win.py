@@ -25,6 +25,8 @@
 """
 import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from pack.orch import shortroot   # noqa: E402
 
 R = Path(__file__).resolve().parents[2]
 PY = sys.executable
@@ -174,10 +176,11 @@ class Run:
         self.evf = open(events, 'w', encoding='utf-8', newline='\n') if events else None; self.k = 0
 
     def ev(self, kind, **kw):   # 事件流一行（--events，见文件头）；没给就不写
+        kw = {k: shortroot.show(v) if isinstance(v, str) else v for k, v in kw.items()}   # 事件给界面：玩家只看到自己选的路径
         if self.evf: self.evf.write(json.dumps({'ev': kind, 't': int(time.time()), **kw}, ensure_ascii=False) + '\n'); self.evf.flush()
 
     def say(self, msg):
-        print(msg, flush=True); self.ev('say', msg=msg)
+        msg = shortroot.show(msg); print(msg, flush=True); self.ev('say', msg=msg)
 
     def step(self, name, fn):
         t = time.time(); rc = 0; self.k += 1; self.ev('stage', k=self.k, n=None, name=name)
@@ -457,7 +460,9 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
 
 
 def junction(dst, src):
-    if WIN: subprocess.run(['cmd', '/c', 'mklink', '/J', str(dst), str(src)], check=True, stdout=subprocess.DEVNULL)
+    if WIN:   # 目标写真实长路径：短根是工作期的入口，产物里的联接要在它之外也有效；CreateJunction 不受 cmd 的长度限制
+        import _winapi
+        _winapi.CreateJunction(shortroot.to_long(src, shortroot.table_now()), str(dst))
     else: os.symlink(src, dst)
 
 
@@ -557,12 +562,19 @@ def share_walk_dir(out):
     os.environ.setdefault('S2A_ROMFS_WALK', str(Path(out).resolve() / '.romfs-walk'))
 
 
+TEMP_MAX = 200   # TMP / TEMP 的上限：超过 MAX_PATH 时 CreateProcess 的兼容性查询（BasepQueryAppCompat）在 GetTempPath 上无限循环，子进程永远起不来
+
+
 def work_temp(out):
     """临时文件跟工作目录走（11-06 维护者：Windows 出包机 C 盘被编库临时文件写满，时之笛出库两次失败；玩家机 C 盘常常很小）：
     本进程与全部子进程（C# 编库 Path.GetTempPath、Python tempfile、dotnet、bash）的 TMP / TEMP / TMPDIR 指到 <工作目录>/tmp，
     不再落系统盘的用户 Temp。在 main 起步时设一次，之后起的子进程都继承；S2A_KEEP_SYSTEM_TEMP=1 时保持原样（排查用）"""
     if os.environ.get('S2A_KEEP_SYSTEM_TEMP') == '1': return None
-    t = Path(out).resolve() / 'tmp'; t.mkdir(parents=True, exist_ok=True)
+    t = Path(out).resolve() / 'tmp'   # out 已是短入口下的路径：实际落在玩家选的目录
+    if WIN and len(str(t)) > TEMP_MAX:   # 只有建不了短入口才会走到这里：TEMP 不能超长，退回系统 Temp
+        print('【黄】工作目录路径太长且建不了短路径入口，临时文件用系统 Temp', file=sys.stderr)
+        return None
+    t.mkdir(parents=True, exist_ok=True)
     for k in ('TMP', 'TEMP', 'TMPDIR'): os.environ[k] = str(t)
     tempfile.tempdir = None   # tempfile 缓存过系统 Temp 的话重新按环境变量取
     return t
@@ -585,6 +597,11 @@ def main(argv=None):
         for n, ok, why, *_ in items: print(f'{"✅" if ok else "❌"} {n}：{why}')
         return 75 if bad else 0
     if not (a.source or a.from_extract) or not a.out: ap.error('要 <原件>（或 --from-extract <解包目录>）与 --out')
+    if WIN:   # 工作区走短根：之后的路径（工具参数、bash、dotnet、TEMP）都短；深路径的玩家数据目录不再踩 MAX_PATH
+        mapped = shortroot.enter(a.out, *([a.from_extract] if a.from_extract else []))
+        if mapped:
+            a.out = mapped[os.path.abspath(a.out)]
+            if a.from_extract: a.from_extract = mapped[os.path.abspath(a.from_extract)]
     run = Run(a.out, a.events); t0 = time.time(); cur = None
     work_temp(run.out)
     share_walk_dir(a.out)

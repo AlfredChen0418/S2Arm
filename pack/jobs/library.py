@@ -4,7 +4,9 @@ Storage/interaction helpers adapted from LumaDock under MIT.
 """
 from __future__ import annotations
 import collections
+import contextlib
 import errno
+import filelock
 import hashlib
 import json
 import os
@@ -21,6 +23,7 @@ import zipfile
 from core import Failure, atomic, contained, digest, prune_jobs, read
 import toolchain
 import winproc
+import filelock
 
 DIAGNOSTIC_LOG_EDGE = 16000          # 长日志保留的开头、结尾字节数
 DIAGNOSTIC_LOG_BEATS = 64000         # 中间心跳行最多保留这么多字节（10 秒一行，约一小时）
@@ -277,7 +280,7 @@ def _win_volume_format(path):
         import ctypes
         k32 = ctypes.windll.kernel32
         root = ctypes.create_unicode_buffer(1024)
-        if not k32.GetVolumePathNameW(ctypes.c_wchar_p(path), root, 1024):
+        if not k32.GetVolumePathNameW(ctypes.c_wchar_p(winproc.win_path(path)), root, 1024):
             return ""
         fs = ctypes.create_unicode_buffer(64)
         if not k32.GetVolumeInformationW(root, None, 0, None, None, None, fs, 64):
@@ -310,7 +313,205 @@ def require_local(path):
         raise Failure(libloc.CLOUD_MESSAGE.format(cloud=cloud), code="library_in_cloud")
 
 
+MOVE_SKIP = {".DS_Store", ".catalog.lock", ".execution.lock", ".s2arm-moving"}   # 锁文件要留到搬完；.DS_Store 系统会再生成
+
+
+def _looks_like_library(root):
+    """没有 marker 但装着 S2Arm 旧产物的文件夹：玩家手工拷过来的，或标识丢了的旧游戏库"""
+    phones = root / "iPhone"
+    return (root / "catalog.json").is_file() or (phones.is_dir() and any(_is_game_dir(p) for p in phones.iterdir()))
+
+
+def _is_game_dir(p):
+    return p.is_dir() and re.fullmatch(r"[0-9A-Fa-f]{16}", p.name) is not None
+
+
+def _adopt_catalog(root):
+    """认领旧产物：catalog.json 能读就用；否则按 iPhone/<游戏号> 和 games/<游戏号> 重建。名字先用游戏号，玩家可以改"""
+    existing = read(root / "catalog.json", None)
+    if isinstance(existing, dict) and isinstance(existing.get("games"), list):
+        return existing
+    ids = sorted({p.name.upper() for sub in ("iPhone", "games") if (root / sub).is_dir() for p in (root / sub).iterdir() if _is_game_dir(p)})
+    return dict(schema=1, games=[dict(id=i, name=i, display="", packages=[], hidden=False) for i in ids])
+
+
+def _same_volume(a, b):
+    return os.stat(a).st_dev == os.stat(b).st_dev
+
+
+def _size_of(path):
+    if path.is_symlink() or path.is_file():
+        return path.lstat().st_size
+    return sum((Path(d) / f).lstat().st_size for d, _, files in os.walk(path) for f in files)
+
+
+def _sha256(path):
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _files_under(root):
+    if root.is_symlink() or root.is_file():
+        return [Path(".")]
+    return [(Path(d) / f).relative_to(root) for d, dirs, files in os.walk(root) for f in files + [x for x in dirs if (Path(d) / x).is_symlink()]]
+
+
+def _verify_copy(src, dst, strict):
+    """拷完逐个对文件数和大小；存档和清单（strict）再对内容，大文件只对大小，免得搬家多花一倍时间"""
+    for rel in _files_under(src):
+        a, b = src / rel, dst / rel
+        if not (b.exists() or b.is_symlink()) or a.lstat().st_size != b.lstat().st_size and not a.is_symlink():
+            raise Failure(f"拷到新位置后校验不一致：{rel}", code="library_move_failed")
+        if strict and a.is_file() and not a.is_symlink() and _sha256(a) != _sha256(b):
+            raise Failure(f"拷到新位置后校验不一致：{rel}", code="library_move_failed")
+
+
+def _retarget_links(root, old, new):
+    """目录搬走后，指向旧位置的绝对链接（Windows 的 junction）改指新位置"""
+    if not root.is_dir():
+        return
+    from_text, to_text = os.path.normcase(str(old)), str(new)
+    for d, dirs, files in os.walk(root):
+        for name in dirs + files:
+            p = Path(d) / name
+            if not _is_link(p):
+                continue
+            target = os.readlink(p).removeprefix("\\\\?\\")
+            if not os.path.isabs(target) or not os.path.normcase(target).startswith(from_text):
+                continue
+            fresh = to_text + target[len(from_text):]
+            junction = getattr(os.path, "isjunction", lambda _: False)(p)
+            _unlink_link(p)
+            if junction:
+                subprocess.run(["cmd", "/c", "mklink", "/J", str(p), fresh], check=True, capture_output=True)
+            else:
+                os.symlink(fresh, p)
+
+
+def _unlink_link(p):
+    if getattr(os.path, "isjunction", lambda _: False)(p):
+        os.rmdir(p)
+    else:
+        p.unlink()
+
+
+def _work_root_of(c, library):
+    return c.private if library.is_relative_to(c.private) else library / ".s2arm-work"
+
+
+def _move_pairs(c, source):
+    """要搬的 (旧, 新)：游戏库里的每一项，加上放在库外的工作目录（缺省游戏库在私有目录里时，着色器缓存在私有目录的 cache / run 下）。marker 排最后：有它才算搬完"""
+    old_work, new_work = _work_root_of(c, source), _work_root_of(c, c.library)
+    to_private = new_work == c.private and old_work != c.private   # 工作目录要回到私有目录：按子目录搬，别盖掉已有的；随库走的情况整个目录当普通项搬
+    pairs = [(p, c.library / p.name) for p in sorted(source.iterdir(), key=lambda x: x.name == ".s2arm-library.json")
+             if p.name not in MOVE_SKIP and not (to_private and p.name == ".s2arm-work")]
+    if old_work == c.private and new_work != c.private or to_private:
+        pairs[:0] = [(old_work / n, new_work / n) for n in ("cache", "run") if (old_work / n).exists() and not (new_work / n).exists()]
+    return pairs
+
+
+@contextlib.contextmanager
+def _source_locked(source):
+    """搬家期间旧游戏库不能有任务在跑"""
+    handles = []
+    try:
+        for name in (".execution.lock", ".catalog.lock"):
+            f = (source / name).open("a")
+            handles.append(f)
+            try:
+                filelock.try_lock(f)
+            except BlockingIOError:
+                raise Failure("旧游戏库还有任务在跑，等它结束再搬。", code="library_move_failed") from None
+        yield
+    finally:
+        for f in handles:
+            f.close()
+
+
+def move_library(c, source):
+    """把现有游戏库搬到 c.library（空文件夹）：同盘改名、跨盘拷完校验再换，任何一步失败都回到搬之前。旧位置的内容在新位置就位之后才删"""
+    source = Path(source).resolve()
+    info = read(source / ".s2arm-library.json", None)
+    if not isinstance(info, dict) or not info.get("id"):
+        raise Failure("原来的位置不是可搬的游戏库。", code="library_move_failed")
+    if c.library == source or c.library.is_relative_to(source) or source.is_relative_to(c.library):
+        raise Failure("新位置不能在原来的游戏库里面，也不能包含它。", code="library_move_failed")
+    with _source_locked(source):
+        pairs = _move_pairs(c, source)
+        c.library.mkdir(parents=True, exist_ok=True)
+        cross = [(a, b) for a, b in pairs if not _same_volume(a, c.library)]
+        need = sum(_size_of(a) for a, _ in cross)
+        if need and shutil.disk_usage(c.library).free < need:
+            raise Failure("新位置空间不够，游戏库没有搬。", code="disk_full")
+        stage = c.library / ".s2arm-moving"
+        done, staged = [], {}
+        try:
+            total, copied = max(need, 1), 0
+            if cross:
+                c.begin("把游戏库拷到新位置")
+            for n, (a, b) in enumerate(cross):
+                c.check()
+                target = stage / str(n)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if a.is_dir() and not a.is_symlink():
+                    shutil.copytree(a, target, symlinks=True)
+                else:
+                    shutil.copy2(a, target, follow_symlinks=False)
+                _verify_copy(a, target, strict=a.name in ("saves", "catalog.json", ".s2arm-library.json"))
+                copied += _size_of(a)
+                c.progress(copied, total)
+            c.begin("把游戏库放到新位置")
+            staged = {a: stage / str(n) for n, (a, _) in enumerate(cross)}
+            for a, b in pairs:
+                b.parent.mkdir(parents=True, exist_ok=True)
+                os.rename(staged.get(a, a), b)
+                done.append((a, b))
+            for root in (c.library, _work_root_of(c, c.library)):
+                _retarget_links(root, source, c.library)
+        except BaseException:
+            if done:
+                _retarget_links(c.library, c.library, source)
+            for a, b in reversed(done):
+                if a in staged:
+                    _discard(b)
+                else:
+                    os.rename(b, a)
+            _discard(stage)
+            with contextlib.suppress(OSError):
+                (c.library / ".s2arm-work").rmdir()   # 回滚后别留下搬的时候建的空目录
+            raise
+        _discard(stage)
+        for a, _ in cross:
+            try:
+                _discard(a)
+            except OSError as error:
+                c.diagnostic("游戏库已经搬好，旧位置有文件没删掉，可以手动删除：" + c.redact(str(error)), code="job_failed", severity="warning")
+    for name in (".execution.lock", ".catalog.lock", ".DS_Store"):
+        (source / name).unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        _discard(source / ".s2arm-work")   # 工作目录回私有目录后剩的，都是能重新生成的
+    with contextlib.suppress(OSError):
+        source.rmdir()
+    return info
+
+
+def _discard(p):
+    if p.is_symlink() or p.is_file():
+        p.unlink(missing_ok=True)
+    elif p.exists():
+        for d, dirs, files in os.walk(p):
+            os.chmod(d, 0o755)
+            for f in files:
+                with contextlib.suppress(OSError):
+                    os.chmod(Path(d) / f, 0o644)
+        shutil.rmtree(p)
+
+
 def setup(c):
+    """选游戏库：已有游戏库直接打开；装着旧产物的文件夹认领下来；空文件夹按 moveFrom 把现有游戏库搬过来，没给就新建"""
     c.begin("创建游戏库")
     if c.library == Path(c.library.anchor) or c.library == Path.home() or c.library == c.engine:
         raise Failure("请选择独立的游戏库文件夹。")
@@ -322,13 +523,22 @@ def setup(c):
         info = read(marker)
         if info.get("schema") != 1 or not info.get("id"):
             raise Failure("游戏库标识不完整。")
-    else:
-        if any(p.name != ".DS_Store" for p in c.library.iterdir()):
-            raise Failure("首次设置请选择空文件夹，已有文件保持原样。")
+        return dict(library=str(c.library), libraryId=info["id"], outcome="opened")
+    if any(p.name != ".DS_Store" for p in c.library.iterdir()):
+        if not _looks_like_library(c.library):
+            raise Failure("这个文件夹里已有别的文件：请选空文件夹，或者已有的 S2Arm 游戏库。文件都没动。")
         info = dict(schema=1, id=str(uuid.uuid4()))
+        atomic(c.library / "catalog.json", _adopt_catalog(c.library))
         atomic(marker, info)
-        atomic(c.library / "catalog.json", dict(schema=1, games=[]))
-    return dict(library=str(c.library), libraryId=info["id"])
+        return dict(library=str(c.library), libraryId=info["id"], outcome="adopted")
+    source = c.r.get("moveFrom")
+    if source:
+        info = move_library(c, source)
+        return dict(library=str(c.library), libraryId=info["id"], outcome="moved")
+    info = dict(schema=1, id=str(uuid.uuid4()))
+    atomic(c.library / "catalog.json", dict(schema=1, games=[]))
+    atomic(marker, info)
+    return dict(library=str(c.library), libraryId=info["id"], outcome="created")
 
 
 def validate_keys(path):
@@ -373,7 +583,7 @@ def keys(c):
                     try:
                         inspect(c, candidate, icons, keyfile=temporary)
                     except Failure as error:
-                        if error.code != "content_truncated":
+                        if error.code not in KEYS_UNVERIFIABLE:   # 源文件自身的毛病只说明这次验不了，不是密钥坏（#242）
                             raise
                         del c.job["diagnostics"][diagnostics_before:]
                     else:
@@ -386,6 +596,8 @@ def keys(c):
     return dict(entries=count, verified=verified, message="已验证解密能力" if verified else "格式通过，首次读取游戏时验证解密能力")
 
 
+# 候选游戏文件自身有毛病（截断、缺票据）：密钥验不了，但不能据此判密钥无效；导入照常、记 verified=false，源文件错误留到读那款游戏时报
+KEYS_UNVERIFIABLE = ("content_truncated", "ticket_missing")
 KEYS_CANNOT_DECRYPT = ("无法读取游戏内容：可能是文件不完整、缺票据或密钥不匹配。请核对原始文件；"
                        "若已确认 Switch 密钥版本不足，再重新导出，到「设置 → 玩家密钥」重新导入。")
 
@@ -889,6 +1101,7 @@ def catalog(c):
     from build import validate_runtime
     import toolchain
     c.begin("读取游戏库")
+    sweep_residue(c)
     cat = c.catalog()
     input_supported, input_reason = toolchain.input_interface(c)
     for game in cat["games"]:
@@ -897,7 +1110,7 @@ def catalog(c):
         game["compatibility"] = "unsupported" if guest_isa(selected_packages(game)) == "aarch32" else "experimental"
         current = c.library / "games" / game["id"] / "current"
         try:
-            manifest = validate_runtime(c, current, full=False)
+            manifest = validate_runtime(c, current, full=False, files=False)
             game["ready"] = manifest.get("memoryRequirementsVersion") == 2
         except (Failure, OSError, ValueError):
             manifest = {}
@@ -1092,20 +1305,147 @@ def _windows_layout():   # 单测可打桩：Windows 的产物根在 work/ 下�
     return os.name == "nt"
 
 
-def prune_build(c, gid, *, retain_compiler=True):
-    """成功后清本款中间产物，保留共享编库缓存；显式清缓存用 retain_compiler=False。失败不调用。
-    自动清理保留产物根里的现行版本（roots/*@现行 及其指向，11-02 多平台共用阶段：接着导 Mac 时克隆它起步、平台无关阶段按键跳过；
-    再导 iPhone 也从它增量刷新），只清旧版本——与 Mac 构建缓存「保留现行」一致；显式清缓存照旧整个删。
-    成功后的自动清理（retain_compiler=True，只在打 iPhone 包成功后调）先记一行出包实测（record_pack_usage）：要量清之前的整套占用"""
-    if retain_compiler:
+CONTAINER_KIT = "container-kit"   # iPhone/<游戏号>/container-kit：装机组装容器要用的文件，出包成功后从产物根存一份独立副本
+SHELL_STAMP_NAME = "shell.id"
+
+
+def save_container_kit(c, gid, root):
+    """把组装容器要读的文件（ship_ext.place_game / display_name / 随包表：顶层普通文件、ctl/control.nacp、programs/<n>/）存成不依赖产物根的副本。
+    root 里的链接按内容拷，之后删产物根、RomFS 存储、Windows 的 work/ 都不影响装机、续签和单壳追加。没有 main.npdm 返回 None，不动旧的。"""
+    root = Path(root)
+    if not (root / "main.npdm").is_file():
+        return None
+    out = c.library / "iPhone" / gid
+    kit, temporary = out / CONTAINER_KIT, out / (CONTAINER_KIT + ".partial")
+    if temporary.exists():
+        _rm(c, c.library, temporary)
+    def copy_files(source, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        for p in source.iterdir():
+            if p.is_file() and not p.name.startswith(".") and p.suffix != ".log":
+                shutil.copyfile(p, dest / p.name)
+    copy_files(root, temporary)
+    if (root / "ctl/control.nacp").is_file():
+        (temporary / "ctl").mkdir()
+        shutil.copyfile(root / "ctl/control.nacp", temporary / "ctl/control.nacp")
+    programs = root / "programs"
+    if programs.is_dir():
+        for p in sorted(programs.iterdir()):
+            if p.is_dir() and (p / "main.npdm").is_file():
+                copy_files(p, temporary / "programs" / p.name)
+    if kit.exists():
+        _rm(c, c.library, kit)
+    os.replace(temporary, kit)
+    return kit
+
+
+@contextlib.contextmanager
+def _execution_idle(c):
+    """拿得到出包执行锁才进去（有任务在跑时 yield False）。不走 c.lock：那里先查取消，被取消的任务也要能收尾。"""
+    with (c.library / ".execution.lock").open("a") as f:
+        try:
+            filelock.try_lock(f)
+        except BlockingIOError:
+            yield False
+            return
+        try:
+            yield True
+        finally:
+            filelock.unlock(f)
+
+
+def _residue_disposable(c, gid):
+    """解包和中间产物能不能删：有容器件，或这款没有已出好的 IPA。老玩家有 IPA 没容器件时，现行产物根是装机的唯一来源，留给「旧版残留」项先存容器件再删。"""
+    out = c.library / "iPhone" / gid
+    return (out / CONTAINER_KIT / "main.npdm").is_file() or not (out.is_dir() and any(p.is_file() and p.suffix == ".ipa" for p in out.iterdir()))
+
+
+def _keep_stage_logs(c, gid):
+    """产物根里的阶段日志要跟着删：先拷进私有日志目录，失败后的诊断包还能带上（只拷文件，单份 8 MB 以内，最多 64 份）。"""
+    roots = [*(c.library / "iPhone" / gid).glob("roots/*@现行"), *(c.library / "iPhone" / gid).glob("work/pkg/product"), *(c.library / "cache" / gid).glob("*/roots/*@现行"),
+             # 阶段失败时各阶段把自己的日志拷进产物根旁的 .failed/（如改写 pack/stage_rewrite.sh 的 <款>_<模块>.log）：玩家报出包超时 / 改写失败时要的就是它（#251 诊断包里没有）
+             *(c.library / "iPhone" / gid).glob("roots/.failed"), *(c.library / "cache" / gid).glob("*/roots/.failed")]
+    dest = c.private / "logs" / (c.task + "-stages")
+    count = 0
+    for root in roots:
+        for log in sorted(root.glob("*.log")):
+            if count >= 64 or not log.is_file() or log.stat().st_size > 8 << 20:
+                continue
+            dest.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(log, dest / log.name)
+            count += 1
+
+
+def clean_after_stop(c):
+    """出包失败或被取消后清解包和中间产物，在错误摘要生成之后调。已完成的着色器缓存、之前成功的 IPA、资源包、容器件、Mac 运行版本和存档都不动；这里出错不改变任务结果，下次空闲时再扫。"""
+    try:
+        gid = c.r.get("gameId")
+        if not any(g.get("id") == gid for g in read(c.library / "catalog.json", {}).get("games", [])):
+            return   # 这次失败可能正因为游戏不在库里，没有东西要清，也不该多报一条
+        with _execution_idle(c) as idle:
+            if idle and _residue_disposable(c, gid):
+                _keep_stage_logs(c, gid)
+                prune_build(c, gid, record=False)
+    except (Failure, OSError, ValueError) as error:
+        c.diagnostic("清理中间产物没有完成，下次空闲时会再清：" + c.redact(str(error)), code="job_failed", severity="warning")
+
+
+def _residue(c):
+    """崩溃、断电、进程被杀留下的解包和中间产物 → [(游戏号, 有可删的中间产物, [半成品运行版本…])]，只列有东西的款。只读，不拿锁"""
+    found = []
+    for game in c.catalog()["games"]:
+        gid = game["id"]
+        out = c.library / "iPhone" / gid
+        stale = (c.library / "cache" / gid).exists() or (out.is_dir() and any(p.name not in (CONTAINER_KIT, SHELL_STAMP_NAME, "logs") and p.suffix != ".ipa" and not p.name.endswith("资源包") for p in out.iterdir()))
+        stale = stale and _residue_disposable(c, gid)
+        partials = list((c.library / "games" / gid / "releases").glob("*.partial"))
+        if stale or partials:
+            found.append((gid, stale, partials))
+    return found
+
+
+def sweep_residue(c):
+    """启动器空闲时扫掉崩溃、断电、进程被杀留下的解包和中间产物；有出包在跑时不动。
+    先不拿锁扫一遍，真有残留才拿执行锁、锁内再扫一遍再删：catalog 每次读游戏库都调它，扫描期间占着执行锁的话，
+    紧接着开始的任务（起局、存档、出包）拿不到锁当场报「另一个任务正在使用游戏库」（11-09 main 守望红：SaveManagementTests 备份完刷新游戏库、查看存档撞锁）"""
+    try:
+        if not _residue(c):
+            return
+        with _execution_idle(c) as idle:
+            if not idle:
+                return
+            for gid, stale, partials in _residue(c):
+                if stale:
+                    prune_build(c, gid, record=False)
+                for partial in partials:
+                    _rm(c, c.library, partial)
+    except (Failure, OSError, ValueError):
+        pass   # 清不掉不影响读游戏库，下次再扫
+
+
+def prune_build(c, gid, *, retain_compiler=True, record=True):
+    """出包结束后清本款解包和中间产物，保留共享编库缓存；显式清缓存用 retain_compiler=False。
+    自动清理只留 IPA、资源包、日志、容器件和 shell.id；老玩家有 IPA 没容器件时保持旧行为，留现行产物根，免得装机报 container_stale。
+    出包成功后的清理先记一行出包实测（record_pack_usage）：要量清之前的整套占用"""
+    if retain_compiler and record:
         game = next((g for g in read(c.library / "catalog.json", {}).get("games", []) if g.get("id") == gid), None)
         if game:
             record_pack_usage(c, game)
     out = c.library / "iPhone" / gid
     n = 0
+    kit_ready = _residue_disposable(c, gid)
+    if retain_compiler and kit_ready:
+        unpacked = c.library / "cache" / gid
+        if unpacked.exists():
+            _rm(c, c.library, unpacked); n += 1
     if out.is_dir():
         for p in out.iterdir():
             if p.name == "logs" or p.name.endswith("资源包") or (p.is_file() and p.suffix == ".ipa"):
+                continue
+            if retain_compiler and p.name in (CONTAINER_KIT, SHELL_STAMP_NAME):
+                continue
+            if retain_compiler and kit_ready:
+                _rm(c, c.library, p); n += 1
                 continue
             if p.name == "roots" and retain_compiler and p.is_dir() and not _is_link(p):
                 n += _prune_roots(c, p)
@@ -1136,6 +1476,21 @@ def prune_build(c, gid, *, retain_compiler=True):
     return n
 
 
+def drop_from_container(c, gid):
+    """游戏库里删了的款也从游戏库侧的容器（iPhone/container/S2Arm.app，下次装机的底子）摘掉，不装机（#227：原先容器清单留着它，
+    下次装别的游戏把它原样带回来，升级换壳后又因为没有本壳产物挡住出包 container_stale）。手机上的 App 下次装机时随覆盖装去掉它"""
+    import ipa as packer
+    from install import CONTAINER_DIR
+    cat = c.library / "iPhone" / CONTAINER_DIR / "S2Arm.app/s2a_catalogue.json"
+    try:
+        listed = any(e.get("title_id") == gid for e in json.loads(cat.read_text(encoding="utf-8")).get("games", []))
+    except (OSError, ValueError):
+        return
+    if listed:
+        with packer.dropped(c, gid) as (ipa, _):
+            packer.commit_drop(c, ipa)
+
+
 def delete(c):
     """删除这款游戏（连出包产物与缓存）：iPhone 输出整个目录（IPA / 资源包 / 中间产物）、Mac 构建缓存、game_caches，并从游戏库清单里删掉；
     保留存档（library/saves/<程序号>）与游戏原件（原地导入的不碰；旧版复制进 library/sources 的托管副本另有「删除托管 NSP 副本」）。
@@ -1151,6 +1506,7 @@ def delete(c):
                         _rm(c, c.library, p)
                 for p in game_caches(c, gid):
                     _rm(c, c.work_root, p)
+                drop_from_container(c, gid)
                 cat = c.catalog()
                 cat["games"] = [g for g in cat["games"] if g["id"] != gid]
                 atomic(c.library / "catalog.json", cat)
@@ -1196,8 +1552,7 @@ def clean(c):
 # 每款按部件列出占用，玩家勾选后删除。只列「下次出包会重建」的部件和已出好的包；存档、日志、配置、清单、游戏原件只报大小、不给删。
 #   直接删，不放废纸篓（废纸篓仍占同一块盘）。有任务在跑（执行锁拿不到）拒绝，不等。
 SPACE_PARTS = (
-    ("unpack", "解包与构建缓存", "下次出包会重新解包（多花几分钟）"),
-    ("intermediate", "出包中间产物", "下次出包会重新生成（多花几分钟到几十分钟）"),
+    ("legacy", "旧版残留", "旧版本留下的解包和中间文件，出包成功后不再保留；删了不影响已出好的包和 Mac 版本"),
     ("shaders", "着色器与出包缓存", "下次出包会重新翻译着色器（大游戏要多花较长时间）"),
     ("mac", "Mac 运行版本", "下次在 Mac 上玩之前会重新准备"),
     ("ipa", "已出好的 iPhone 包", "删了要重新出包才能再装到 iPhone；已装好的游戏不受影响"),
@@ -1206,7 +1561,7 @@ SPACE_KEPT = ("saves", "logs")
 
 
 def _ipa_outputs(out):
-    return [p for p in out.iterdir() if (p.is_file() and p.suffix == ".ipa") or p.name.endswith("资源包")] if out.is_dir() else []
+    return [p for p in out.iterdir() if (p.is_file() and p.suffix == ".ipa") or p.name.endswith("资源包") or p.name in (CONTAINER_KIT, SHELL_STAMP_NAME)] if out.is_dir() else []
 
 
 def space_parts(c, gid):
@@ -1216,8 +1571,7 @@ def space_parts(c, gid):
     ipa = _ipa_outputs(out)
     inter = [p for p in out.iterdir() if p.name != "logs" and p not in ipa] if out.is_dir() else []
     parts = {
-        "unpack": [c.library / "cache" / gid],
-        "intermediate": inter,
+        "legacy": [c.library / "cache" / gid, *inter],
         "shaders": [p for p in game_caches(c, gid) if p not in shared],
         "mac": [c.library / "games" / gid],
         "ipa": ipa,
@@ -1251,7 +1605,7 @@ def space_survey(c):
         c.check()
         parts = space_parts(c, g["id"])
         rows.append(dict(gameId=g["id"], name=game_custom(c, g["id"])["name"] or g.get("name") or g["id"],
-                         parts=[dict(id=k, title=t, rebuild=r, bytes=_part_bytes(parts[k])) for k, t, r in SPACE_PARTS],
+                         parts=[dict(id=k, title=t, rebuild=r, bytes=_part_bytes(parts[k])) for k, t, r in SPACE_PARTS if k != "legacy" or parts[k]],   # 没有旧版残留就不显示
                          kept=[dict(id=k, bytes=_part_bytes(parts[k])) for k in SPACE_KEPT]))
     return dict(games=rows)
 
@@ -1265,6 +1619,11 @@ def space_free(c):
     with c.lock("execution"), c.lock():
         gid = c.game()["id"]
         c.begin("释放空间")
+        if "legacy" in want:   # 老玩家的现行产物根是装机的唯一来源：删之前先存成容器件，否则装机会报 container_stale
+            from ipa import product_root
+            root = product_root(c, gid)
+            if root is not None and not (c.library / "iPhone" / gid / CONTAINER_KIT / "main.npdm").is_file():
+                save_container_kit(c, gid, root)
         parts = space_parts(c, gid)
         freed, done = 0, []
         for k in [k for k, _, _ in SPACE_PARTS if k in want]:
@@ -1336,6 +1695,14 @@ def save_input(c):
         target = c.private / "default-input.json"
     atomic(target, config)
     return {}
+
+
+def signing_status():
+    try:
+        from install import signing_summary
+        return signing_summary()
+    except Exception as error:
+        return {"error": type(error).__name__}
 
 
 def diagnostics(c):
@@ -1474,7 +1841,8 @@ def diagnostics(c):
                 manifest = dict(launcher_version=launcher_version(),
                                 macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},
                                 xcode_version=probe(["/usr/bin/xcodebuild", "-version"]),
-                                mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]))
+                                mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]),
+                                xcode_signing=signing_status())
                 manifest = redact_fields(manifest)
                 # These names have already been sanitized; redacting them again
                 # would hide task UUIDs and break the archive index.

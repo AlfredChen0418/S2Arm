@@ -12,7 +12,8 @@
 #   打「🔴 直连库失败：<原因>」，调用方只出通用包（10-26 运维线：空洞骑士 Unity 无类型树，原先整次出包 rc=1、连通用包都没有；10-29 神之天平 外传：运行时 GLSLC 款抽到 0 支，
 #   原先照常往下出库、到换库核验「一个键都没出」才 rc=1 整包停住；通用着色器阶段自己抽，不依赖这里）；1 = 其余（缺文件、S2Arm 抽取失败——通用也要用它）
 set -u
-ROOT=$(cd "${1:?产物根}" && pwd -P) || exit 1; X=${2:?输出目录}
+PD=-P; case "$(uname -s)" in MINGW*|MSYS*|CYGWIN*) PD=-L;; esac   # Windows 工作区走短根联接，-P 会展开回长路径
+ROOT=$(cd "${1:?产物根}" && pwd $PD) || exit 1; X=${2:?输出目录}
 R=$(cd "$(dirname "$0")/../../.." && pwd); NX=$R/graphics/nvn
 # Windows（Git Bash / MSYS）：pwd 给的是 /r/... 写法，只有命令行参数会被自动转成 R:/...，经环境变量或文件交给 Windows 原生 Python 的不会转
 #   （11-04 Windows 出包机旷野之息：shader_split 读 /r/.../exefs/main 报找不到路径）。产物根、输出目录、仓库路径统一换成 R:/... 混合写法（bash 自己也认）

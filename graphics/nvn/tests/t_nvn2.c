@@ -129,15 +129,38 @@ int main(void) {
         CHECK(dies((void *)check));   // Finalize 后 InitCheck 照 sdk 语义中止
         init(pool, sizeof pool); check();
     }
-    // ---------- R 其他命名空间里依赖 gs / gsv / 驱动启动的函数：红桩（4 款 sdk 模拟执行进了 gs Check / gsv 会话 / nv::InitCheck）；同族不依赖的照原路径 ----------
+    // ---------- R 其他命名空间里依赖 gs / gsv / 驱动启动的函数：chat / camera Initialize 成功返回，其他红桩；同族不依赖的照原路径 ----------
     {
-        void *ci = s2a_nv_entry("_ZN2nn4chat10InitializeEv"), *nr = s2a_nv_entry("NvRmChannelOpen"), *vi2 = s2a_nv_entry("_ZN2nn3vi23sdk10InitializeEv");
+        // chat / camera 的「服务不可用」实现：Initialize 成功返回，其他接口返回「不可用」
+        void (*ci)(void) = (void (*)(void))s2a_nv_entry("_ZN2nn4chat10InitializeEv");
+        void (*ci2)(void) = (void (*)(void))s2a_nv_entry("_ZN2nn4chat30InitializeWithoutVirtualCameraEv");
+        CHECK(ci && ci2 && !nvn2_red_of(ci) && !nvn2_red_of(ci2));   // 不是红桩
+        ci(); ci2();   // 成功返回，不中止
+        // camera CalculateImageArraySize：输出参数写 0
+        void (*cam_calc)(void *, void *, const void *, uint32_t) = (void (*)(void *, void *, const void *, uint32_t))s2a_nv_entry("_ZN2nn6camera3sdk23CalculateImageArraySizeEPNS_3gsv10MemorySizeES4_RKNS2_25CameraUserImagePreferenceEj");
+        CHECK(cam_calc && !nvn2_red_of(cam_calc));
+        uint64_t sz = 0x5a5a5a5a5a5a5a5aull, al = 0x5a5a5a5a5a5a5a5aull; cam_calc(&sz, &al, NULL, 1); CHECK(sz == 0 && al == 0);
+        // camera CreateOutputBufferPool：输出参数写 0（无效句柄）
+        void (*cam_pool)(void *, const void *, uint32_t, void *) = (void (*)(void *, const void *, uint32_t, void *))s2a_nv_entry("_ZN2nn6camera3sdk22CreateOutputBufferPoolEPNS_3gsv15UserImageHandleERKNS2_25CameraUserImagePreferenceEjNS2_16UserMemoryHandleE");
+        CHECK(cam_pool && !nvn2_red_of(cam_pool));
+        uint16_t h = 0x5a5a; cam_pool(&h, NULL, 0, NULL); CHECK(h == 0);
+        // camera Destroy：空操作（不中止）
+        void (*cam_del)(uint16_t) = (void (*)(uint16_t))s2a_nv_entry("_ZN2nn6camera3sdk23DestroyOutputBufferPoolENS_3gsv15UserImageHandleE");
+        CHECK(cam_del && !nvn2_red_of(cam_del)); cam_del(0);
+        // camera CreateCameraContext：输出参数写 NULL
+        void (*cam_ctx)(void **) = (void (*)(void **))s2a_nv_entry("_ZN2nn6camera3sdk19CreateCameraContextEPNS_5gsdrv18UniqueNativeHandleE");
+        CHECK(cam_ctx && !nvn2_red_of(cam_ctx));
+        void *p = (void *)0x5a5a; cam_ctx(&p); CHECK(p == NULL);
+        // 其他 chat / camera 接口仍是红桩
+        void *cg = s2a_nv_entry("_ZN2nn4chat3gsv10InitializeEv");
+        CHECK(cg && nvn2_red_of(cg) && strstr(nvn2_red_of(cg), "GameChat"));
+        // 其他红桩
+        void *nr = s2a_nv_entry("NvRmChannelOpen"), *vi2 = s2a_nv_entry("_ZN2nn3vi23sdk10InitializeEv");
         void *gb = s2a_nv_entry("_ZN2nn3gsv4shim6detail33InitializeInterModuleImageContextEv"), *mm = s2a_nv_entry("_ZN2nn5album28InitializeMovieMakerInternalEONS_2sf13SharedPointerINS_6grcsrv11IMovieMakerEEEm");
-        CHECK(ci && nr && vi2 && gb && mm);
-        CHECK(nvn2_red_of(ci) && strstr(nvn2_red_of(ci), "GameChat") && nvn2_red_of(nr) && strstr(nvn2_red_of(nr), "NVIDIA") && nvn2_red_of(gb) && nvn2_red_of(mm));
-        CHECK(s2a_nv_entry("_ZN2nn4chat10InitializeEv") == ci && nvn2_red_of(vi2) != NULL);   // 同名复用一个槽
-        CHECK(ci != nr && ci != vi2);                                                           // 不同名不同桩（被调到时点得出是谁）
-        CHECK(dies(ci));
+        CHECK(nr && vi2 && gb && mm);
+        CHECK(nvn2_red_of(nr) && strstr(nvn2_red_of(nr), "NVIDIA") && nvn2_red_of(gb) && nvn2_red_of(mm));
+        CHECK(nr != vi2);                                                           // 不同名不同桩（被调到时点得出是谁）
+        CHECK(dies(nr));
         // 负对照：没有「原路径必中止」实证的照原路径——chat:u 服务的 IsChatting、album 截图、火纹 CUDA 模块导入的 NvRmGpuLibOpen（模拟执行没进 nv::InitCheck）、
         //   gsv 的 IsInitialized 与 BootWithTransferMemory（只是直读会话全局量、调用图可达）、album::InitializeMovieMaker（调用图直达 gs Check、模拟执行没进）
         CHECK(!s2a_nv_entry("_ZN2nn3gsv22BootWithTransferMemoryENS0_12MemoryRegionEPvm") && !s2a_nv_entry("_ZN2nn5album20InitializeMovieMakerEPvm"));

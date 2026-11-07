@@ -26,7 +26,7 @@ scene() { echo "    | 现场：第 ${LR:-?} 轮日志尾"; tail -10 "$T/${LR:-x}
   for l in "$T"/logs/slot.*; do [ -d "$l" ] || continue; p=$(cat "$l/pid" 2> /dev/null); echo "    | 槽 ${l##*/}：持有者 ${p:-无}（$([ -n "$p" ] && ps -o command= -p "$p" 2> /dev/null | cut -c1-120 || echo 已不在)）"; done
   grep -h '排队' $(ls -t "$T"/logs/pso-*/*.log 2> /dev/null | head -3) 2> /dev/null | tail -5 | sed 's/^/    | remote：/'; }
 ck() { if eval "$2"; then echo "✓ $1"; else echo "✗ $1"; scene; bad=1; fi; }
-export S2A_REMOTE=local S2A_REMOTE_ROOT=$T/rr S2A_REMOTE_LOGS=$T/logs HOME=$T/home S2A_REMOTE_WAIT_S=60
+export S2A_REMOTE=local S2A_REMOTE_ROOT=$T/rr S2A_REMOTE_LOGS=$T/logs HOME=$T/home S2A_REMOTE_WAIT_S=60 S2A_REMOTE_MIN_FREE_GB=0   # 假远端就是本机临时目录：派活前的远端余量闸（缺省 30 G）量的是本机真盘，盘紧时 ①⑥⑦ 误红（11-09 守望 3 次，可用 15–29 G）；本单测不测余量闸
 mkdir -p "$T/home" "$T/repo/tools/bin" "$T/repo/graphics/tools/shbake"; cd "$T/repo" || exit 1
 mkdir -p "$T/home/.s2arm/run/s2arm/bin"; echo '# 测试用局槽仲裁副本' > "$T/home/.s2arm/run/s2arm/bin/mac_slot-now.sh"   # 维护方工具 本机缺副本不派（维护方工具）
 git init -q; git config user.email t@t; git config user.name t

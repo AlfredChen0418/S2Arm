@@ -17,6 +17,8 @@ struct InstallView: View {
 
     private var game: GameSummary? { model.games.first { $0.id == gameID } }
     private static let pollSeconds: UInt64 = 5
+    @State private var showManualTeam = false
+    @AppStorage("s2arm.enteredTeamCodeId") private var enteredTeamCode = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -48,6 +50,19 @@ struct InstallView: View {
                         Text(loc.backend(failed.message)).font(.manrope(13)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
                         CopyReportButton(model: model, gameID: gameID, operations: ["install", "installRemove"], fallback: failed.message)
                     }
+                    if showManualTeam, let game {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(loc.t("s2arm.install.teamGuide")).font(.manrope(12.5)).fixedSize(horizontal: false, vertical: true)
+                            Button(loc.t("s2arm.install.teamGuideOpen")) { model.openSigningProject() }
+                                .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.teamGuideOpen")
+                            Text(loc.t("s2arm.install.teamManualHelp")).font(.manrope(12.5)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            HStack(spacing: 8) {
+                                TextField(loc.t("s2arm.install.teamManualField"), text: $enteredTeamCode).textFieldStyle(.roundedBorder).font(.mono(12)).frame(width: 180).accessibilityIdentifier("install.teamId")
+                                Button(loc.t("s2arm.install.teamManualUse")) { model.clearInlineFailure(); model.install(game, teamId: enteredTeamCode.trimmingCharacters(in: .whitespaces).uppercased()) }
+                                    .buttonStyle(LauncherSecondaryButtonStyle()).disabled(enteredTeamCode.trimmingCharacters(in: .whitespaces).count != 10 || model.busy)
+                            }
+                        }
+                    }
                     if let r = model.installReadiness {
                         CardGroup(loc.t("s2arm.install.checklist"), footnote: footnote(r)) {
                             ForEach(r.items) { item in
@@ -57,6 +72,8 @@ struct InstallView: View {
                                             .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
                                     }
                                     if !item.ok, item.id == "appleId" {
+                                        Button(loc.t("s2arm.install.teamManual")) { showManualTeam.toggle() }
+                                            .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.teamManual")
                                         Button(text("install.apple.open")) {
                                             if case .open(let url) = model.provider.environment.repairStep(for: "openXcode") { NSWorkspace.shared.open(url) }
                                         }

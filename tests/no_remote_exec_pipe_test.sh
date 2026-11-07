@@ -38,7 +38,7 @@ while IFS= read -r f; do
     fi
   done
 done < <(grep -rlI --include=*.sh --include=*.py --include=*.md \
-             --include=*.cs --include=*.swift --include=*.m . 2>/dev/null \
+             --include=*.cs --include=*.swift --include=*.m . . 2>/dev/null \
          | grep -v '^\./compat/tree/' | grep -v '^\./\.git/' | grep -vF "./$SELF_REL")
 
 if [ ${#HITS[@]} -gt 0 ]; then

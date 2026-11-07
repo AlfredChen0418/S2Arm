@@ -15,6 +15,7 @@ public sealed partial class EnvironmentWindow
 {
     private string page = "library";
     private string libraryFolder = "";
+    private string? libraryMoveFrom;
     private string? connectedFolder, libraryId, selectedGame;
     private LibraryCatalog? catalog;
     private string librarySummary = "library.disconnected", libraryDiagnostics = "";
@@ -307,7 +308,48 @@ public sealed partial class EnvironmentWindow
     private async Task ChangeLibraryAsync()
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = T("library.choose_folder") });
-        if (folders.Count > 0) ConnectLibrary(LocalPath(folders[0]));
+        if (folders.Count == 0) return;
+        var folder = LocalPath(folders[0]);
+        // 有游戏、选的是空文件夹才问；已有游戏库或含旧产物的文件夹由作业层直接打开 / 认领
+        libraryMoveFrom = null;
+        if (connectedFolder is not null && catalog is { Games.Count: > 0 } && !Directory.EnumerateFileSystemEntries(folder).Any())
+        {
+            var choice = await AskMoveLibraryAsync();
+            if (choice is null) return;
+            if (choice.Value) libraryMoveFrom = connectedFolder;
+        }
+        ConnectLibrary(folder);
+    }
+
+    /// <summary>true = 搬过去，false = 新建空游戏库，null = 取消。</summary>
+    private async Task<bool?> AskMoveLibraryAsync()
+    {
+        var dialog = new Window
+        {
+            Title = T("library.move_title"), Width = 460, SizeToContent = SizeToContent.Height,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Canvas, Foreground = Ink,
+            FontFamily = new FontFamily("avares://S2Arm/Assets/Fonts#Manrope")
+        };
+        bool? answer = null;
+        var body = new StackPanel { Spacing = 16, Margin = new Thickness(28) };
+        body.Children.Add(Label(T("library.move_title"), 20));
+        body.Children.Add(Muted(T("library.move_body"), 14));
+        var buttons = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        void Add(string text, bool? result, bool primary)
+        {
+            var button = new Button { Content = text, Padding = new Thickness(16, 9), CornerRadius = new CornerRadius(8), Margin = new Thickness(12, 0, 0, 0),
+                Background = primary ? Accent : Brush.Parse("#29292D"), Foreground = primary ? Canvas : Ink };
+            button.Click += (_, _) => { answer = result; dialog.Close(); };
+            buttons.Children.Add(button);
+        }
+        Add(T("action.cancel"), null, false);
+        Add(T("library.move_empty"), false, false);
+        Add(T("library.move_confirm"), true, true);
+        body.Children.Add(buttons);
+        dialog.Content = body;
+        await dialog.ShowDialog(this);
+        return answer;
     }
 
     /// <summary>换到新位置：连上后记下来，下次启动还用它。</summary>

@@ -23,6 +23,8 @@ CGFloat S2AVPadKeyOpacity(CGFloat idle, BOOL active);
 - (CGRect)frameForButton:(NSDictionary *)button safeRect:(CGRect)rect;
 // 触点落在哪个按键上（各键框外扩 slop 点，重叠处按 buttons 顺序取第一个）；没有返回 nil。vpad.m keyAt 用它，单测 t_vpad_stick_press 直接调
 - (nullable NSString *)buttonAt:(CGPoint)p safeRect:(CGRect)rect slop:(CGFloat)slop;
+// 同上，按每键缩放算框（绕键中心）；scales 里值为 0 的键不参与（隐藏），没列出的键取 scales[@"*"]，再没有按 1
+- (nullable NSString *)buttonAt:(CGPoint)p safeRect:(CGRect)rect slop:(CGFloat)slop scales:(nullable NSDictionary<NSString *, NSNumber *> *)scales;
 - (CGRect)activationForStick:(NSDictionary *)stick safeRect:(CGRect)rect;
 - (CGFloat)radiusForStick:(NSDictionary *)stick safeRect:(CGRect)rect;
 - (nullable NSData *)JSONData:(NSError **)error;
@@ -58,6 +60,12 @@ double S2AVPadHoldLockDeadline(const S2AVPadHoldLockState *state);
 // 输入为相对落点 / 摇杆半径的 UIKit 坐标；返回单位圆内的同向值，Y 翻转由调用方处理。
 // t = clamp((length - deadzone) / (saturation - deadzone), 0, 1)，输出长度 t^exponent。
 CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation, CGFloat exponent);
+// 灵敏度：先把手指相对半径的位移乘 sensitivity，再钳到单位圆内。sensitivity = 1 与不调用相同
+CGPoint S2AVPadStickSensitivity(CGPoint input, CGFloat sensitivity);
+
+// 每键外观：大小倍率 0.6–1.6、不透明度 0.2–1、是否隐藏；与布局几何分开存，布局文件格式不变
+typedef struct { CGFloat scale, opacity; BOOL hidden; } S2AVPadKeyStyle;
+static const NSInteger kS2AVPadKeyThemeCount = 5;   // 0 = 默认描线，1–4 = 配色
 
 @interface S2AVPadLayoutStore : NSObject
 @property(nonatomic, readonly, copy) NSURL *directory;
@@ -68,6 +76,13 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
 @property(nonatomic, readonly) CGFloat stickDeadzone, stickSaturation, stickExponent;
 // deadzone 0–0.4，saturation 0.5–1，exponent 0.5–3；失败时保留原内存与磁盘值。
 - (BOOL)setStickDeadzone:(CGFloat)deadzone saturation:(CGFloat)saturation exponent:(CGFloat)exponent error:(NSError **)error;
+// 摇杆模式（按游戏存）：浮动 = 手指落点当中心（缺省）；固定 = 摇杆常驻屏幕固定位置，位置可在按键编辑里拖。灵敏度 0.5–2。
+//   center 是相对安全区的 0–1 坐标，side 0 左 1 右；缺省左 (0.12, 0.66)、右 (0.63, 0.66)，避开默认布局的键
+@property(nonatomic, readonly) BOOL stickFixed;
+@property(nonatomic, readonly) CGFloat stickSensitivity;
+- (CGPoint)stickCenter:(int)side;
+- (BOOL)setStickFixed:(BOOL)fixed sensitivity:(CGFloat)sensitivity error:(NSError **)error;
+- (BOOL)setStickCenter:(CGPoint)center side:(int)side error:(NSError **)error;
 // App-local appearance preference, separate from schema 1 layout geometry.
 @property(nonatomic, readonly) CGFloat idleKeyOpacity;
 - (BOOL)setIdleKeyOpacity:(CGFloat)opacity error:(NSError **)error;
@@ -77,6 +92,20 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
 // ZL / ZR 按住锁定：按游戏存在 directory，默认 YES。
 @property(nonatomic, readonly) BOOL holdLockEnabled;
 - (BOOL)setHoldLockEnabled:(BOOL)enabled error:(NSError **)error;
+// 按键外观：按游戏存在 directory。没设过的键是 1 / 1 / 不隐藏。persist = NO 只改内存（拖滑杆时预览），松手再 persist
+- (S2AVPadKeyStyle)keyStyle:(NSString *)identifier;
+- (BOOL)setKeyStyle:(S2AVPadKeyStyle)style forKey:(NSString *)identifier persist:(BOOL)persist error:(NSError **)error;
+@property(nonatomic, readonly) NSInteger keyTheme;
+// 整体大小 0.6–1.6、整体不透明度 0.2–1：乘在每键值之上，也作用于摇杆；persist 同上
+@property(nonatomic, readonly) CGFloat globalScale, globalOpacity;
+- (BOOL)setGlobalScale:(CGFloat)scale opacity:(CGFloat)opacity persist:(BOOL)persist error:(NSError **)error;
+- (BOOL)setKeyTheme:(NSInteger)theme error:(NSError **)error;
+- (BOOL)resetKeyStyles:(NSError **)error;
+// 取键用：键 id → 倍率（已乘整体大小），隐藏的键为 0（includeHidden 时按其倍率）；"*" = 没单独设过的键
+- (NSDictionary<NSString *, NSNumber *> *)keyScalesIncludingHidden:(BOOL)includeHidden;
+// 编辑取消时整体还原
+- (NSDictionary *)keyStyleSnapshot;
+- (BOOL)restoreKeyStyleSnapshot:(NSDictionary *)snapshot error:(NSError **)error;
 - (instancetype)initWithDirectory:(NSURL *)directory;
 // 布局与选择记录存 directory（多款容器壳 = 该游戏自己的目录），闲置透明度 / 触感 / 摇杆手感存 settingsDirectory（App 级，全部游戏共用）
 - (instancetype)initWithDirectory:(NSURL *)directory settingsDirectory:(NSURL *)settingsDirectory;

@@ -11,9 +11,15 @@ PY=${S2A_PY:-$HOME/.s2arm/venv/bin/python3}   # 钉版解释器（lz4：rewrite_
 C=$("$PY" "$H/pack/rewriter.py" c-path 2>/dev/null | tail -1); [ -x "$C" ] || { echo "🔴 取不到出包 C 改写器（pack/rewriter.py c-path）"; exit 1; }
 rc=0
 REW=$C "$PY" "$H/tests/rewrite_c_test.py" || { echo "🔴 rewrite_c_test 没过（上面一行写明是产物差、退出码差还是超时）"; rc=1; }
+REW=$C "$PY" "$H/tests/rewrite_data_in_text_test.py" || { echo "🔴 rewrite_data_in_text_test：代码段内嵌数据判定不符"; rc=1; }
+REW=$C "$PY" "$H/tests/rewrite_scale_test.py" || { echo "🔴 rewrite_scale_test：一个函数里大量 br x18 / 大量函数时改写超时或计数不符（#251）"; rc=1; }
 REW=$C "$PY" "$H/tests/rewrite_front_synth_test.py" || { echo "🔴 rewrite_front_synth_test：C 的 FAR 容量重选与金样不符"; rc=1; }
 DEPS=$("$PY" "$H/pack/rewriter.py" deps-path) || { echo "🔴 取不到 C 改写器固定依赖（pack/rewriter.py deps-path）"; exit 1; }
 AB="$H/build/rewriter-api-test"
+# 固定构建目录的缓存记着上次配置时的源码路径：同一棵树先后跑过不同目录布局的分支（源码搬了目录）时，CMake 拒绝配置
+#   「The source … does not match the source … used to generate cache」（11-09 列车门禁红一次）。源码路径不符就整目录重建（tests/cmake_fresh_dir_test.sh）
+fresh_cmake_dir() { [ ! -f "$2/CMakeCache.txt" ] || grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL=$1" "$2/CMakeCache.txt" || rm -rf "$2"; }
+fresh_cmake_dir "$H/runtime/rewriter" "$AB"
 { cmake -S "$H/runtime/rewriter" -B "$AB" -DS2A_REWRITER_DEPS="$DEPS" -DCMAKE_BUILD_TYPE=Release -DS2A_REWRITER_API_TEST=ON \
   && cmake --build "$AB" --config Release --target s2a-rewrite s2a-rewrite-api-test --parallel 2; } > "$AB.log" 2>&1 \
   || { echo "🔴 编 C 接口测试程序失败（全文 $AB.log）"; tail -5 "$AB.log"; exit 1; }

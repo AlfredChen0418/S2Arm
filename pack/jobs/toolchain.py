@@ -287,6 +287,7 @@ def preflight(c):
     metal_ok = ok and "Apple metal version" in version and "error:" not in version.lower()
     first_launch = has_xcode and not metal_ok and "license" in version.lower()
     add("Metal 编译组件", metal_ok,
+        "Xcode 的 Metal 编译组件已就绪。" if metal_ok else
         "Xcode 还没完成首次设置：点「打开 Xcode」，同意许可后回来点重新检查。" if first_launch else
         "缺 Xcode 的 Metal 编译组件：点「一键下载」自动安装（约 1 GB），下完自动重新检查。" if has_xcode else
         "准备游戏需要 Xcode 的 Metal 编译组件；先安装 Xcode。",
@@ -313,6 +314,7 @@ def preflight(c):
             code="xcode_team_pending" if logged_in else "xcode_account_missing", group="apple")
     ok, _ = probe(c, ["xcrun", "--sdk", "macosx", "--show-sdk-path"])
     add("Xcode", has_xcode and ok,
+        "已找到完整的 Xcode。" if has_xcode and ok else
         "没找到完整的 Xcode：点「去 App Store 安装」，装好打开一次后回来点重新检查；S2Arm 会自动找到它。",
         action="appStoreXcode")
     if packaged:

@@ -117,7 +117,10 @@ def rewrite(exefs, staging):
     os.makedirs(staging, exist_ok=True)
     if list(Path(staging).glob('*.widen.tsv')):
         sys.exit('【红】Android 改写目录包含残留宽屏点表')
-    env = dict(os.environ, S2A_TARGET='android',
+    # 帧率表不从环境继承（#48 D2）：改写器按 fps.tsv 打的读槽指令要 runtime/src/fps.c 往键页槽里写值（fps.c 文件头：
+    #   槽没人写游戏就读到 0，塞尔达速度 0 冻住），安卓没链 fps.c（android/core-link/Runtime.cmake）。接上 fps.c 之前不交给改写器。
+    env = {k: v for k, v in os.environ.items() if k != 'S2A_FPS_TSV'}
+    env.update(S2A_TARGET='android',
                S2A_REWRITE_SPIN=os.environ.get('S2A_REWRITE_SPIN', '0'),
                S2A_SDK_ADDR_CUT=os.environ.get('S2A_SDK_ADDR_CUT', '1'))
     command = rewrite_command()

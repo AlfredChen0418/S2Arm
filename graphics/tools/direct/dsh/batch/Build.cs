@@ -969,7 +969,7 @@ static class Metal
                 if (rc == 0) { if (attempt == 2) St.AddOrUpdate(target + " retried", 1, (_, v) => v + 1); break; }
                 var bad = EnvProblem();
                 if (bad != null) throw new InvalidOperationException($"Metal 编译环境坏了（{bad}），不是这支着色器编不过");
-                if (attempt == 2) throw new CompileError(CompilerWhy(err) ?? $"Command '{string.Join(' ', cmd)} {m} -o {air}' returned non-zero exit status {rc}. {err}");
+                if (attempt == 2) throw new CompileError(CompilerWhy(err) ?? $"exit status {rc}: {err.Trim()} (Command '{string.Join(' ', cmd)} {m} -o {air}')");   // 原话放前面：汇总只留前 160 字符，命令回显占满就看不到原因（#165）
             }
             var data = File.ReadAllBytes(lib);
             key = data.AsSpan().IndexOf(fname) >= 0 ? kNamed : kSrc;
@@ -994,11 +994,28 @@ static class Metal
         //   本进程常驻约 5 GB，马车8 一局 1.4 万次 fork，Spare-host 翻译段 CPU 只用到 3.1 / 8 核）
         if (OperatingSystem.IsMacOS()) return Spawn.Run(a);
         var psi = new ProcessStartInfo(a[0]) { RedirectStandardError = true, UseShellExecute = false };
-        foreach (var x in a[1..]) psi.ArgumentList.Add(x);
+        string[] args = a[1..];
+        if (WinBin != null && args.Any(x => x.Contains(' '))) { args = WinRelative(args, Work); psi.WorkingDirectory = Work; }
+        foreach (var x in args) psi.ArgumentList.Add(x);
         using var p = Process.Start(psi);
         var err = p.StandardError.ReadToEnd(); p.StandardError.Dispose(); p.WaitForExit();   // 显式关管道：Process.Dispose 不关重定向的流，每次漏一个描述符等 GC（实测 1000 次 25→1059），mk8d 编到上限 Too many open files
         return (p.ExitCode, err);
     }
+    // 苹果官方 Windows 版 metal.exe / metallib.exe 会把参数里的空格再拆开，引号挡不住（#257：用户名带空格「C:\Users\<带空格的用户名>」时工作区在
+    //   AppData 下，每支都报 no such file 'C:\Users\<用户名前半>'，一个键都没出；11-09 Windows 出包机实测按参数整体传、源文件 / 输出 / 模块缓存 / metallib 输出
+    //   四种带空格全失败，工作目录设成带空格的目录、参数只写相对路径则全过）。所以带空格的路径参数（含 -xxx=<路径>）改成相对工作区 Work 的写法、
+    //   工作目录设为 Work；我方建的段名（<目标>-<guid>、pch-<目标>）不带空格。相对之后仍带空格（文件不在工作区下）就直说，不交给编译器去拆
+    internal static string[] WinRelative(string[] args, string cwd) => args.Select(x =>
+    {
+        if (!x.Contains(' ')) return x;
+        int eq = x.StartsWith('-') ? x.IndexOf('=') : -1;
+        string head = eq >= 0 ? x[..(eq + 1)] : "", path = eq >= 0 ? x[(eq + 1)..] : x;
+        if (!Path.IsPathFullyQualified(path)) return x;
+        string rel = Path.GetRelativePath(cwd, path);
+        if (rel.Contains(' ') || Path.IsPathRooted(rel))
+            throw new InvalidOperationException($"Metal 编译器（Windows 版）不认带空格的路径，而 {path} 不在出库工作区 {cwd} 下，没法改成相对路径");
+        return head + rel;
+    }).ToArray();
     static string EnvProblem()
     {
         try { _ = Directory.GetCurrentDirectory(); } catch (Exception e) { return $"当前工作目录已不存在（{e.Message}）"; }

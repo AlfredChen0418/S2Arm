@@ -6,6 +6,8 @@
 //   ② 流程：先喂牵连错误 → 不停；放行的真提交计数 +1（负对照：证明计数在动）；再喂 Hang → 安全停一次、通知一次、通知里有提交序号与原文；再喂 Hang 不重复通知。
 //   ③ 停后：旧队列真命令缓冲 cb_put / cb_run 都不交（状态仍 NotEnqueued、计数不涨、不阻塞）；m3_commit 不交；Metal 4 直交 rec_commit_upload 不交；
 //      上屏 present_now 返回 0 且上屏计数不涨、present_enqueue 回票号 0；nvn_be_drain（进后台排空）立即返回、不交不等
+//   ⓪ 帧 GPU 时间 1 秒门（gpu_tag_done）：照 11-09 M1 Pro 时之笛 S2 切回前台那一局，结束时间在现在之后的跨度（算出 6147890790964 ms）不判挂死、不计时间；
+//      负对照：同一帧真实的 1.5 秒跨度（结束在现在）照判安全停，证明门没被关掉
 #include "../gfx/nvn/nvn_mtl.m"
 #include "s2a_t_result.h"
 
@@ -38,6 +40,14 @@ int main(void) {
         NSError *m3_pf = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorPageFault userInfo:nil];
         NSError *m3_victim = [NSError errorWithDomain:MTLCommandBufferErrorDomain code:MTLCommandBufferErrorTimeout userInfo:@{NSUnderlyingErrorKey:
             [NSError errorWithDomain:@"IOGPUCommandQueueErrorDomain" code:5 userInfo:@{NSLocalizedDescriptionKey: @"Discarded (victim of GPU error/recovery) (00000005:kIOGPUCommandBufferCallbackErrorInnocentVictim)"}]}];
+
+        // ⓪ 帧 GPU 时间 1 秒门：不可能的时间戳不判，真跨度照判
+        double now = CACurrentMediaTime();
+        gpu_tag_begin(23924); gpu_tag_done(23924, now - 0.04, now - 0.04 + 6147890790.964);
+        VERIFY(!mtl_gpu_halted() && !g_notified && atomic_load(&g_gpu[23924 % GRING].ns) == 0, "结束在现在之后的跨度（6147890790964 ms）不判挂死、不计进本帧 GPU 时间");
+        gpu_tag_begin(23925); now = CACurrentMediaTime(); gpu_tag_done(23925, now - 1.5, now);
+        VERIFY(mtl_gpu_halted() && g_notified == 1 && strstr(g_note, "frame 23925 kept the GPU busy"), "负对照：真实 1.5 秒跨度照判安全停（%s）", g_note);
+        atomic_store(&g_gpu_halt, 0); g_notified = 0; g_note[0] = 0;   // 复位，下面的流程从没停过的状态开始
 
         // ① 判定
         VERIFY(!legacy_judge(hang), "负对照：旧判法（只看 localizedDescription「%s」）对真机结构的 Hang 错误不命中", hang.localizedDescription.UTF8String);

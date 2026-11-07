@@ -200,7 +200,8 @@ public sealed partial class EnvironmentWindow
             connectedFolder = null; libraryId = null; catalog = null; selectedGame = null; ClearCovers();
             PrivateJobRequest.EnsurePrivateRoot(privateRoot);
             Directory.CreateDirectory(folder);
-            var setup = await LibraryJobClient.RunAsync(paths, privateRoot, folder, null, "setup", null, cancellation.Token);
+            var setup = await LibraryJobClient.RunAsync(paths, privateRoot, folder, null, "setup", null, cancellation.Token, libraryMoveFrom);
+            libraryMoveFrom = null;
             DisplayJob(setup);
             if (!setup.Report.Succeeded) { librarySummary = "library.failed"; importError = setup.Report.Message; return; }
             var conn = LibraryConnection.Parse(setup.Report.Result);

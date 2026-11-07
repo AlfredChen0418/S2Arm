@@ -20,6 +20,24 @@ final class LibraryProviderTests: XCTestCase {
         XCTAssertFalse(games[1].playable)   // 运行文件要重新准备
     }
 
+    func testLastKnownGamesShowBeforeTheJobAndFollowTheLibrary() throws {
+        let box = try Sandbox(); defer { box.remove() }
+        let runner = FakeRunner()
+        runner.script = { _ in ([eventLine("result", state: "succeeded", message: "操作完成", extra: #","result":{"games":[{"id":"0100A","name":"Alpha","display":"1.2.0","ready":true,"missing":[]}],"keys":{"ready":true},"jobs":[]}"#)], 0, false) }
+        let provider = LibraryProvider(client: client(box, runner))
+        XCTAssertNil(provider.lastKnownGames(), "没读过：没有列表可显示")
+        let done = expectation(description: "load")
+        provider.load { _ in done.fulfill() }
+        wait(for: [done], timeout: 5)
+        let starts = runner.starts.count
+        let fresh = LibraryProvider(client: client(box, runner))
+        XCTAssertEqual(fresh.lastKnownGames()?.map(\.id), ["0100A"])
+        XCTAssertEqual(fresh.keysReady, true)
+        XCTAssertEqual(runner.starts.count, starts, "读列表不起作业")
+        var other = box.environment(); other.libraryId = "another-library"
+        XCTAssertNil(LibraryProvider(client: client(box, runner, env: other)).lastKnownGames(), "换了游戏库不显示旧列表")
+    }
+
     func testNoLibraryFailsWithoutStartingAJob() throws {
         let box = try Sandbox(); defer { box.remove() }
         let runner = FakeRunner()

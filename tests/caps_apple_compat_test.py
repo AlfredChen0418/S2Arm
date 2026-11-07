@@ -15,8 +15,11 @@ FILES = ('runtime/src/widen.c', 'graphics/metal/gal_present.m', 'graphics/metal/
          'runtime/src/fps.c', 'runtime/src/cpatch.c', 'tools/widen_accept.py', 'pack/cpatch.py',
          'tools/fps_generic.py', 'tools/ue_cvar_loc.py', 'tools/fps_warehouse.py',
          'tools/fps_relocate.py', 'graphics/widen/gal/WidenRenderer.cs')
-CAP = {'widen': 'ee80bbcf27ec9275', 'fps60': 'c2c54ee0a7fffe0f'}
-SIGNAL = {'widen': 'ba27a499b8ed384b', 'fps60': '7e9396271a031b45'}
+# 11-09 按公开仓路径重定（审计 / 主线线）：哈希把实现文件的路径名也算进去，迁仓把 native/ → runtime/、gfx/ → graphics/ 等，
+#   测试与 tools/caps_policy.py 的路径都跟着改了、这两组值没跟着重算，公开快照 3925321 起就红（只是一直没有改动路由到它）。
+#   核过算法没变：迁仓冻结点 migrate/freeze-F 上同一支测试用老路径、老值全过；两版 caps_policy.py 只差注释与路径字符串
+CAP = {'widen': '5731125a7e34cd2b', 'fps60': 'ce263cc1029214a4'}
+SIGNAL = {'widen': 'b1e392bdd380f8ba', 'fps60': 'c4b93355482ca293'}
 
 
 def check(module, root, repo):

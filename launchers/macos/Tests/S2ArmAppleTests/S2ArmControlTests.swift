@@ -19,6 +19,11 @@ import AppKit
     }
     override func tearDown() async throws { control.stop(); try? FileManager.default.removeItem(at: root) }
 
+    func testDisplayNeedsAGame() async {
+        let (code, body) = await post("/display", ["metalfx": true])
+        XCTAssertEqual(code, 400); XCTAssertEqual(body["error"] as? String, "缺 gameId")
+    }
+
     private func post(_ path: String, _ body: [String: Any] = [:]) async -> (Int, [String: Any]) {
         let r = await control.handle(ControlRequest(method: "POST", path: path, headers: [:], body: body))
         return (r.code, (try? JSONSerialization.jsonObject(with: r.body) as? [String: Any]) ?? [:])

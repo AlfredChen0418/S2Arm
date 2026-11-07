@@ -10,6 +10,7 @@ import shutil
 import sys
 import tempfile
 import types
+from unittest.mock import patch
 import unittest
 from unittest import mock
 
@@ -105,6 +106,20 @@ class RuntimeRomfs(unittest.TestCase):
 
                 with mock.patch("os.scandir", side_effect=deny), self.assertRaises(Failure):
                     build.clone_tree(self.c, self.source, destination, materialize_romfs=True)
+
+    def test_library_listing_skips_per_file_checks_but_launch_does_not(self):
+        host = self.dest / "S2ArmGame.app/Contents/MacOS/s2arm-host"
+        host.parent.mkdir(parents=True); host.write_bytes(b"synthetic"); host.chmod(0o755)
+        (self.dest / "romfs").mkdir(); (self.dest / "romfs/a.bin").write_bytes(b"data")
+        manifest = dict(schema=1, engine="S2Arm", target="macos-arm64", files=build.snapshot(self.c, self.dest))
+        (self.dest / "manifest.json").write_text(json.dumps(manifest))
+        (self.dest / "romfs/a.bin").unlink()
+        with patch.object(build, "validate_files") as files:
+            build.validate_runtime(self.c, self.dest, full=False, files=False)
+        files.assert_not_called()
+        with self.assertRaises(Failure) as error:   # 真正启动走完整校验，文件少了照样拦下
+            build.validate_runtime(self.c, self.dest)
+        self.assertEqual(error.exception.code, "runtime_invalid")
 
     def test_runtime_rejects_missing_romfs_even_with_matching_manifest(self):
         host = self.dest / "S2ArmGame.app/Contents/MacOS/s2arm-host"

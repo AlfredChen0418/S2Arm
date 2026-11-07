@@ -24,7 +24,12 @@ int main(void) {
     { double acc[3] = {0.3, -0.5, -0.8}; float r[3], l[3], gr[3], gl[3];
       s2a_phone_axes(1, acc, acc, r, gr); s2a_phone_axes(0, acc, acc, l, gl);
       float x[3] = {r[0] + l[0], r[1] + l[1], r[2] - l[2]}; near3("⑥ 横屏左右 右 / 上反号、出屏不变", x, 0, 0, 0); }
+    // ⑦ 手柄 GCMotion 平放：重力 (0, 0, −1)、没有用户加速度 → 反力沿正面法线 → raw (0, 0, +1)，与 NS2 手柄放平真报文同号
+    { double gravity[3] = {0, 0, -1}; s2a_gc_motion_axes(gravity, zero, zero, a, g); near3("⑦ 手柄平放 加速度", a, 0, 0, 1); near3("⑦ 手柄平放 角速度", g, 0, 0, 0); }
+    // ⑧ 重力和用户加速度相加：重力 (0, −1, 0) 加用户 (0.25, 0, 0.5) → 取反 (−0.25, +1, −0.5)；角速度 (1, −2, 0.5) rad/s 换成度/秒
+    { double gravity[3] = {0, -1, 0}, user[3] = {0.25, 0, 0.5}, rotation[3] = {1, -2, 0.5}; s2a_gc_motion_axes(gravity, user, rotation, a, g);
+      near3("⑧ 手柄 加速度合成", a, -0.25, 1, -0.5); near3("⑧ 手柄 角速度换算", g, deg, -2 * deg, 0.5 * deg); }
     if (bad) { printf("✗ t_phone_axes：%d 处不符\n", bad); return 1; }
-    printf("✓ t_phone_axes：6 项手算姿态全符（横屏左右、平放对齐 NS2 真报文、方向盘、俯仰）\n");
+    printf("✓ t_phone_axes：8 项手算姿态全符（横屏左右、平放对齐 NS2 真报文、方向盘、俯仰、手柄 GCMotion）\n");
     return 0;
 }

@@ -164,7 +164,7 @@ for f in "$W"/exefs/* "$W"/nroexe/nro*; do
 done; wait
 for m in ${MS[@]+"${MS[@]}"}; do rc=$(cat "$RC/$m" 2> /dev/null || echo 9)
   if [ "$1" = 1 ] && [ "$rc" = 3 ]; then R3+=("$m"); n=$((n + 1)); continue; fi
-  [ "$rc" = 0 ] || { echo "【红】$G 改写 $m 失败（rc=${rc}：$(tail -1 "$W/$m.rewrite.log" | cut -c1-160)；日志 $S2A_ROOTS/.failed/${G}_$m.log）"; mkdir -p "$S2A_ROOTS/.failed"; cp "$W/$m.rewrite.log" "$S2A_ROOTS/.failed/${G}_$m.log"; rm -rf "$RC"; root_abort "$G" "$TAG"; exit 1; }
+  [ "$rc" = 0 ] || { echo "【红】$G 改写 $m 失败（rc=${rc}：$([ "$rc" = 124 ] && echo "超过 600 秒被停" || tail -1 "$W/$m.rewrite.log" | cut -c1-160)；日志 $S2A_ROOTS/.failed/${G}_$m.log）"; mkdir -p "$S2A_ROOTS/.failed"; cp "$W/$m.rewrite.log" "$S2A_ROOTS/.failed/${G}_$m.log"; rm -rf "$RC"; root_abort "$G" "$TAG"; exit 1; }
   n=$((n + 1))
 done; rm -rf "$RC"
 }

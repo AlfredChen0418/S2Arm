@@ -69,6 +69,33 @@ def replace_retrying(tmp, path):
             time.sleep(delay)
 
 
+REWRITE_FAILED_LOG = re.compile(r"改写 \S+ 失败.*?日志 ([^）\n]+?\.log)")
+REWRITE_DIGEST_LINES = 400
+
+
+def write_rewrite_digest(source, target):
+    """改写日志摘要：缺口按类别计数 + 非缺口行 + 前若干条缺口（地址和指令类型，不含游戏内容）"""
+    counts, other, gaps, total = {}, [], [], 0
+    with open(source, encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.rstrip("\n")
+            if line.startswith("GAP\t"):
+                total += 1
+                detail = line.split("\t", 3)[-1]
+                kind = re.sub(r"0x[0-9a-fA-F]+|\b[0-9a-f]{8}\b|#-?\w+|S\d_\d_C\d+_C\d+_\d|\b[xw]\d+\b", "_", detail)[:80]
+                counts[kind] = counts.get(kind, 0) + 1
+                if len(gaps) < REWRITE_DIGEST_LINES:
+                    gaps.append(line)
+            elif len(other) < REWRITE_DIGEST_LINES:
+                other.append(line)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with open(target, "w", encoding="utf-8", newline="\n") as f:
+        f.write(f"改写缺口共 {total} 条，按类别：\n")
+        f.writelines(f"{n}\t{k}\n" for k, n in sorted(counts.items(), key=lambda kv: -kv[1])[:60])
+        f.write("\n--- 非缺口行 ---\n"); f.writelines(l + "\n" for l in other)
+        f.write("\n--- 前若干条缺口 ---\n"); f.writelines(l + "\n" for l in gaps)
+
+
 def atomic(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -433,8 +460,21 @@ class Context:
                   diagnostics=self.job["diagnostics"], logRef=result["logPath"])
         return result
 
+    def save_rewrite_digest(self, failure):
+        """改写失败的明细日志在产物根 .failed/ 下（可达几十 MB）：诊断包只收 私有目录/logs，这里存一份摘要进去，否则定不了缺的是哪类指令（#108）"""
+        match = REWRITE_FAILED_LOG.search(str(failure) + "\n" + getattr(failure, "internal", ""))
+        if not match:
+            return
+        target = self.private / "logs" / f"{self.task}-rewrite-gaps.log"
+        try:
+            write_rewrite_digest(Path(match.group(1)), target)
+            target.chmod(0o600)
+        except OSError:
+            pass
+
     def report_failure(self, error):
         failure = explain(error)
+        self.save_rewrite_digest(failure)
         if self.last_log is None:
             self.last_log = self.private / "logs" / (self.task + "-failure.log")
             self.last_log.parent.mkdir(parents=True, exist_ok=True)

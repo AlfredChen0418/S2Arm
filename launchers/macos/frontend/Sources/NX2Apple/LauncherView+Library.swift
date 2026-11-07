@@ -223,6 +223,7 @@ extension LauncherView {
 
     private func moreMenu(_ game: GameSummary) -> some View {
         VStack(alignment: .leading, spacing: 2) {
+            moreRow(txt("game.display"), "slider.horizontal.3") { displayFor = game.id }
             moreRow(txt("game.saves"), "tray.full") { saveFor = game.id }
             moreRow(txt("game.input"), "gamecontroller") { inputFor = game.id }
             moreRow(txt("game.diag"), "doc.zipper") { exportDiagnostics() }

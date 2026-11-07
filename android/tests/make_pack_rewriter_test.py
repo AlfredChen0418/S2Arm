@@ -130,7 +130,9 @@ class MakePackRewriterTest(unittest.TestCase):
                         "if fault=='missing': pathlib.Path(str(prefix)+'.gates.tsv').unlink()\n" +
                         "if fault=='gaps': pathlib.Path(str(prefix)+'.gaps.tsv').write_text('0x100\\tfixture\\tgap\\n')\n" +
                         "if fault=='environment':\n" +
-                        " pathlib.Path(__file__+'.env.json').write_text(json.dumps({k:os.environ.get(k) for k in ('S2A_TARGET','S2A_REWRITE_SPIN','S2A_SDK_ADDR_CUT')}))\n")
+                        " pathlib.Path(__file__+'.env.json').write_text(json.dumps({k:os.environ.get(k) for k in ('S2A_TARGET','S2A_REWRITE_SPIN','S2A_SDK_ADDR_CUT')}))\n" +
+                        "if fault=='fps':\n" +
+                        " pathlib.Path(__file__+'.fps.json').write_text(json.dumps(os.environ.get('S2A_FPS_TSV')))\n")
         path.chmod(0o700)
         return str(path)
 
@@ -184,6 +186,14 @@ class MakePackRewriterTest(unittest.TestCase):
         observed = json.loads(Path(wrapper + '.env.json').read_text())
         self.assertEqual(observed, dict(S2A_TARGET='android',S2A_REWRITE_SPIN='1',S2A_SDK_ADDR_CUT='0'))
         self.assertIn('# TARGET\tandroid', (out / 'modules/main.fixups.tsv').read_text())
+
+    def test_inherited_fps_table_does_not_reach_cli(self):
+        # #48 D2：安卓没链 runtime/src/fps.c，读槽指令打进去槽一直是 0；环境里留着的 S2A_FPS_TSV 不许交给改写器
+        table = self.directory / 'fps.tsv'
+        table.write_text('# 夹具：内容不被读到\n')
+        wrapper = self.wrapper('fps')
+        self.make(S2A_REWRITER_C=wrapper, S2A_FPS_TSV=str(table))
+        self.assertIsNone(json.loads(Path(wrapper + '.fps.json').read_text()))
 
     def test_selector_and_execution_failures_preserve_previous_output(self):
         for mode, settings in [('backend',dict(backend='invalid')),('missing',dict(S2A_REWRITER_C=str(self.directory/'absent'))),

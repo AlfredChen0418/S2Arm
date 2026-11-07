@@ -107,7 +107,9 @@ import S2ArmAppleAdapter
             guard model.installAllowed(g.id) else {
                 return .bad("还不能装：先 install-check \(g.id)；这款的 iPhone 版没做好时要先出包")
             }
-            model.install(g); return .ok()
+            model.install(g, teamId: str("teamId"), device: str("device")); return .ok()
+        case ("POST", "/signingProject"):
+            model.openSigningProject(); return .ok()
         case ("POST", "/uninstall"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -158,7 +160,15 @@ import S2ArmAppleAdapter
         case ("POST", "/library"):
             guard let p = str("path") else { return .bad("缺 path") }
             if let b = busy() { return b }
-            model.changeLibrary(to: URL(fileURLWithPath: p)); return .ok()
+            model.changeLibrary(to: URL(fileURLWithPath: p), move: a["move"] as? Bool ?? false); return .ok()
+        case ("POST", "/display"):
+            guard let id = str("gameId") else { return .bad("缺 gameId") }
+            if let b = busy() { return b }
+            let change = ["fps60", "widenForce", "metalfx"].reduce(into: [String: Any]()) { out, key in if let on = a[key] as? Bool { out[key] = on } }
+            do {
+                let options = try await model.displaySettings(id, change: change.isEmpty ? nil : change)
+                return .object(options.mapValues { ["available": $0.available, "enabled": $0.enabled, "reason": $0.reason] })
+            } catch { return .bad(error.localizedDescription) }
         case ("POST", "/select"):
             if let id = str("gameId") { model.selectedID = id }
             return .ok()
@@ -218,7 +228,7 @@ import S2ArmAppleAdapter
         let privateRoot = m.provider.client.environment.privateRoot
         let keys = m.keysReady
         let rd: Any = m.installReadiness.map { r -> [String: Any] in
-            ["gameId": m.installGameID ?? "", "ready": r.ready, "device": r.device, "account": r.account,
+            ["gameId": m.installGameID ?? "", "ready": r.ready, "device": r.device, "account": r.account, "signing": r.signing,
              "items": r.items.map { ["id": $0.id, "ok": $0.ok, "waiting": $0.waiting, "title": $0.title, "detail": $0.detail, "who": $0.who] }]
         } ?? NSNull()
         let session: Any = m.session.map { s -> [String: Any] in

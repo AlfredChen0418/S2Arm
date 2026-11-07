@@ -37,9 +37,10 @@ CHUNK = 1 << 20
 
 
 class UpdateError(Exception):
-    def __init__(self, code, message):
+    def __init__(self, code, message, detail=""):
         super().__init__(message)
         self.code = code
+        self.detail = detail
 
 
 def version_tuple(text):
@@ -66,11 +67,14 @@ def tls_context():
     return context
 
 
-def open_url(url, timeout):
+def open_url(url, timeout, start=0):
     import urllib.request
     if not trusted(url):
         raise UpdateError("update_bad_source", "更新地址不是官方来源，已停止。")
-    request = urllib.request.Request(url, headers={"User-Agent": "S2Arm-Updater", "Accept": "application/octet-stream, application/json"})
+    headers = {"User-Agent": "S2Arm-Updater", "Accept": "application/octet-stream, application/json"}
+    if start:
+        headers["Range"] = f"bytes={start}-"
+    request = urllib.request.Request(url, headers=headers)
     return urllib.request.urlopen(request, timeout=timeout, context=tls_context())
 
 
@@ -153,16 +157,41 @@ def sha256(path):
     return digest.hexdigest()
 
 
+DOWNLOAD_ATTEMPTS = 6   # 连续这么多次一点进展都没有才放弃；有进展就重新计数
+RETRY_SECONDS = 2
+
+
 def download(url, target, size):
+    """断了接着下（Range），服务器不支持续传就从头来；下够清单写的长度才算完"""
+    import http.client
     part = Path(str(target) + ".part")
-    done = 0
-    with open_url(url, 30) as response, open(part, "wb") as out:
-        while block := response.read(CHUNK):
-            done += len(block)
-            if done > size:   # 比签名清单写的大：不是官方文件，也防把磁盘写满
-                raise UpdateError("update_checksum_mismatch", "下载的文件比官方清单大，已停止，旧版没有变化。")
-            out.write(block)
-            emit(state="downloading", done=done, total=size)
+    # 上次（含上一个进程）没下完的 .part 接着下：长度超过清单的不是这份文件，扔掉重下；内容不对由下完后的 SHA-256 兜住
+    done, stalled = (part.stat().st_size if part.is_file() else 0), 0
+    if done > size:
+        part.unlink()
+        done = 0
+    while done < size:
+        before, failure = done, None
+        try:
+            with open_url(url, 30, start=done) as response:
+                if done and response.status != 206:
+                    done = 0
+                with open(part, "ab" if done else "wb") as out:
+                    while block := response.read(CHUNK):
+                        done += len(block)
+                        if done > size:   # 比签名清单写的大：不是官方文件，也防把磁盘写满
+                            raise UpdateError("update_checksum_mismatch", "下载的文件比官方清单大，已停止，旧版没有变化。")
+                        out.write(block)
+                        emit(state="downloading", done=done, total=size)
+        except (OSError, http.client.HTTPException) as error:
+            failure = error
+            done = part.stat().st_size if part.exists() else 0
+        if done >= size:
+            break
+        stalled = 0 if done > before else stalled + 1
+        if stalled >= DOWNLOAD_ATTEMPTS:
+            raise UpdateError("update_download_failed", f"下载一直断开，已停止，旧版没有变化（{type(failure).__name__ if failure else '连接提前结束'}）。请检查网络后重试。")
+        time.sleep(RETRY_SECONDS * stalled)
     part.replace(target)
 
 
@@ -181,9 +210,12 @@ def extract_windows(package, dest):
 
 
 def extract_mac(package, dest):
-    mount = dest / "mount"
-    mount.mkdir()
-    subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mount), str(package)], check=True, capture_output=True, timeout=300)
+    # 挂载点放系统临时目录：放在数据目录下时，数据目录在外置盘上 hdiutil 会报 Permission denied
+    mount = Path(tempfile.mkdtemp(prefix="s2arm-update-mount-"))
+    attached = subprocess.run(["/usr/bin/hdiutil", "attach", "-nobrowse", "-readonly", "-mountpoint", str(mount), str(package)], capture_output=True, timeout=300)
+    if attached.returncode:
+        os.rmdir(mount)
+        raise UpdateError("update_unpack_failed", "打不开下载好的安装包，旧版没有变化。可以手动下载新版。", detail=attached.stderr.decode("utf-8", "replace"))
     try:
         app = mount / "S2Arm.app"
         if not app.is_dir():
@@ -192,9 +224,11 @@ def extract_mac(package, dest):
         subprocess.run(["/usr/bin/ditto", str(app), str(target)], check=True, capture_output=True, timeout=1800)
     finally:
         subprocess.run(["/usr/bin/hdiutil", "detach", "-force", str(mount)], capture_output=True, timeout=120)
+        with __import__("contextlib").suppress(OSError):
+            os.rmdir(mount)
     check = subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(target)], capture_output=True, timeout=600)
     if check.returncode:
-        raise UpdateError("update_bad_package", "安装包的签名校验没通过，已停止，旧版没有变化。")
+        raise UpdateError("update_bad_package", "安装包的签名校验没通过，已停止，旧版没有变化。", detail=check.stderr.decode("utf-8", "replace"))
     return target
 
 
@@ -322,7 +356,11 @@ def prepare(platform, current, private, install, protect):
         raise UpdateError("update_none", "已经是最新版本。")
     work = updates / info["version"]
     if work.exists():
-        remove_tree(work)
+        # 同一版本重试：只留整包没下完的 .part 接着下（download 续传），其余（解包、增量）清掉重来
+        keep = work / (info["assetName"] + ".part")
+        for item in list(work.iterdir()):
+            if item != keep:
+                remove_tree(item) if item.is_dir() and not item.is_symlink() else item.unlink()
     work.mkdir(exist_ok=True)
     staged = None
     if info.get("delta"):
@@ -357,7 +395,6 @@ def prepare(platform, current, private, install, protect):
     if check.returncode:
         raise UpdateError("update_bad_package", "更新程序在这台电脑上起不来，已停止，旧版没有变化。")
     (updates / "pending.json").write_text(json.dumps({"version": info["version"], "time": time.time()}))
-    (updates / "health.ok").unlink(missing_ok=True)
     emit(state="ready", via=via, version=info["version"], staged=str(staged), python=str(python), updater=str(runner / "updater.py"))
 
 
@@ -449,19 +486,29 @@ def apply(staged, install, pid, private, args=(), launch=default_launch, health_
         if time.monotonic() >= deadline:
             return fail("update_app_busy", "S2Arm 没有退出，这次没有更新。", restart=False)
         time.sleep(0.5)
+    health = updates / "health.ok"
     try:
         # A previous apply may have stopped between swap()'s two renames.
         # Restore the only old copy before treating any backup as disposable.
         if backup.exists() and not install.exists():
             retry_rename(backup, install)
         if backup.exists():
-            remove_tree(backup)
+            if health.exists():
+                # 上次换上的版本后来起来过（写了 health.ok）：它已被确认，副本可以删
+                remove_tree(backup)
+            else:
+                # 上次换上的版本没被确认就中断了：副本才是最后一份确认能用的，先装回去再换，回滚目标始终是它
+                bad = install.with_name(install.name + ".s2arm-bad")
+                remove_tree(bad) if bad.exists() else None
+                retry_rename(install, bad)
+                retry_rename(backup, install)
+                remove_tree(bad)
+        # 换目录之前清掉确认标记：此后出现的 health.ok 只能来自换上去的这一版
+        health.unlink(missing_ok=True)
         swap(staged, install, backup, new)
     except (OSError, shutil.Error):
         remove_tree(new) if new.exists() else None
         return fail("update_swap_failed", "替换安装目录失败，已保留旧版。")
-    health = updates / "health.ok"
-    health.unlink(missing_ok=True)
     try:
         launch(install, list(args))
         deadline = time.monotonic() + health_seconds
@@ -482,6 +529,20 @@ def apply(staged, install, pid, private, args=(), launch=default_launch, health_
     except OSError:
         return fail("update_rollback_failed", "新版没能启动，旧版也没能恢复。请重新下载 S2Arm。", restart=False)
     return fail("update_rolled_back", "新版没能启动，已回到旧版。")
+
+
+def record_failure(args, code, message, detail=""):
+    """失败原因写进诊断包会收的日志（私有目录/logs）：界面只有一句话，玩家反馈时靠这里定位"""
+    root = getattr(args, "private_root", None)
+    if not root:
+        return
+    try:
+        log = Path(root) / "logs" / "update.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        with open(log, "a", encoding="utf-8") as out:
+            out.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} {code} {message}\n{str(detail or '').strip()[-2000:]}\n")
+    except OSError:
+        pass
 
 
 def main(argv=None):
@@ -513,8 +574,10 @@ def main(argv=None):
             return apply(a.staged, a.install, a.pid, a.private_root, a.arg)
         return 0
     except UpdateError as error:
+        record_failure(a, error.code, str(error), error.detail)
         emit(state="failed", code=error.code, message=str(error))
-    except (OSError, ValueError, KeyError, ImportError, subprocess.SubprocessError, __import__("zipfile").BadZipFile) as error:
+    except (OSError, ValueError, KeyError, ImportError, subprocess.SubprocessError, __import__("zipfile").BadZipFile, __import__("http.client").client.HTTPException) as error:
+        record_failure(a, "update_failed", type(error).__name__, f"{error}\n{getattr(error, 'stderr', '') or ''}")
         emit(state="failed", code="update_failed", message=f"更新没有完成，旧版没有变化（{type(error).__name__}）。请检查网络后重试。")
     return 1
 

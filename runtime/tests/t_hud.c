@@ -5,6 +5,9 @@
 #include "../include/s2a_hud.h"
 #include "../include/s2a_gfx_mode.h"
 #include <math.h>
+#include <stdatomic.h>
+#include <mach/mach.h>
+#include <mach/mach_time.h>
 _Atomic uint64_t g_s2a_hud_ft[2048], g_s2a_hud_fn;   // 上屏时间戳环（生产在 ap_host.c）：空环 = 慢帧「未测」，不影响目标
 static int g_mode = S2A_GFX_DIRECT, g_gl = -1, g_nv = 60;
 int s2a_gfx_mode(void) { return g_mode; }
@@ -14,7 +17,33 @@ int s2a_widen_game(void) { return 0; }
 int s2a_energy_snap(s2a_esnap *s) { (void)s; return 1; }
 int nvn_gl_game_fps(void) { return g_gl; }   // 浮层按名字取（dlsym），这里给强定义当 GL 前端
 int nvn_game_fps(void) { return g_nv; }
+// 固定内存采样结果，验证成功和失败都不会因 Metal HUD 请求被隐藏。
+static int g_mem_ok = 1;
+kern_return_t task_info(task_name_t task, task_flavor_t flavor, task_info_t info, mach_msg_type_number_t *count) {
+    (void)task; (void)flavor; (void)count;
+    if (!g_mem_ok) return KERN_FAILURE;
+    ((task_vm_info_t)info)->phys_footprint = 123 * 1048576ULL;
+    return KERN_SUCCESS;
+}
 static int fails;
+static void check_display(const char *label, const s2a_hud_host *host, int frames, int mem_ok) {
+    char text[4096];
+    g_mem_ok = mem_ok;
+    atomic_store(&g_s2a_hud_fn, 0);
+    if (frames) {
+        mach_timebase_info_data_t tb; mach_timebase_info(&tb);
+        atomic_store(&g_s2a_hud_ft[0], mach_absolute_time() * tb.numer / tb.denom);
+        atomic_store(&g_s2a_hud_fn, 1);
+    }
+    s2a_hud_text(text, sizeof text, host);
+    const char *fps = frames ? "帧率 1 / 目标 " : "帧率 0 / 目标 ";
+    const char *mem = mem_ok ? "内存 123 MB / 上限 " : "内存 读取失败 / 上限 ";
+    int ok = strstr(text, fps) && strstr(text, mem) && strstr(text, "慢帧 未测（近 10 秒不到两帧）");
+    if (host && host->metal_hud_requested) ok = ok && strstr(text, "Metal HUD 已请求");
+    else ok = ok && !strstr(text, "Metal HUD 已请求");
+    printf("%s：期望 FPS、内存与慢帧口径显示 → %s\n", label, ok ? "显示" : "缺失");
+    if (!ok) { printf("✗ t_hud：%s，输出：%s\n", label, text); fails++; }
+}
 static int target(void) {
     char t[4096]; s2a_hud_host h = {.thermal = "单测", .build_id = "t_hud", .battery_rate_pm = NAN, .battery_level = -1};
     s2a_hud_text(t, sizeof t, &h);
@@ -42,6 +71,12 @@ int main(void) {
         if (c[i].cap) setenv("S2A_FPS", c[i].cap, 1); else unsetenv("S2A_FPS");
         int got = target(); printf("%s 期望 %d → 真结果 %d\n", c[i].what, c[i].want, got); if (got != c[i].want) fails++;
     }
+    s2a_hud_host h = {.thermal = "单测", .build_id = "t_hud", .battery_rate_pm = NAN, .battery_level = -1};
+    check_display("官方 HUD 未请求，1 帧 / 内存可读", &h, 1, 1);
+    h.metal_hud_requested = 1;
+    check_display("官方 HUD 已请求，1 帧 / 内存可读", &h, 1, 1);
+    check_display("官方 HUD 已请求，空帧环 / 内存读取失败", &h, 0, 0);
+    check_display("宿主信息缺失，空帧环 / 内存读取失败", NULL, 0, 0);
     if (fails) printf("✗ t_hud：%d 项不符\n", fails); else printf("✓ t_hud：浮层目标 = min(游戏帧率, 上限)，GL 不锁时 = 上限，非法上限不进浮层，全过\n");
     return fails != 0;
 }

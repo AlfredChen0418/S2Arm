@@ -70,5 +70,85 @@ class CommunityTests(unittest.TestCase):
         self.assertEqual((r["widescreen"]["available"], r["fps60"]["available"], r["widescreen"]["enabled"], r["graphics"]), (False, False, False, []))
 
 
+
+class MacDisplayTests(unittest.TestCase):
+    """Mac 设置页：可用与否和缺省跟这款的能力清单走，只存玩家明确选过的。期望按规则手写"""
+    def setUp(self):
+        self.t = Path(tempfile.mkdtemp()); self.c = Ctx(self.t)
+        write(self.c.library / "catalog.json", json.dumps({"games": [{"id": GID, "packages": []}]}))
+
+    def caps(self, text="widen\t0\t# 缺省关\nfps60\t1\t# 开\ndirect\t1\t# 直连\n"):
+        write(self.c.library / "games" / GID / "current/s2a_caps.tsv", "# 注释\n" + text)
+
+    def save(self, **change):
+        self.c.r = {"gameId": GID, **change}
+        community.save(self.c)
+        self.c.r = {"gameId": GID}
+
+    def mac(self):
+        return community.mac_settings(self.c, GID)
+
+    def test_defaults_follow_the_caps(self):
+        self.caps()
+        m = self.mac()
+        self.assertEqual((m["fps60"]["available"], m["fps60"]["enabled"]), (True, True))
+        self.assertEqual((m["widenForce"]["available"], m["widenForce"]["enabled"]), (True, False))
+        self.assertEqual((m["metalfx"]["available"], m["metalfx"]["enabled"]), (True, False))
+        self.assertEqual(community.launch_env(self.c, GID), {})
+
+    def test_game_without_a_mac_build_says_why(self):
+        m = self.mac()
+        for key in ("fps60", "widenForce", "metalfx"):
+            self.assertFalse(m[key]["available"]); self.assertEqual(m[key]["reason"], community.NO_RUNTIME)
+
+    def test_missing_capabilities_give_their_own_reason(self):
+        self.caps("widen\t0\ndirect\t0\n")
+        m = self.mac()
+        self.assertEqual(m["fps60"]["reason"], community.NO_FPS60)
+        self.assertEqual(m["metalfx"]["reason"], community.NO_DIRECT)
+        self.assertTrue(m["widenForce"]["available"])
+
+    def test_metalfx_reaches_launch_and_turns_back_off(self):
+        self.caps()
+        self.save(metalfx=True)
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_SCALING_FILTER": "MetalFX"})
+        self.assertTrue(self.mac()["metalfx"]["enabled"])
+        self.save(metalfx=False)
+        self.assertEqual(community.launch_env(self.c, GID), {})
+
+    def test_metalfx_is_not_set_for_a_game_without_direct(self):
+        self.caps()
+        self.save(metalfx=True)
+        self.caps("fps60\t1\ndirect\t0\n")
+        self.assertEqual(community.launch_env(self.c, GID), {})
+
+    def test_force_widescreen_matches_iphone(self):
+        self.caps()
+        self.save(widenForce=True)
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_WIDEN_VERIFIED": "1", "S2A_WIDESCREEN": "1"})
+
+    def test_fps60_off_and_manual_on_over_a_red_game(self):
+        self.caps()
+        self.save(fps60=False)
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "0"})
+        self.assertFalse(self.mac()["fps60"]["enabled"])
+        self.caps("fps60\t0\t# 判红\ndirect\t1\n")
+        self.save(fps60=True)
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_FPS60": "1"})
+        self.assertTrue(self.mac()["fps60"]["enabled"])
+
+    def test_changing_one_switch_does_not_decide_the_others(self):
+        # 判红的款：改 MetalFX 不能顺手把 60 帧存成开
+        self.caps("fps60\t0\t# 判红\ndirect\t1\n")
+        self.save(metalfx=True)
+        self.assertFalse(self.mac()["fps60"]["enabled"])
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_SCALING_FILTER": "MetalFX"})
+
+    def test_old_file_written_by_the_previous_panel_is_not_a_manual_choice(self):
+        self.caps("fps60\t0\t# 判红\ndirect\t1\n")
+        write(self.c.library / "games" / GID / "community.json", json.dumps({"schema": 2, "widescreen": True, "fps60": True, "enabled": {}}))
+        self.assertFalse(self.mac()["fps60"]["enabled"])
+        self.assertEqual(community.launch_env(self.c, GID), {})
+
 if __name__ == "__main__":
     unittest.main()

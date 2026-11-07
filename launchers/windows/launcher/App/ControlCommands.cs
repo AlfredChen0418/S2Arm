@@ -58,7 +58,7 @@ public sealed partial class EnvironmentWindow
             return reply;
         })); }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or System.Net.Sockets.SocketException)
-        { aiControl = false; aiControlError = error.Message; return; }
+        { aiControl = false; aiControlError = error.Message; ControlPort.ReportStartFailure(privateRoot, error.Message); return; }
         control.UpdateState(ControlReply.Json(ControlState()).Body);
         controlTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         controlTimer.Tick += (_, _) => control?.UpdateState(ControlReply.Json(ControlState()).Body);
@@ -233,6 +233,7 @@ public sealed partial class EnvironmentWindow
             case ("POST", "/library"):
                 if (r.Text("path") is not { Length: > 0 } library) return ControlReply.Bad("缺 path");
                 if (ControlBusy) return Busy();
+                libraryMoveFrom = r.Flag("move") ? connectedFolder : null;
                 ConnectLibrary(Path.GetFullPath(library));
                 return ControlReply.Ok();
             case ("POST", "/select"):

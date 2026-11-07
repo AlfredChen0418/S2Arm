@@ -16,6 +16,9 @@ static class DshBatch
 {
     static int Main(string[] argv)
     {
+        // 输出固定 UTF-8（中文 Windows 缺省 GBK，调用方按 UTF-8 读成乱码，#165）；直接换写入器，没有控制台的进程也成立
+        Console.SetOut(new StreamWriter(Console.OpenStandardOutput(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
+        Console.SetError(new StreamWriter(Console.OpenStandardError(), new System.Text.UTF8Encoding(false)) { AutoFlush = true });
         if (argv.Length == 1 && argv[0] == "--xfp") { Console.WriteLine(DshCompiler.Xfp); return 0; }
         if (argv.Length >= 1 && argv[0] == "--tool-fp") { Console.WriteLine(Build.ToolFpCli(argv[1..])); return 0; }   // 验收：整份工具指纹（翻译键里那一项）
         if (argv.Length == 2 && argv[0] == "--lib-fp") { Console.WriteLine(Build.LibFp(argv[1])); return 0; }   // 单测：直连库 libdsx 进翻译键的功能身份（tests/nxgal_fp_test.sh）

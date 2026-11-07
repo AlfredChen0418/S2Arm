@@ -32,10 +32,11 @@ S2Arm 本身以 Apache License 2.0 授权（仓库根目录 [LICENSE](LICENSE) �
 | python-lz4 | 4.4.5 | BSD-3-Clause | https://github.com/python-lz4/python-lz4 | 是 | 否 |
 | NumPy | 2.4.2（.app 钉版） | BSD-3-Clause | https://numpy.org 。开发机文档里出现过 2.5.4，那是另一套环境，不打进 .app | 是 | 否 |
 | Pillow | 12.3.0（与出包机钉版一致） | MIT-CMU | https://github.com/python-pillow/Pillow/blob/12.3.0/LICENSE 。已核许可原文允许使用、修改和分发，要求保留版权及许可声明、不得未经许可使用作者名作宣传，可与本项目 Apache-2.0 自有代码共存；随 Runtime 保留包的 dist-info/licenses（含 wheel 所带库的各自许可）。只用于出包图标缩放 | 是（Runtime Python 包） | 否 |
+| Microsoft Visual C++ 运行库（Windows，Runtime/vcrt） | 14.44.35112，钉 SHA-256 | Visual Studio 可再发行文件条款 | https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files | 是 | 否 |
 | Python | 3.12（python-build-standalone 官方构建） | PSF License | https://www.python.org | 是 | 否 |
 | .NET 运行时 | 10.x（构建机已装的 10.* 最新补丁） | MIT | https://github.com/dotnet/runtime | 是（Runtime/dotnet） | 是（NativeAOT 把运行时代码静态编进 iOS 宿主；不带共享运行时目录） |
 | zstd 命令行与 libzstd | Homebrew 构建时的版本 | BSD-3-Clause | https://github.com/facebook/zstd | 是 | 否 |
-| libvpx | 1.15.0 | BSD-3-Clause（附专利授权） | https://chromium.googlesource.com/webm/libvpx ，由 `services/vpx/build.sh` 按 sha256 取，不入库；发版时 iOS arm64 / macOS arm64 静态库预编进 App（`Engine/Binaries/Prepare/libs/vpx/`），玩家出包只链接 | 是（静态链进 Mac 宿主；预编库随 App） | 是（静态链进 iOS 宿主） |
+| libvpx | 1.17.0 | BSD-3-Clause（附专利授权） | https://chromium.googlesource.com/webm/libvpx ，由 `services/vpx/build.sh` 按 sha256 取，不入库；发版时 iOS arm64 / macOS arm64 静态库预编进 App（`Engine/Binaries/Prepare/libs/vpx/`），玩家出包只链接 | 是（静态链进 Mac 宿主；预编库随 App） | 是（静态链进 iOS 宿主） |
 | libopus | 1.6.1 | BSD-3-Clause（附专利授权） | https://opus-codec.org ，由 `services/opus/build.sh` 按 sha256 取，不入库 | 是 | 是 |
 | dav1d | 1.5.4 | BSD-2-Clause | https://code.videolan.org/videolan/dav1d ，由 `services/dav1d/build.sh` 按 sha256（与 downloads.videolan.org 同目录 .sha256 一致）取、在开发 / 发版机构建，不入库；发版时 iOS arm64 / macOS arm64 静态库预编进 App（`Engine/Binaries/Prepare/libs/dav1d/`，带许可原文 COPYING），玩家出包只链接。AV1 软件解码（VideoToolbox 不支持 AV1 的机器上 Switch 2 片头用） | 是（静态链进 Mac 宿主；预编库随 App） | 是（静态链进 iOS 宿主） |
 | Noto Sans 字体 | 见 `pack/fonts/LICENSES.md`（Noto Sans 2.015，CJK 2.004） | OFL-1.1 | google/fonts 提交 `45e3d5269e4a17d823f6d84470bc084dc5ae46f6` | 是（生成后放进 Fonts；ttf 本身不入库） | 玩家包若带开源字体则是 |
@@ -67,7 +68,7 @@ S2Arm 本身以 Apache License 2.0 授权（仓库根目录 [LICENSE](LICENSE) �
 | Capstone / LZ4（安卓改写器） | 同上表 5.0.7 / 1.9.4 | BSD-3-Clause（另含 LLVM 派生部分）/ BSD-2-Clause | `android/rewriter/CMakeLists.txt`，许可副本 `runtime/rewriter/LICENSES/` | 是 |
 | d2r_vulkan_engine（已删除） | d2r-mobile 导入 | MIT（© 2026 jhaizhou）。原始来源「Harmony NVN-to-Vulkan implementation」为 维护者 自写，MIT（维护者 10-30 确认，原记在 `SOURCE.json` 的 `author` 字段） | 原 `graphics/third_party/d2r_vulkan_engine/`，2026-10-30 整目录删除（PR #1108）；来源/许可记录移到 `android/docs/direct-mode-d2r-study.md` §9 | 否（已删除，本仓不再分发逐字文件） |
 | .NET 运行时（linux-bionic） | 10.x | MIT | https://github.com/dotnet/runtime | 是（NativeAOT 静态编进单库） |
-| libopus / libvpx | 同上表 1.6.1 / 1.15.0 | BSD-3-Clause（附专利授权） | 按 sha256 取固定源码，不入库 | 是 |
+| libopus / libvpx | 同上表 1.6.1 / 1.17.0 | BSD-3-Clause（附专利授权） | 按 sha256 取固定源码，不入库 | 是 |
 | Ryujinx 树、Ryujinx 子集、直连图形层等共用组件 | 同上表 | 同上表 | 同上表 | 是（安卓单库共用同一份托管代码与原生层） |
 
 ## 已经从出包路径拿掉的 GPL

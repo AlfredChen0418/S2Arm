@@ -30,3 +30,7 @@ graphics/tools/direct/tests/dsh_fn_golden.jsonl merge=union
 # 按款登记表（11-06 维护者：两批普查收批都登记同一款，后合的整支冲突退回）：按行键合并，同键取日期新的、同日取正在合入的一支（后一批）。
 #   合并器 tools/reglist_merge.py，列车启动时登记 merge.s2a-reglist.driver；没登记合并器的克隆退回普通文本合并（照旧可能冲突）
 docs/名单_*/*.tsv merge=s2a-reglist
+# 翻译表（11-09 启动器线：每支新文案都追加在文件尾，同批依次合入时后合的一律冲突退回，#201 #221 #238 一天被顶掉四次）：
+#   合并器 tools/l10n_merge.py 按条目 / 键三方合并（merge=union 会把 JSON 并坏、不报冲突，实测），列车启动时登记 merge.s2a-l10n.driver
+launchers/macos/adapter/Sources/S2ArmAppleAdapter/Resources/Localizable.json merge=s2a-l10n
+launchers/macos/frontend/l10n/*.json merge=s2a-l10n

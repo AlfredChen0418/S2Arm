@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import stat
 import struct
+import sys
 import subprocess
 import threading
 import time
@@ -23,6 +24,23 @@ from types import SimpleNamespace
 
 _jobs = {}
 _jobs_lock = threading.RLock()
+
+
+def win_path(path):
+    """直接调 Win32 的路径参数一律过这里：>240 字符加 \\\\?\\ 前缀（规则同 pack/orch/winlong.long_path；注册表 LongPathsEnabled 关着、
+    进程清单又没声明 longPathAware 时，裸长路径会得 WinError 3 / 123，v0.1.6 玩家 C:\\tool\\game 播种报 roots.py _win_acl 123）。
+    作业层按文件路径装 winlong，不依赖 pack 包在 sys.path 上。"""
+    global _long_path
+    if _long_path is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("s2a_winlong_jobs", Path(__file__).resolve().parents[1] / "orch" / "winlong.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _long_path = module.long_path
+    return _long_path(path)
+
+
+_long_path = None
 
 
 def _api(dll, name, result, *args):
@@ -511,7 +529,7 @@ def open_dir_nofollow(path, parent=None, *, directory=True, security=False):
     absolute = Path(os.path.abspath(path))
     if not absolute.anchor or str(absolute).startswith('\\\\'):
         raise OSError(errno.EINVAL, 'UNC/device paths not accepted by this adapter')
-    handle = _api('kernel32', 'CreateFileW', W.HANDLE, W.LPCWSTR, W.DWORD,
+    handle = _api('kernel32', 'CreateFileW', W.HANDLE, W.LPCWSTR, W.DWORD,   # lp-exempt: 只传卷根（absolute.anchor），其下逐级用相对句柄打开
                   W.DWORD, C.c_void_p, W.DWORD, W.DWORD, W.HANDLE)(
                       absolute.anchor, 0x100081, 3, None, 3, 0x02200000, None)
     if handle == C.c_void_p(-1).value:
@@ -574,3 +592,18 @@ def remove_at(parent, name):
 
 def close(opened):
     opened.close()
+
+
+def vcrt_dir():
+    """随包的 VC++ 运行库目录（Runtime/vcrt，和 Runtime/python 同级）。"""
+    return Path(sys.executable).resolve().parent.parent / "vcrt"
+
+
+def prepare_child_environment():
+    """Windows 上所有子进程都继承这两项：metal.exe 动态依赖 VC++ 运行库，随包的目录进 PATH；缺依赖时只返回退出码，不弹系统错误框。"""
+    if os.name != "nt":
+        return
+    C.windll.kernel32.SetErrorMode(0x0001 | 0x8000)   # SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
+    folder = str(vcrt_dir())
+    if os.path.isdir(folder) and folder not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")

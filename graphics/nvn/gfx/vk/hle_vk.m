@@ -153,8 +153,11 @@ static id<MTLLibrary> g_lib;
 static int g_vk_lb_emu;   // #800：本机 GPU 的采样器 LOD 偏置不生效（gal_samp_caps.h 实测：M3 等；系统早于 26 也算；S2A_SAMP_EMU=1 强制）→ 带偏置的采样器不设偏置，着色器加（vk_lbias.inc）
 static int sh_cmp(const void *a, const void *b) { return memcmp(((const shinfo *)a)->key, ((const shinfo *)b)->key, 16); }
 // 表一行的资源栏（空格分隔 kind:set.binding=slot[*count]，计算着色器另有 w:x.y=z）→ shinfo；离线库表与设备现编（vk_rt.inc）共用
+// strtok_r（11-09 根修）：现编队列 s2a.vk.rt 是并发队列，几支同时编好时各自的 rt_finish 都进这里；strtok 的游标全进程共用一个，
+//   互相踩会丢字段——守望 t_vk_core ㉑ 计算那支丢了 w:（工作组大小），补建判「不是计算着色器或没有工作组大小」、派发被安全网跳过
 static void sh_parse(shinfo *s, char *res) {
-    for (char *t = res ? strtok(res, " ") : NULL; t; t = strtok(NULL, " ")) {
+    char *save = NULL;
+    for (char *t = res ? strtok_r(res, " ", &save) : NULL; t; t = strtok_r(NULL, " ", &save)) {
         char k; unsigned st, b, sl, n = 1;
         if (t[0] == 'w') { unsigned x, y, z; if (sscanf(t, "w:%u.%u=%u", &x, &y, &z) == 3) { s->wg[0] = (uint16_t)x; s->wg[1] = (uint16_t)y; s->wg[2] = (uint16_t)z; } continue; }
         if (sscanf(t, "%c:%u.%u=%u*%u", &k, &st, &b, &sl, &n) < 4 || !n || sl + n > 31 || s->nres == 24) { LOG("[vk] 【红】 cannot parse a resource entry of shader table %s: %s", s->key, t); continue; }

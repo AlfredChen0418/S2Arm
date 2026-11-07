@@ -315,5 +315,9 @@ final class EnvironmentAndInstallTests: XCTestCase {
         XCTAssertEqual(ops(runner), ["installCheck", "installCheck", "install"])
         XCTAssertEqual(runner.starts[2].request["gameId"] as? String, "0100A")
         XCTAssertEqual(installed, InstallResult(device: "维护者 的 iPhone", packFiles: 12, outputPath: "/out/A"))
+        XCTAssertNil(runner.starts[2].request["device"])
+        _ = try await provider.install(gameId: "0100A", teamId: "ABCDE12345", device: "测试 iPhone")
+        XCTAssertEqual(runner.starts[3].request["device"] as? String, "测试 iPhone")
+        XCTAssertEqual(runner.starts[3].request["teamId"] as? String, "ABCDE12345")
     }
 }

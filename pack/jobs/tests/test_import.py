@@ -54,6 +54,21 @@ class ImportTests(JobCase):
         self.assertEqual(terminal["state"], "succeeded")
         self.assertFalse(terminal["result"]["verified"])
 
+    def test_ticket_missing_key_candidate_is_not_evidence_against_keys(self):
+        # #242：库里候选游戏缺票据，同一份格式有效的密钥重新导入要成功、记未验证；再导这款游戏时照报缺票据
+        self.import_keys()
+        self.install_reader_fixture()
+        source = self.root / "source.nsp"
+        source.write_bytes(b"complete fixture")
+        _, terminal = self.worker("import", paths=[str(source)])
+        self.assertEqual(terminal["state"], "succeeded")
+        source.write_bytes(b"ticket fixture")
+        _, terminal = self.worker("keys", path=str(self.c.keys))
+        self.assertEqual(terminal["state"], "succeeded")
+        self.assertFalse(terminal["result"]["verified"])
+        _, terminal = self.worker("import", paths=[str(source)])
+        self.assert_failure(terminal, "ticket_missing")
+
     def test_missing_keys_outdated_keys_and_missing_ticket_are_distinct(self):
         self.install_reader_fixture()
         source = self.root / "source.nsp"

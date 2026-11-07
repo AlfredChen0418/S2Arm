@@ -31,6 +31,116 @@ def state(*tasks, queue=(), error=None):
     return {"tasks": list(tasks), "queue": list(queue), "error": error}
 
 
+class StartFailureTests(unittest.TestCase):
+    def run_start(self, why, stale=False):
+        now = [0]
+        with tempfile.TemporaryDirectory() as root:
+            error = Path(root) / "control.error"
+            def launch(*_args, **_kwargs):
+                error.write_text(why, encoding="utf-8")
+                if not stale:
+                    os.utime(error, (2000, 2000))
+            if stale:
+                error.write_text("上一次的错", encoding="utf-8")
+                os.utime(error, (1000, 1000))
+            def sleep(seconds):
+                now[0] += seconds
+            with mock.patch.object(ctl, "ROOT", root), mock.patch.object(ctl, "WINDOWS", False), \
+                 mock.patch.object(ctl, "info", side_effect=SystemExit("no control")), \
+                 mock.patch.object(ctl.subprocess, "run", side_effect=None if stale else launch), \
+                 mock.patch.object(ctl.time, "time", side_effect=lambda: now[0]), \
+                 mock.patch.object(ctl.time, "sleep", side_effect=sleep), \
+                 self.assertRaises(SystemExit) as caught:
+                ctl.start("/Applications/S2Arm.app")
+        return str(caught.exception.code), now[0]
+
+    def test_reason_is_reported_without_waiting(self):
+        message, waited = self.run_start("Private job root inherits permissions.")
+        self.assertIn("Private job root inherits permissions.", message)
+        self.assertIn("还不存在的路径", message)
+        self.assertEqual(waited, 0)
+
+    def test_other_reason_gets_no_data_root_advice(self):
+        message, _ = self.run_start("地址已被占用")
+        self.assertEqual(message, "控制口没起来：地址已被占用")
+
+    def test_failure_from_an_earlier_start_is_ignored(self):
+        message, waited = self.run_start("", stale=True)
+        self.assertIn("60 秒内控制口没就绪", message)
+        self.assertNotIn("上一次的错", message)
+        self.assertGreaterEqual(waited, 60)
+
+
+class TaskLogTests(unittest.TestCase):
+    def test_build_logs_command_reads_the_nested_stage_log(self):
+        with tempfile.TemporaryDirectory() as root:
+            stage = Path(root) / "logs" / "build-task" / "refresh.log"
+            stage.parent.mkdir(parents=True)
+            stage.write_text("第一行\n第二行\n第三行\n", encoding="utf-8")
+            record = task("build-task", "running", 1)
+            output = io.StringIO()
+            with mock.patch.object(ctl, "ROOT", root), \
+                    mock.patch.object(ctl, "call", return_value=state(record)), \
+                    mock.patch.object(ctl.sys, "argv", ["s2armctl", "logs", "build-task", "--lines", "2"]), \
+                    contextlib.redirect_stdout(output):
+                ctl.main()
+            self.assertIn(str(stage), output.getvalue())
+            self.assertIn("第二行\n第三行", output.getvalue())
+            self.assertNotIn("第一行", output.getvalue())
+
+    def test_game_reference_reads_the_latest_tasks_nested_log(self):
+        with tempfile.TemporaryDirectory() as root:
+            logs = Path(root) / "logs"
+            logs.mkdir()
+            (logs / "old-game.log").write_text("old run", encoding="utf-8")
+            stage = logs / "new" / "extract.log"
+            stage.parent.mkdir()
+            stage.write_text("new build", encoding="utf-8")
+            output = io.StringIO()
+            with mock.patch.object(ctl, "ROOT", root), \
+                    mock.patch.object(ctl, "call", return_value=state(
+                        task("old", "completed", 1, operation="launch"),
+                        task("new", "running", 2))), \
+                    contextlib.redirect_stdout(output):
+                ctl.logs("game", 40)
+            self.assertIn("new build", output.getvalue())
+            self.assertNotIn("old run", output.getvalue())
+
+    def test_newest_log_is_selected_across_flat_and_nested_layouts(self):
+        with tempfile.TemporaryDirectory() as root:
+            logs = Path(root) / "logs"
+            nested = logs / "job" / "refresh.log"
+            nested.parent.mkdir(parents=True)
+            flat = logs / "job-failure.log"
+            nested.write_text("stage", encoding="utf-8")
+            flat.write_text("failure", encoding="utf-8")
+            with mock.patch.object(ctl, "ROOT", root):
+                os.utime(nested, (200, 200))
+                os.utime(flat, (100, 100))
+                self.assertEqual(ctl.task_log("job"), str(nested))
+                os.utime(flat, (300, 300))
+                self.assertEqual(ctl.task_log("job"), str(flat))
+
+    def test_flat_game_log_still_works_and_other_tasks_are_ignored(self):
+        with tempfile.TemporaryDirectory() as root:
+            logs = Path(root) / "logs"
+            logs.mkdir()
+            game = logs / "launch-game.log"
+            game.write_text("game", encoding="utf-8")
+            unrelated = logs / "other" / "refresh.log"
+            unrelated.parent.mkdir()
+            unrelated.write_text("other task", encoding="utf-8")
+            with mock.patch.object(ctl, "ROOT", root):
+                self.assertEqual(ctl.task_log("launch"), str(game))
+                self.assertIsNone(ctl.task_log("missing"))
+
+    def test_log_named_directories_are_not_returned_as_files(self):
+        with tempfile.TemporaryDirectory() as root:
+            (Path(root) / "logs" / "job-empty.log").mkdir(parents=True)
+            with mock.patch.object(ctl, "ROOT", root):
+                self.assertIsNone(ctl.task_log("job"))
+
+
 class WaitTests(unittest.TestCase):
     def run_wait(self, states, operation="build", limit=10):
         now = [0]
@@ -57,6 +167,15 @@ class WaitTests(unittest.TestCase):
                     mock.patch("builtins.print"):
                 ctl.main()
             call.assert_called_once_with("POST", path, body)
+
+    def test_install_passes_team_and_device_only_when_given(self):
+        for argv, body in [(["install", "G"], {"gameId": "G"}),
+                           (["install", "G", "--team", "ABCDE12345"], {"gameId": "G", "teamId": "ABCDE12345"}),
+                           (["install", "G", "--device", "测试 iPhone", "--team", "ABCDE12345"],
+                            {"gameId": "G", "teamId": "ABCDE12345", "device": "测试 iPhone"})]:
+            with mock.patch.object(ctl, "call", return_value={"ok": True}) as call, mock.patch.object(ctl.sys, "argv", ["s2armctl", *argv]), mock.patch("builtins.print"):
+                ctl.main()
+            call.assert_called_once_with("POST", "/install", body)
 
     def test_customize_sends_only_what_was_given(self):
         for argv, body in [(["customize", "G", "--name", "新名"], {"gameId": "G", "name": "新名"}),

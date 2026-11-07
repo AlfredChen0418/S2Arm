@@ -5,7 +5,7 @@
 # 源码按固定版本 + sha256 取，不进仓库；源码包按 sha256 缓存在 ${S2A_BUILD_CACHE:-~/.cache/s2arm-build}/sources/（android/tools/fetch_source.sh）。
 set -euo pipefail
 RID=${1:-osx-arm64}
-VER=1.15.0; SHA=e935eded7d81631a538bfae703fd1e293aad1c7fd3407ba00440c95105d2011e
+VER=1.17.0; SHA=1020f184046187baa2985dbde38e0691f49c44088bca7a1842b0236c6081dc0a
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 source "$ROOT/android/tools/fetch_source.sh"   # 源码包按 sha256 进本机共享缓存（S2A_BUILD_CACHE/sources），命中不联网；下载按进展判挂死
 TCE=$ROOT/tools/toolchain.env; MMAC=$(sed -n 's/^MACOSX_DEPLOYMENT_TARGET=//p' "$TCE"); MIOS=$(sed -n 's/^IPHONEOS_DEPLOYMENT_TARGET=//p' "$TCE")   # 产物下限只取统一工具链那两行
