@@ -505,6 +505,16 @@ class Context:
             paths = [str(runtime / "python/bin"), str(runtime / "bin"), "/usr/bin", "/bin", "/usr/sbin", "/sbin"]
             # App 自带的 C 改写器（pack/rewriter.py 核源码指纹，与引擎不符时不用）：玩家机器零安装
             env["S2A_REWRITER_BUNDLED"] = str(runtime / "bin/s2a-rewrite")
+            # 发版 App 自带已编好的 Mac 宿主（含 C#，S2A_CS=1）：RomFS 解码器或运行时 GLSLC 时不再现编（issue #8 根因：Runtime-only dotnet 编不出）
+            from embedded import artifact
+            try:
+                bundled_host = artifact(self, "S2ArmGame.app")
+                if bundled_host and (bundled_host / "Contents/MacOS/s2arm-host").is_file() and (bundled_host / "Contents/MacOS/libs2a_vaguard.dylib").is_file():
+                    env["S2A_BUNDLED_HOST"] = str(bundled_host / "Contents/MacOS/s2arm-host")
+                    env["DM_GLSLC_HOST"] = str(bundled_host / "Contents/MacOS/s2arm-host")
+                    env["DM_OODLE_HOST"] = str(bundled_host / "Contents/MacOS/s2arm-host")  # LZ5 / OodleLZ 解码器（uepak.oodle_host_find，缺省回退 build/s2arm-host 在发版包里不存在）
+            except Exception:
+                pass   # 源码树开发构建：没有内置宿主
         else:
             paths = [str(Path(os.sys.executable).parent), str(runtime / "bin"), "/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin", env.get("PATH", "")]
         env["PATH"] = os.pathsep.join(dict.fromkeys(paths))

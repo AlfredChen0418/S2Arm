@@ -49,18 +49,23 @@ GN=$("$VPY" "$R/translator/glslc_offline.py" --need "$W" 2> /dev/null)
 # RomFS 里有没有 Unreal 包：经 graphics/nvn/tools/romfs_list.py（仓库里唯一的 RomFS 遍历；同 find -iname … -print -quit）
 source "$H/decoder_need.sh"   # 要不要游戏自带解码器（RomFS 容器判据，只此一处）
 if decoder_need "$R" "$W/romfs" || [ "$GN" = yes ]; then
-  # GLSLC 工具模式与 LZ5 解码器（勇者斗恶龙 XI S）要 C# 服务层（SDK 初始化连系统服务，runtime/src/host_main.c）；只有 OodleLZ 时不带 C#
-  #   （11-01：原先只按 GLSLC 判，勇者斗恶龙 XI S 普查里 LZ5 起不来；translator/oodle_needs_sdk.py 按 main 符号表判，同宿主）
-  HCS=1
-  if [ "$GN" != yes ]; then
-    LZ=$("$VPY" "$R/translator/oodle_needs_sdk.py" "$W/exefs") || { echo "【红】$G 判解码器要不要 C# 失败（oodle_needs_sdk.py 读不了 $W/exefs/main）"; root_abort "$G" "$TAG"; exit 1; }
-    [ "$LZ" = yes ] || HCS=0
+  # 发版 App 自带已编好的宿主（pack/jobs/core.py 设 S2A_BUNDLED_HOST）：不再现编（issue #8 根因：Runtime-only dotnet 编不出）
+  if [ -n "${S2A_BUNDLED_HOST:-}" ] && [ -f "$S2A_BUNDLED_HOST" ]; then
+    echo "[s2a] 使用发版 App 内置 Mac 宿主：$S2A_BUNDLED_HOST"
+  else
+    # GLSLC 工具模式与 LZ5 解码器（勇者斗恶龙 XI S）要 C# 服务层（SDK 初始化连系统服务，runtime/src/host_main.c）；只有 OodleLZ 时不带 C#
+    #   （11-01：原先只按 GLSLC 判，勇者斗恶龙 XI S 普查里 LZ5 起不来；translator/oodle_needs_sdk.py 按 main 符号表判，同宿主）
+    HCS=1
+    if [ "$GN" != yes ]; then
+      LZ=$("$VPY" "$R/translator/oodle_needs_sdk.py" "$W/exefs") || { echo "【红】$G 判解码器要不要 C# 失败（oodle_needs_sdk.py 读不了 $W/exefs/main）"; root_abort "$G" "$TAG"; exit 1; }
+      [ "$LZ" = yes ] || HCS=0
+    fi
+    # 引擎 / 整机缓存在带空格的目录（启动器：~/Library/Application Support）时 make 按空格拆路径（11-01 勇者斗恶龙 XI S：子 make graphics/metal 的 ROOT 带空格，
+    #   No rule to make target `Support/S2Arm/engines/…/tools/toolchain.env'）：-C、ROOT 与 C# / vpx / opus 缓存一律换无空格别名（同 pack/ipa.sh）
+    ( source "$R/tools/nospace.sh"; RN=$(s2a_nospace "$R") || { echo "建不了引擎目录的无空格别名（${R}）"; exit 1; }
+      for v in S2A_CS_CACHE S2A_VPX_CACHE S2A_OPUS_CACHE; do [ -n "${!v:-}" ] || continue; mkdir -p "${!v}" && a=$(s2a_nospace "${!v}") && export "$v=$a" || { echo "建不了 $v 的无空格别名"; exit 1; }; done
+      S2A_CS=$HCS bash "$R/tools/host_build.sh" --tree "$RN" ROOT="$RN" ) > "$W/host_build.log" 2>&1 || { echo "【红】$G 编译 Mac 宿主失败（$(tail -2 "$W/host_build.log" | tr '\n' ' ' | cut -c1-200)）"; root_abort "$G" "$TAG"; exit 1; }
   fi
-  # 引擎 / 整机缓存在带空格的目录（启动器：~/Library/Application Support）时 make 按空格拆路径（11-01 勇者斗恶龙 XI S：子 make graphics/metal 的 ROOT 带空格，
-  #   No rule to make target `Support/S2Arm/engines/…/tools/toolchain.env'）：-C、ROOT 与 C# / vpx / opus 缓存一律换无空格别名（同 pack/ipa.sh）
-  ( source "$R/tools/nospace.sh"; RN=$(s2a_nospace "$R") || { echo "建不了引擎目录的无空格别名（${R}）"; exit 1; }
-    for v in S2A_CS_CACHE S2A_VPX_CACHE S2A_OPUS_CACHE; do [ -n "${!v:-}" ] || continue; mkdir -p "${!v}" && a=$(s2a_nospace "${!v}") && export "$v=$a" || { echo "建不了 $v 的无空格别名"; exit 1; }; done
-    S2A_CS=$HCS bash "$R/tools/host_build.sh" --tree "$RN" ROOT="$RN" ) > "$W/host_build.log" 2>&1 || { echo "【红】$G 编译 Mac 宿主失败（$(tail -2 "$W/host_build.log" | tr '\n' ' ' | cut -c1-200)）"; root_abort "$G" "$TAG"; exit 1; }
 fi
 DM_GAMES_DIR="$(dirname "$PDIR")${DM_GAMES_DIR:+:$DM_GAMES_DIR}" DM_GAMES_FIRST=1 DM_GAME=$TID bash "$R/graphics/tools/direct/extract.sh" "$W" "$W/extract" > "$W/extract.log" 2>&1; xrc=$?
 # 退 3 = 只有直连用的那两份抽不出（extract.sh 头注释：Unreal 存档读不开、认不出着色器容器、运行时现编的 GLSL 没抓到输出、拆分出错……）：

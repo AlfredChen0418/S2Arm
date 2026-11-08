@@ -94,6 +94,10 @@ rin 'echo r4 > romfs/i'; o=$(FAKE_GLSLC=1 S 2>&1); r=$?; c=$(cur)
 ck "要离线编 → 先编宿主、glslc_offline 拿到 J（与 S2Arm 抽取并行时分到 6 − 3 = 3）与产物根、shader_split 拿到 DM_GLSLC_CAPTURE=extract/glslc_capture（rc=${r}，$(grep ^splitcap $T/calls | tail -1)）" '[ $r = 0 ] && [ "$(grep -c ^host $T/calls)" = $((h0 + 1)) ] && grep "^glslc" $T/calls | tail -1 | grep -q "^glslc 3 " && grep ^splitcap $T/calls | tail -1 | grep -q "/extract/glslc_capture$" && [ -f $c/extract/glslc_capture/glslc_0.glslc ]'
 rin 'echo r5 > romfs/j'; b=$(cur); o=$(FAKE_GLSLC=1 FAKE_FAIL=glslc S 2>&1); r=$?
 ck "离线编失败 → 照常提交：退出 0（rc=${r}）、现行换新、direct_gap.txt 写「GLSLC 离线编失败」" '[ $r = 0 ] && [ "$(cur)" != "$b" ] && grep -q "直连库失败：GLSLC 离线编失败（GLSLC 工具模式失败（1/1 路）：宿主退出 134；" "$(cur)/extract/direct_gap.txt"'
+# 内置宿主：发版 App 自带已编好的宿主（pack/jobs/core.py 设 S2A_BUNDLED_HOST）→ 不编宿主（issue #8 根因修复）
+rin 'echo r6 > romfs/k'; h1=$(grep -c ^host $T/calls); touch $T/fake_host; o=$(FAKE_GLSLC=1 S2A_BUNDLED_HOST=$T/fake_host S 2>&1); r=$?
+ck "有内置宿主（S2A_BUNDLED_HOST）→ 不编宿主、跳过 host_build（编宿主 $h1 → $(grep -c ^host $T/calls) 次，$(echo "$o" | grep -a '使用发版' | cut -c1-60)）" '[ $r = 0 ] && [ "$(grep -c ^host $T/calls)" = "$h1" ] && [[ "$o" == *"使用发版 App 内置 Mac 宿主"* ]]'
+# P2-53 合成输入基线提交：回到原来的测试位置
 # #1233 P2-53：同路径同长度变内容，两个真实阶段必须各自失效并调用后端；不改原断言。
 mkdir -p "$(cur)/aoc/1"
 rin "printf 'a\\n' > romfs/p253-small.bin"; printf 'd\n' > "$(cur)/aoc/1/p253-small.bin"
