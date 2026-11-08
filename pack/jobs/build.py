@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import uuid
 import community
 from core import Failure, atomic, clone, contained, digest, read, tree_hash

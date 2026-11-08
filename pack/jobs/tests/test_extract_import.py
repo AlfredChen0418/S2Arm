@@ -80,6 +80,23 @@ class ExtractImportTests(JobCase):
         self.assertEqual(pkg["path"], str(extract.resolve()))
         self.assertEqual((self.c.library / "games" / game["id"] / "cover.jpg").read_bytes(), b"EXTRACT_ICON")
 
+    def test_loose_folder_reaches_ns2_dump(self):
+        # 玩家 #9：已解包目录出包走 extract_folder 的 loose 分支，用到 tempfile（曾漏 import，NameError）。手算期望：起 ns2_dump.py 一次，第一个位置参数 = 临时目录，里面 base 是指向源目录的链接
+        import os
+        import tempfile as tf
+        from types import SimpleNamespace
+        from unittest import mock
+        import build
+        with tf.TemporaryDirectory() as d:
+            root = Path(d); src = root / "src"; src.mkdir(); (root / "priv").mkdir(); calls = []
+            def run(args, log, env):
+                stage = Path(args[4])
+                calls.append((Path(args[3]).name, os.path.islink(stage / "base"), os.path.realpath(stage / "base")))
+            c = SimpleNamespace(private=root / "priv", engine=root, run=run)
+            with mock.patch.object(build, "source_path", return_value=src), mock.patch.object(build, "reader_program", return_value="r"):
+                build.extract_folder(c, dict(name="G"), [dict(format="loose")], root / "x", {}, root)
+            self.assertEqual(calls, [("ns2_dump.py", True, os.path.realpath(src))])
+
     def test_loose_import_without_keys(self):
         # 通用解包目录（有 exefs/main、exefs/main.npdm 和 romfs/ 目录，没有 unpack.tsv）：不要密钥能导入，format=loose，
         # 程序号从 main.npdm 读，名称取 exefs/control.nacp 或目录名

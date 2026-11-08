@@ -109,6 +109,8 @@ def check(repo):
         problems.append(f'规则来源：{exc}')
         return problems
     for name in DOCUMENTS:
+        if name == 'docs/协作循环.md' and not (repo / name).is_file():
+            continue   # 内部开发流程文档不进公开快照
         text = (repo / name).read_text(encoding='utf-8')
         if text.count(BEGIN) != 1 or text.count(END) != 1:
             problems.append(f'{name}: 缺少唯一生成规则块')
