@@ -527,6 +527,12 @@ class Profiles(unittest.TestCase):
             stage.select(self.root, self.out)
         stage.select(self.root, self.out, version="v0")
 
+    def test_base_only_without_sidecar_uses_base_version(self):
+        # #36：Mac 打包不写旁注，只有本体的游戏。手算期望：update 空、base=4096 → v4096
+        (self.root / "unpack.tsv").write_text("title_id\t" + TID + "\nupdate\t\nbase\t4096\n")
+        (self.root / "direct-profile-input.json").unlink(missing_ok=True)
+        self.assertEqual(stage.options(self.root, TID, None, None, None)["version"], "v4096")
+
     def test_stage_metadata_identity_and_duplicates_reject(self):
         p = self.root / "unpack.tsv"
         for text in ("title_id\t0100000000000000\nupdate\t65536\n",

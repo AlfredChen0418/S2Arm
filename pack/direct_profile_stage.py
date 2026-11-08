@@ -44,6 +44,8 @@ def options(root, tid, version, display, name):
         dp.require(raw.isdecimal(), "invalid update content version")
         dp.require(version is None or version == f"v{raw}", "version differs from unpack.tsv update")
         version = f"v{raw}"
+    if version is None and metadata.get("base", "").isdecimal():   # 没有更新取本体版本（同 direct_profile_input.content_version）。#36：Mac 打包不写旁注，只有本体的游戏走到这里被拒，
+        version = f"v{metadata['base']}"                            #   修在消费端，已种好的产物根重试也能过
     dp.require(version is not None, "missing content version: pass --version v<integer>")
     nacp_name, nacp_display = nacp_identity(root)
     return {"version": version, "display": display or metadata.get("display_version") or nacp_display or "unknown",
