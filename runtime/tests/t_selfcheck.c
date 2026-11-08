@@ -4,6 +4,7 @@
 #include <string.h>
 int s2a_ent_true(const char *xml, size_t n, const char *key);
 void s2a_selfcheck_explain(char *out, size_t cap, int win_ok, int mem_ok, int ent, uint64_t avail_mb, uint64_t phys_mb, uint64_t va_top, uint64_t win_mb, uint64_t need_mb, int as_type);
+int s2a_selfcheck_mem_blocks(int mem_ok, int ent);
 void s2a_selfcheck_screen(int win_ok, int mem_ok, int ent, uint64_t need_mb, int as_type, const char **title, const char **body);
 static int bad;
 static void eqi(int got, int want, const char *what) { if (got != want) { printf("✗ %s：%d，应 %d\n", what, got, want); bad++; } else printf("✓ %s\n", what); }
@@ -57,6 +58,11 @@ int main(void) {
     eqs(o, "已签『提高内存上限』权限，读不到本款的 main.npdm，不知道要多大的地址空间（包不完整）。重装或补权限不能解决", "日志：类型 1 跨度 0 → 同类型 3 的原措辞");
     s2a_selfcheck_explain(o, sizeof o, 0, 1, 1, 6144, 8192, 0x8000000000ull, 65536, 0, 3);
     eqs(o, "已签『提高内存上限』权限，读不到本款的 main.npdm，不知道要多大的地址空间（包不完整）。重装或补权限不能解决", "日志：类型 3 跨度 0 → 原措辞");
+    // #29 内存门槛只拦没签权限的（手算：签了 / 读不到都放行；够的不拦）
+    eqi(s2a_selfcheck_mem_blocks(0, 0), 1, "内存不够 + 没签权限 → 拦");
+    eqi(s2a_selfcheck_mem_blocks(0, 1), 0, "内存不够 + 已签 → 放行");
+    eqi(s2a_selfcheck_mem_blocks(0, -1), 0, "内存不够 + 读不到权限（按已签）→ 放行");
+    eqi(s2a_selfcheck_mem_blocks(1, 0), 0, "内存够 + 没签 → 不因内存拦");
     printf(bad ? "✗ t_selfcheck：%d 处不符\n" : "✓ t_selfcheck：0 处不符\n", bad);
     return bad != 0;
 }

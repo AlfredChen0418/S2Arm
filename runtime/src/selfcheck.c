@@ -69,6 +69,8 @@ void s2a_selfcheck_screen(int win_ok, int mem_ok, int ent, uint64_t need_mb, int
     if (!win_ok && !need_mb) { *title = S2A_SELFCHECK_PKG_TITLE; *body = S2A_SELFCHECK_PKG_BODY; return; }
     *title = S2A_SELFCHECK_DEVICE_TITLE; *body = S2A_SELFCHECK_DEVICE_BODY;
 }
+// 内存门槛只拦没签权限的（#29：4500 MB 是「有没有签权限」的分界，不是游戏的需求；6 GB 机型签了权限也可能不到，不能因此把所有游戏挡住）
+int s2a_selfcheck_mem_blocks(int mem_ok, int ent) { return !mem_ok && ent == 0; }
 static const char *g_scr_title = "", *g_scr_body = "";
 void s2a_selfcheck_page(const char **title, const char **body) { *title = g_scr_title; *body = g_scr_body; }
 
@@ -103,10 +105,13 @@ int s2a_selfcheck(void) {
     // 「自检：窗口 <状态>（」格式下游在解析（tools/health_table.py、score_cells.py）：占到 / 不够
     LOG("自检：窗口 %s（%#llx +%llu MB，本款要 %llu MB，本机最多 %llu MB）｜可用内存 %llu MB（需 ≥ %d MB）｜物理内存 %llu MB｜地址上限 %#llx｜『提高内存上限』权限 %s｜系统给本 App 的上限约 %llu MB（占用 %llu + 可用 %llu）",
         win_ok ? "占到" : "不够", (unsigned long long)wb, (unsigned long long)(ws >> 20), (unsigned long long)(need >> 20), (unsigned long long)(fit >> 20), (unsigned long long)avail, MEM_NEED_MB, (unsigned long long)pm, (unsigned long long)top, es, (unsigned long long)(foot + avail), (unsigned long long)foot, (unsigned long long)avail);
-    if (!win_ok || !mem_ok) {
+    int mem_block = s2a_selfcheck_mem_blocks(mem_ok, ent);
+    if (!mem_ok && !mem_block)
+        LOG("【黄】这台手机内存偏小（系统给本 App 约 %llu MB，可用 %llu MB），大游戏可能被系统结束；已放行起局", (unsigned long long)(foot + avail), (unsigned long long)avail);
+    if (!win_ok || mem_block) {
         int ast = s2a_window_astype();   // main.npdm 的地址空间类型（跨度为 0 时 vawin.c 读的，-1 = 没读到）
-        s2a_selfcheck_explain(g_hint, sizeof g_hint, win_ok, mem_ok, ent, avail, pm, top, fit >> 20, need >> 20, ast);
-        s2a_selfcheck_screen(win_ok, mem_ok, ent, need >> 20, ast, &g_scr_title, &g_scr_body);
+        s2a_selfcheck_explain(g_hint, sizeof g_hint, win_ok, !mem_block, ent, avail, pm, top, fit >> 20, need >> 20, ast);
+        s2a_selfcheck_screen(win_ok, !mem_block, ent, need >> 20, ast, &g_scr_title, &g_scr_body);
         LOG("【红】自检不过：%s", g_hint); ok = 0;
     }
 #else
