@@ -173,8 +173,11 @@ public sealed partial class EnvironmentWindow : Window
             foreach (var item in report.Checks)
             {
                 var row = new StackPanel { Spacing = 6 };
-                row.Children.Add(Label(T("environment.status." + item.Status) + " · " + item.Name, 16));
-                if (item.Code is not null)
+                var advisory = item.Status != "ok" && !item.Blocking;   // 只提示、不挡流程
+                var heading = Label(T(advisory ? "environment.status.advisory" : "environment.status." + item.Status) + " · " + item.Name, 16);
+                if (advisory) heading.Foreground = Brush.Parse("#FFC857");
+                row.Children.Add(heading);
+                if (item.Code is not null && !advisory)
                 {
                     row.Children.Add(Label(T("errors." + item.Code + ".title")));
                     row.Children.Add(Label(T("errors." + item.Code + ".detail")));

@@ -239,12 +239,12 @@ class WinInstall(unittest.TestCase):
         with patch.object(self.m, "win_install_mod", return_value=w):
             r = self.m.readiness_windows(self.c, "G")
         login = r["items"][2]
-        self.assertEqual((login["ok"], login["action"], login["url"]), (False, "openImpactor", None)); self.assertFalse(r["ready"])
+        self.assertEqual((login["ok"], login["action"], login["url"]), (False, "openImpactor", None)); self.assertTrue(r["ready"])
         (d / impactor.PLUMESIGN_EXE).unlink()
         with patch.object(self.m, "win_install_mod", return_value=w):
             r = self.m.readiness_windows(self.c, "G")
         imp = r["items"][1]
-        self.assertEqual((imp["ok"], imp["url"], imp["action"]), (False, None, None)); self.assertIn("安装包不完整", imp["detail"])
+        self.assertFalse(imp["ok"]); self.assertTrue(r["ready"])   # 随包不全就接着认玩家自己装的；认不出也只提示
         (d / impactor.PLUMESIGN_EXE).write_bytes(b"x")
         w2 = FakeW([("U1", "USB", 3)]); self.go(w2)
         self.assertEqual(w2.calls[0].plumesign, str(d / impactor.PLUMESIGN_EXE))
@@ -287,7 +287,7 @@ class WinInstall(unittest.TestCase):
         with patch.object(self.m, "win_install_mod", return_value=FakeW([("U1", "USB", 3)], impactor="missing")):
             r = self.m.readiness_windows(self.c, "G")
         self.assertEqual([(i["id"], i["ok"]) for i in r["items"]], [("package", True), ("impactor", False), ("connected", True)])
-        self.assertEqual((r["ready"], r["device"]), (False, "U1"))
+        self.assertEqual((r["ready"], r["device"]), (True, "U1"))   # 缺 Impactor 只提示，直接去签名
         # 缺 Impactor 那一项带官方发布页（启动器按钮），其余项没有链接
         self.assertEqual([i["url"] for i in r["items"]], [None, "https://github.com/claration/impactor/releases/tag/v2.7.2", None])
         with patch.object(self.m, "win_install_mod", return_value=FakeW([("U1", "USB", 3)])):

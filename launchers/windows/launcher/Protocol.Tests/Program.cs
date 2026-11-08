@@ -101,6 +101,13 @@ RejectResource("""[{"id":"action.check","zh-Hans":"检查"}]""", "missing Englis
 RejectResource("""[{"id":"action.check","zh-Hans":" ","en":"Check"}]""", "empty Chinese");
 RejectResource("""[{"id":"","zh-Hans":"检查","en":"Check"}]""", "empty id");
 RejectResource("{}", "non-array items");
+var advisory = EnvironmentReport.Parse("""
+{"schema":1,"ready":true,"checks":[
+ {"id":"impactor","name":"Impactor","status":"missing","ok":false,"blocking":false,"message":"not found","source":"s","requiredFor":["install"],"group":"system","code":"impactor_missing","action":"get it"}
+]}
+""", 0);
+Check(advisory.Ready && !advisory.Checks[0].Blocking, "signing tool is advisory and does not block");
+Check(report.Checks[1].Blocking, "reports without the field still block on anything not ok");
 LibraryJobCases.Run(Check);
 PackCases.Run(Check);
 await WindowsLibraryCases.Run(Check);

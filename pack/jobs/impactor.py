@@ -116,11 +116,8 @@ def status(online=False, resources=None):
     """resources = 启动器目录（发版）：只认随包那份——在 = 实测版本就绪；缺 = 安装包不完整（impactor_missing，给重装，不再给下载页）。
     没给（源码树 / 命令行）：照旧找玩家自己放的 Impactor"""
     b = bundled(resources)
-    if b is not None:
-        r = {'tested': TESTED, 'download': None, 'path': b.get('impactor'), 'version': TESTED if b else None, 'bundled': True}
-        r.update(verdict='ok', code=None) if b else r.update(verdict='missing', code='impactor_missing')
-        if r['code']: r['next'] = recovery(r['code'], packaged=True)
-        return r
+    if b:   # 随包那份不在就接着找玩家自己装的，都认
+        return {'tested': TESTED, 'download': None, 'path': b['impactor'], 'version': TESTED, 'bundled': True, 'verdict': 'ok', 'code': None}
     found = None
     for c in candidates():
         name, ver = exe_version(c)

@@ -9,7 +9,7 @@ public sealed class EnvironmentProtocolException(string message, Exception? inne
     : Exception(message, inner);
 
 public sealed record EnvironmentCheck(
-    string Id, string Name, string Status, string Message, string? Code, string? Action, Uri? OfficialUrl)
+    string Id, string Name, string Status, string Message, string? Code, string? Action, Uri? OfficialUrl, bool Blocking = false)
 {
     // Recovery text is displayed verbatim; it is never interpreted as a command or URL.
     public bool HasAction => !string.IsNullOrWhiteSpace(Action);
@@ -56,7 +56,8 @@ public sealed record EnvironmentReport(
                 if (status == "ok" && url is not null)
                     throw new EnvironmentProtocolException("Successful environment check has an official action.");
                 checks.Add(new EnvironmentCheck(id, RequiredText(item, "name"), status,
-                    RequiredText(item, "message"), code, action, url));
+                    RequiredText(item, "message"), code, action, url,
+                    item.TryGetProperty("blocking", out var blocking) ? blocking.GetBoolean() : status != "ok"));
             }
 
             EnvironmentError? error = null;

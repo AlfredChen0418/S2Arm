@@ -21,7 +21,10 @@ public sealed partial class EnvironmentWindow
         (catalog.Games.All(g => g.Hidden) && welcomeGameId == null) ||
         welcomeGameId != null;
 
-    private bool PcReady => report is { Ready: true };
+    // 检查本身没做成不等于环境有问题：不拦玩家，真缺东西时出包会报具体原因
+    private bool EnvironmentUnknown => !busy && (report is { Error: not null } ||
+        (report is null && summaryKey is "process.start_failed" or "protocol.invalid_report" or "process.interrupted" or "environment.failed"));
+    private bool PcReady => report is { Ready: true } || EnvironmentUnknown;
     private bool GamesChosen => pendingImportPaths.Length > 0 || welcomeGameId != null;
     private bool KeysSettled => welcomeGameId != null ||
         (catalog?.KeysReady == true && !keysRejected) ||
@@ -293,7 +296,7 @@ public sealed partial class EnvironmentWindow
         }
         panel.Children.Add(Muted(T("welcome.win.step.pc.what")));
         // 随包项先列；Metal 编译器要玩家自己装，放最后（OrderBy 稳定，其余顺序不变）
-        foreach (var item in report.Checks.Where(c => c.Status != "ok").OrderBy(c => c.Id == "metal" ? 1 : 0))
+        foreach (var item in report.Checks.Where(c => c.Blocking).OrderBy(c => c.Id == "metal" ? 1 : 0))
         {
             var row = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
             row.Children.Add(new TextBlock { Text = item.Name, FontSize = 14.5, FontWeight = FontWeight.SemiBold,

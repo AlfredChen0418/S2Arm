@@ -37,6 +37,8 @@ REQUEST_FIELDS = {"schema", "python", "targetDir", "requiredFreeBytes", "metal",
                   "anisette", "offline", "catalog", "gameId", "library", "resources"}
 PACK = "pack/orch/oneclick_win.py:env_items"   # 出包件自检的唯一来源（随包运行时 / 预编件 / 预编壳…），同 oneclick_win --check
 PACK_OWN = {"python", "metal"}
+# 只有签名装机才用：不是导入和出包的前提，缺了或认不出都只提示，装机时真失败再说具体原因
+SIGNING_ONLY = {"impactor", "anisette", "apple_driver", "apple_usb"}
 OFFICIAL = {"metal": "https://developer.apple.com/metal/tools/",                 # 苹果 Metal Developer Tools for Windows
             "apple_driver": "https://apps.microsoft.com/detail/9np83lwlpz9k",    # 微软商店 Apple Devices
             "anisette": "https://apps.microsoft.com/detail/9pktq5699m62"}        # 微软商店 iCloud（本机设备信息，不用公共服务器）   # 这两项本模块核得更细（钉版依赖、Metal 版本对锁），出包件那份不重复列
@@ -277,7 +279,7 @@ class NativeProbe:
             # 启动器目录在就只认随包那份；不传（源码树 / 命令行）才找玩家自己放的
             resources = options.get("resources")
             st = install_win.impactor.status(resources=resources)
-            bundled = install_win.impactor.bundled(resources)
+            bundled = install_win.impactor.bundled(resources) or None   # 随包那份不在就认玩家自己装的
             return {"verdict": st["verdict"], "version": st.get("version"), "tested": st["tested"], "download": st["download"],
                     "plumesign": bool(bundled.get("plumesign")) if bundled is not None else bool(install_win.plumesign_path()),
                     "bundled": bundled is not None}
@@ -576,8 +578,7 @@ def _impactor(probe, request):
     try:
         st = probe("impactor", resources=request.get("resources"))
         if st["verdict"] == "missing":
-            return _item("impactor", "Impactor（签名装机）", "missing",
-                         "S2Arm 自带的 Impactor 不在了，安装包不完整：请重新下载并完整解压。" if st.get("bundled") else "没找到 Impactor。", source, url=st["download"])
+            return _item("impactor", "Impactor（签名装机）", "missing", "没找到 Impactor。", source, url=st["download"])
         if st["verdict"] != "ok":
             return _item("impactor", "Impactor（签名装机）", "mismatch",
                          f"现装 {st.get('version')}，实测过的是 {st['tested']}。", source, {"version": st.get("version")}, url=st["download"])
@@ -702,7 +703,7 @@ def _anisette(request, probe):
                     or url.fragment or not url.netloc or url.port is not None and not 0 < url.port < 65536):
                 raise ValueError()
             if source == "public":
-                status, message = "user-selected", "用户显选公共备选；不等可信/健康/生成验证，仍阻挡ready。"
+                status, message = "user-selected", "用户显选公共备选；不等可信/健康/生成验证。"
                 detected = {"source": "public", "selection": "user-selected"}
         except ValueError:
             status, message = "mismatch", "anisette端点格式不可核实，不得含凭据或隐式选择服务。"
@@ -863,6 +864,7 @@ def check(request, *, probe=None):
         # 依赖都靠这个解释器核实：解释器没起来只报一条，并说清真实原因，不列一串「未能核实」
         reason = getattr(exc, "detail", "")
         item = _failure("python", "Python", exc, PREFLIGHT + " + " + RUNTIME)
+        item["probeUnknown"] = True   # 探测没做成不等于坏：不挡流程，真坏时出包会报具体原因
         if reason:
             item["message"] = _safe("S2Arm 自带的 Python 没能运行：" + reason + "。")
         checks.append(item)
@@ -878,7 +880,12 @@ def check(request, *, probe=None):
     for c in checks:   # 玩家自己装的件（许可不许随包）没就绪时给官方下载页
         if not c["ok"] and c["id"] in OFFICIAL and not c.get("url"):
             c["url"] = OFFICIAL[c["id"]]
-    return {"schema": 1, "ready": bool(checks) and all(c["ok"] for c in checks), "checks": checks}
+    for c in checks:
+        signing = c["id"] in SIGNING_ONLY
+        c["requiredFor"] = ["install"] if signing else ["prepare", "ipa"]
+        # 只有「确实缺 / 确实不符」才挡；认不出（unverified / error）和探测失败只提示
+        c["blocking"] = not signing and c["status"] in ("missing", "mismatch") and not c.pop("probeUnknown", False)
+    return {"schema": 1, "ready": bool(checks) and not any(c["blocking"] for c in checks), "checks": checks}
 
 
 def render(report):

@@ -43,7 +43,7 @@ Python 接口：`check(request, *, probe=None)`。默认 `NativeProbe` 获取真
   `pack/orch/oneclick_win.py` 的 `env_items`（即 `oneclick_win --check` 那一份），不另写规则；其中 python、metal 两行由本模块核得更细，不重复列。
 - 签名装机 `impactor`：玩家自装的官方 Impactor 实测版本 + 同版本命令行 plumesign（`pack/jobs/impactor.py`、`pack/orch/install_win.py`）。
 - 作废（随包运行时 + 预编件之后）：`dotnet_sdk`（玩家只要随包的 .NET 运行时）、`rewriter` / `sidecar` 的「待发布」项。
-当前各项均属于 `prepare/ipa` 必需项。状态为 `ok/missing/mismatch/unverified/error/user-selected`；
+只有 Impactor、anisette、Apple 设备服务和 USB 设备属于签名装机（`requiredFor` 为 `install`），不挡导入和出包。其余各项属于 `prepare/ipa`，`blocking` 为真（确实缺或确实不符）才挡；认不出、探测失败只提示。状态为 `ok/missing/mismatch/unverified/error/user-selected`；
 只有所有必需项 `ok` 才能 `ready=true`。一个探测失败仍列出其余项；解释器失败时逐项列依赖未核实。
 摘要和 JSON 使用相同状态，异常不回显命令原始输出、私有路径或配置内容。
 

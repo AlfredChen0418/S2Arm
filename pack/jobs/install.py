@@ -486,7 +486,8 @@ def readiness_windows(c, gid):
     items = []
     def item(key, ok, title, detail, who="human", waiting=False, url=None, action=None):
         wait = waiting and not ok
-        items.append(dict(id=key, ok=bool(ok), waiting=wait, title=title, detail="" if ok or wait else detail, who=who,
+        # 只有没出包才真挡；其余只提示，直接去签名，真失败再给原因
+        items.append(dict(id=key, ok=bool(ok), waiting=wait, blocking=key == "package" and not ok, title=title, detail="" if ok or wait else detail, who=who,
                           url=None if ok else url,   # 玩家自装件的官方下载页（同环境检查 winenv 的 url 字段）：启动器渲染成「打开官方下载页」，不从说明文字里抠链接
                           action=None if ok else action))   # 启动器本地动作（openImpactor：打开随包的 Impactor）；只认枚举，不传路径
     try:
@@ -511,7 +512,7 @@ def readiness_windows(c, gid):
         udids = []
     item("connected", len(udids) == 1, "iPhone 已用数据线连上",
          "连着不止一台 iPhone / iPad：只留要装的那一台。" if len(udids) > 1 else "用数据线把 iPhone 连到这台电脑，解锁手机并点「信任」。")
-    return dict(gameId=gid, items=items, ready=all(i["ok"] for i in items), device=udids[0] if len(udids) == 1 else "", account="")
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", account="")
 
 
 def latest_container(c):

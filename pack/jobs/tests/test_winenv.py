@@ -149,11 +149,39 @@ class EnvironmentTests(unittest.TestCase):
             import impactor
             folder = Path(tmp) / impactor.BUNDLE_DIR; folder.mkdir(parents=True)
             native = self.mod.NativeProbe()
-            self.assertEqual(native("impactor", resources=tmp)["verdict"], "missing")
-            self.assertTrue(native("impactor", resources=tmp)["bundled"])
             (folder / impactor.IMPACTOR_EXE).write_bytes(b"x"); (folder / impactor.PLUMESIGN_EXE).write_bytes(b"x")
             found = native("impactor", resources=tmp)
             self.assertEqual((found["verdict"], found["plumesign"], found["bundled"]), ("ok", True, True))
+
+    def test_signing_tools_never_block_import_or_export(self):
+        for ident, kind, value in (("impactor", "impactor", {"verdict": "missing", "version": None, "tested": "2.7.2", "download": "https://github.com/claration/impactor/releases/tag/v2.7.2", "plumesign": False}),
+                                   ("anisette", "icloud", {"packages": [], "legacy": []})):
+            with self.subTest(ident=ident):
+                self.probe = FakeProbe(); self.capabilities(); self.probe.values[kind] = value
+                report = self.report()
+                item = self.item(report, ident)
+                self.assertFalse(item["ok"])
+                self.assertFalse(item["blocking"])
+                self.assertEqual(item["requiredFor"], ["install"])
+                self.assertTrue(report["ready"])
+
+    def test_unknown_results_only_advise_but_definite_missing_blocks(self):
+        self.capabilities()
+        self.probe.values["python"] = self.mod.ProbeError("超时", detail="90 秒内没有运行完")
+        report = self.report()
+        self.assertFalse(self.item(report, "python")["blocking"])
+        self.assertTrue(report["ready"])
+        self.probe = FakeProbe(); self.capabilities()
+        self.probe.values["python"] = FileNotFoundError()   # 解释器起不来也是认不出
+        self.assertTrue(self.report()["ready"])
+        self.probe = FakeProbe(); self.capabilities()
+        self.probe.values["python"]["packages"]["lz4"] = {"error": "ImportError"}   # 版本认不出
+        self.assertTrue(self.report()["ready"])
+        self.probe = FakeProbe(); self.capabilities()
+        self.probe.values["python"]["packages"]["lz4"] = {"error": "ModuleNotFoundError"}   # 确实缺
+        report = self.report()
+        self.assertTrue(self.item(report, "python.lz4")["blocking"])
+        self.assertFalse(report["ready"])
 
     def test_damaged_import_is_not_reported_as_absent(self):
         self.probe.values["python"]["packages"]["lz4"] = {"error": "ImportError"}
@@ -469,7 +497,7 @@ class EnvironmentTests(unittest.TestCase):
         report = self.report()
         self.assertTrue(self.item(report, "apple_driver")["ok"])
         self.assertEqual(self.item(report, "apple_usb")["status"], "unverified")
-        self.assertFalse(report["ready"])
+        self.assertTrue(report["ready"])   # 手机没连不挡导入和出包
 
     def test_cap_closed_port_never_probes_devices(self):
         self.capabilities()
@@ -542,7 +570,8 @@ class EnvironmentTests(unittest.TestCase):
         c = self.item(report, "anisette")
         self.assertEqual(c["status"], "user-selected")
         self.assertFalse(c["ok"])
-        self.assertFalse(report["ready"])
+        self.assertFalse(c["blocking"])   # 签名才用，只提示
+        self.assertTrue(report["ready"])
         self.assertFalse(any(k == "icloud" for k, _ in self.probe.calls))
 
     def test_cap_default_uses_official_local_only_no_public(self):
