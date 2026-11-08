@@ -73,7 +73,7 @@ RECOVERY = {
     'compilation_failed': '按编译错误检查 Xcode、Metal 组件和 .NET SDK；完成环境检查后重试，保留原有成功版本与存档。',
     'rewrite_failed': '检查程序改写的首个错误；保留原始游戏文件，更新完整引擎后重试，仍失败时反馈摘要。',
     'resource_preparation_failed': '检查资源准备错误和输入目录权限，确认资源完整后重新准备；不要删除存档或上次成功的包。',
-    'package_failed': '原因没认出来：点「复制错误摘要」发给我们。',   # 11-07 维护者：失败摘要不再带阶段 / 红行原文（只进复制诊断），原句「看摘要里的阶段」已无从看起
+    'package_failed': '这一步的失败还没归类：错误摘要里有失败阶段、退出码和错误原文，点「复制错误摘要」发给我们。',   # 11-07 维护者：失败摘要不再带阶段 / 红行原文（只进复制诊断），原句「看摘要里的阶段」已无从看起
     'device_install_failed': '按安装错误检查设备连接与包的有效性；保持手机解锁后重试，保留原 App 和存档。',
     'resource_transfer_failed': '解锁手机并检查数据线及剩余空间后重试资源传输；保留已有 App、存档和电脑上的资源包。',
     'developer_mode_required': '在 iPhone「设置 → 隐私与安全性 → 开发者模式」按系统提示开启开发者模式，再重新安装。',
@@ -315,6 +315,32 @@ def tool_reason(log):
         except OSError:
             pass
     return "工具未提供错误详情，请保留本阶段日志。"
+
+
+def last_output_lines(log, limit=5):
+    """日志末尾最有用的几行（红行优先，保持原顺序），每行截到 300 字；脱敏由调用方（Context.redact）做"""
+    if not log:
+        return []
+    try:
+        with open(log, "rb") as stream:
+            stream.seek(0, 2)
+            stream.seek(max(0, stream.tell() - 16000))
+            lines = [line.strip() for line in stream.read().decode("utf-8", errors="replace").splitlines() if line.strip()]
+    except OSError:
+        return []
+    reds = [i for i, line in enumerate(lines) if "【红】" in line or "error" in line.lower()][-2:]
+    keep = sorted(set(reds) | set(range(max(0, len(lines) - (limit - len(reds))), len(lines))))
+    return [lines[i][-300:] for i in keep]
+
+
+def failure_summary(stage, exit_code, lines):
+    """错误摘要里的失败事实（英文标签，中英文玩家转发都能读；原文已脱敏）。前端原样显示这段"""
+    out = ["Failed stage: " + (stage or "unknown")]
+    if exit_code is not None:
+        out.append("Exit code: %s" % exit_code)
+    if lines:
+        out += ["Last output:"] + ["  " + line for line in lines]
+    return "\n".join(out)
 
 
 def build_tool_failure(args, milestone, log):

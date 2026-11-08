@@ -4948,8 +4948,8 @@
   "en": "Check resource preparation errors and input permissions, then prepare complete resources again. Do not delete saves or the last successful package."
  },
  {
-  "source": "原因没认出来：点「复制错误摘要」发给我们。",
-  "en": "We couldn't recognize the cause. Click “Copy error summary” and send it to us."
+  "source": "这一步的失败还没归类：错误摘要里有失败阶段、退出码和错误原文，点「复制错误摘要」发给我们。",
+  "en": "This failure is not classified yet: the error summary has the failed stage, exit code and error text. Click \"Copy error summary\" and send it to us."
  },
  {
   "source": "磁盘空间不够：准备这个游戏需要更多空余空间。",

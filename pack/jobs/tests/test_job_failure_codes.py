@@ -10,6 +10,7 @@ from pathlib import Path
 import plistlib
 import shlex
 import sys
+import os
 import unittest
 from unittest.mock import patch
 import zipfile
@@ -525,3 +526,18 @@ class RecoveryCoverage(unittest.TestCase):
         self.assertFalse({k for k, v in RECOVERY.items() if v not in sources})
         spec = json.loads((ROOT / "launchers/shared/experience.v1.json").read_text())
         self.assertEqual({i["code"] for i in spec["errors"]["items"]}, set(RECOVERY) | {"artifact_invalid"})
+
+
+class FailureSummaryTest(unittest.TestCase):
+    """摘要带失败事实：手算期望——红行优先、顺序不变、取满 limit 行；没有日志只有阶段"""
+    def test_failure_summary_text(self):
+        import tempfile as tf
+        import errors
+        with tf.NamedTemporaryFile("w", suffix=".log", delete=False, encoding="utf-8") as f:
+            f.write("a\nb\n【红】坏了\nc\nd\ne\n")
+        self.addCleanup(lambda: os.unlink(f.name))
+        lines = errors.last_output_lines(f.name, limit=4)
+        self.assertEqual(lines, ["【红】坏了", "c", "d", "e"])
+        self.assertEqual(errors.failure_summary("解包", 1, lines),
+                         "Failed stage: 解包\nExit code: 1\nLast output:\n  【红】坏了\n  c\n  d\n  e")
+        self.assertEqual(errors.failure_summary("", None, []), "Failed stage: unknown")

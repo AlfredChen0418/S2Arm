@@ -22,7 +22,7 @@ import sys
 import threading
 import time
 import uuid
-from errors import Failure, explain, recovery
+from errors import Failure, explain, failure_summary, last_output_lines, recovery
 
 
 def default_developer_dir():
@@ -407,6 +407,9 @@ class Context:
         internal = getattr(failure, "internal", "")
         if internal:
             result["detail"] = self.redact(internal) + ("\n\n" + result["detail"] if result["detail"] else "")
+        # 失败事实随错误摘要带走（玩家 #5 #8：摘要里只有「工具退出」，看不出阶段、退出码和原文）
+        rc = exit_code if exit_code is not None else (self.last_rc or None if hasattr(self, "last_rc") else None)
+        result["failureSummary"] = failure_summary(self.stage, rc, [self.redact(line, limit=None) for line in last_output_lines(self.last_log)])
         return result
 
     def diagnostic(self, message, code="job_failed", severity="error", exit_code=None, internal=""):
@@ -651,8 +654,10 @@ class Context:
                         failure = build_tool_failure(args, getattr(self, "milestone", None), self.last_log)
                         self.diagnostic(str(failure), failure.code, exit_code=p.returncode, internal=failure.internal)
                         raise failure
-                    self.diagnostic("S2Arm 工具退出，当前阶段未完成。", "tool_exit", exit_code=p.returncode)
-                    raise Failure("S2Arm 工具退出，当前阶段未完成。", code="tool_exit")
+                    from errors import tool_reason
+                    message = f"{self.stage or '这一步'}失败（退出码 {p.returncode}）：{self.redact(tool_reason(self.last_log), limit=240)}"
+                    self.diagnostic(message, "tool_exit", exit_code=p.returncode)
+                    raise Failure(message, code="tool_exit")
             finally:
                 if p.poll() is None:
                     self.signal_child(p, "TERM")
