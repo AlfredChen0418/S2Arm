@@ -399,7 +399,7 @@ public final class S2ArmLauncherModel: ObservableObject {
                 } catch let failure as JobFailure {
                     self.endPlatform(platform, ExportRun.Outcome(state: failure.state, message: failure.errorDescription ?? "", code: failure.code,
                                                                  suggestion: failure.outcome.diagnostics.first?["suggestion"] as? String ?? "",
-                                                                 failureSummary: failure.outcome.diagnostics.first?["failureSummary"] as? String))
+                                                                 failureSummary: failure.outcome.diagnostics.last(where: { ($0["severity"] as? String) == "error" })?["failureSummary"] as? String))
                     if failure.state == .cancelled { throw failure }
                 } catch is CancellationError {
                     self.endPlatform(platform, ExportRun.Outcome(state: .cancelled))
