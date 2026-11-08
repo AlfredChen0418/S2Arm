@@ -35,7 +35,7 @@ public sealed partial class EnvironmentWindow : Window
         Background = Canvas; Foreground = Ink;
         FontFamily = new FontFamily("avares://S2Arm/Assets/Fonts#Manrope");
         Closed += (_, _) => { active?.Cancel(); ClearCovers(); CloseControl(); };
-        Opened += (_, _) => StartControl();
+        Opened += (_, _) => { StartControl(); FinishPendingUpdate(); _ = CheckForUpdateAsync(); };
         Closing += CloseLibraryAsync;
         Closing += ClosePackAsync;
         // 欢迎页进来自动触发环境检查（回到窗口也会重查）
@@ -88,6 +88,7 @@ public sealed partial class EnvironmentWindow : Window
             if (page == "library") libraryFolder = libraryFolderBox.Text ?? "";
             language = languages.SelectedIndex == 0 ? "zh-Hans" : "en"; Render();
         };
+        AddUpdateControls(rightBar);
         rightBar.Children.Add(languages);
 
         // 添加游戏

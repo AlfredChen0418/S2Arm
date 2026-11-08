@@ -210,6 +210,53 @@ public final class JobClient {
         return env
     }
 
+    private func updaterEntry() throws -> URL { try jobEntry().deletingLastPathComponent().appendingPathComponent("updater.py") }
+
+    /// 跑 updater.py 的一条命令，逐行交 JSON；结束时返回最后一行。
+    private func runUpdater(_ command: [String], onEvent: @escaping @Sendable ([String: Any]) -> Void = { _ in }) async -> [String: Any]? {
+        guard let python = try? pythonExecutable(), let entry = try? updaterEntry() else { return nil }
+        final class Last: @unchecked Sendable { let lock = NSLock(); var value: [String: Any]? }
+        let last = Last()
+        return await withCheckedContinuation { continuation in
+            do {
+                _ = try runner.start(executable: python, arguments: ["-B", "-I", entry.path] + command, environment: processEnvironment(),
+                                     onLine: { line in
+                                         guard let object = (try? JSONSerialization.jsonObject(with: line)) as? [String: Any] else { return }
+                                         last.lock.lock(); last.value = object; last.lock.unlock()
+                                         onEvent(object)
+                                     }, onStderr: { _ in },
+                                     onExit: { _ in last.lock.lock(); let value = last.value; last.lock.unlock(); continuation.resume(returning: value) })
+            } catch { continuation.resume(returning: nil) }
+        }
+    }
+
+    /// 有比 current 高的正式版就返回版本号；查不到（没网、GitHub 不通）返回 nil，不打扰玩家。
+    public func updateCheck(current: String) async -> String? {
+        let result = await runUpdater(["check", "--platform", "mac", "--current", current])
+        return result?["available"] as? Bool == true ? result?["version"] as? String : nil
+    }
+
+    /// 下载、校验、解开新版（不碰正在用的安装目录）。最后一行 state = ready 或 failed。
+    public func updatePrepare(current: String, install: String, onEvent: @escaping @Sendable ([String: Any]) -> Void) async -> [String: Any]? {
+        var command = ["prepare", "--platform", "mac", "--current", current, "--private-root", environment.privateRoot.path, "--install", install]
+        if !environment.library.isEmpty { command += ["--protect", environment.library] }
+        return await runUpdater(command, onEvent: onEvent)
+    }
+
+    /// 起独立的替换进程：它等本进程退出后换掉 App 并重启，用的是 updates/ 里的 Python，不依赖安装目录。
+    public func updateApply(ready: [String: Any], install: String, arguments: [String]) throws {
+        guard let python = ready["python"] as? String, let updater = ready["updater"] as? String, let staged = ready["staged"] as? String else {
+            throw JobClientError("更新数据不完整。")
+        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: python)
+        process.arguments = ["-B", "-I", updater, "apply", "--staged", staged, "--install", install, "--pid", String(ProcessInfo.processInfo.processIdentifier),
+                             "--private-root", environment.privateRoot.path] + arguments.map { "--arg=" + $0 }
+        process.environment = processEnvironment()
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice; process.standardInput = FileHandle.nullDevice
+        try process.run()
+    }
+
     /// 最近一次失败作业的错误摘要（作业层 report.py，Mac / Windows 共用）。没有作业记录时返回 nil，由界面退回基本信息。
     public func errorReport(gameID: String?, operations: [String], extra: [String: Any]) async -> String? {
         guard let python = try? pythonExecutable(), let entry = try? jobEntry() else { return nil }

@@ -16,6 +16,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -135,6 +136,12 @@ def bundle(target, shell, tzdata, fonts):
     for f in bft:
         shutil.copy2(f, target / "Fonts" / f.name)
     say("[组装] 随包 Impactor"); bundle_impactor(target / impactor.BUNDLE_DIR)
+    # 覆盖更新读这个版本号：最近的发版 tag（同 Mac build_app 的 CFBundleShortVersionString）
+    tag = subprocess.check_output(["git", "-C", str(ROOT), "describe", "--tags", "--abbrev=0"], text=True).strip()
+    match = re.fullmatch(r"v?(\d+\.\d+\.\d+)", tag)
+    if not match:
+        raise SystemExit(f"【红】最近的 tag {tag} 不是 vX.Y.Z，发版前要先打 tag")
+    (target / "version.txt").write_text(match[1] + "\n", encoding="ascii")
     # 给玩家的 AI 用：控制客户端、手册（同 Mac build_app）；用随包 Python 跑，玩家不用另装
     shutil.copy2(ROOT / "launchers/macos/s2armctl.py", target / "s2armctl.py")
     (target / "s2armctl.cmd").write_text('@"%~dp0Runtime\\python\\python.exe" -X utf8 -B -I "%~dp0s2armctl.py" %*\r\n', encoding="ascii", newline="")

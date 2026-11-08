@@ -123,6 +123,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published private(set) var environmentError: String?
     @Published var showEnvironment = false
     /// 添加游戏 / 放密钥弹窗（ImportSheet）：这两个作业的进度和失败原因都留在弹窗里，不换页。
+    @Published var updateState: UpdateState = .idle
+    var updateReady: [String: Any]?
     @Published var showAddGames = false
     @Published var showKeys = false
     /// 选好了但缺密钥（作业层 keys_missing）：等放入密钥后接着导入。解包好的游戏不要密钥，不经过这里。

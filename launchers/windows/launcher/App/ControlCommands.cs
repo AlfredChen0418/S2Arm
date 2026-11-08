@@ -210,6 +210,19 @@ public sealed partial class EnvironmentWindow
                     _ => ControlReply.Bad("这条任务不能直接重试：照原样再发一次命令（keys / games 带路径）")
                 };
             }
+            case ("POST", "/update"):
+                switch (r.Text("action"))
+                {
+                    case "restart":
+                        if (updateReady is null) return ControlReply.Bad("新版还没下载好", 409);
+                        if (ControlBusy) return Busy();
+                        Dispatcher.UIThread.Post(RestartToUpdate, DispatcherPriority.Background);   // 先把回复发出去，再退出
+                        return ControlReply.Ok();
+                    case "retry":
+                        _ = DownloadUpdateAsync();
+                        return ControlReply.Ok();
+                    default: return ControlReply.Bad("action 只认 restart / retry");
+                }
             case ("POST", "/select"):
                 if (r.Text("gameId") is { } selection) selectedGame = selection;
                 return ControlReply.Ok();
@@ -244,6 +257,7 @@ public sealed partial class EnvironmentWindow
         ("POST /cancel {taskId} | /retry {taskId}", "停掉在跑的作业 / 重试出包、装机任务"),
         ("POST /diagnostics {action:export, path}", "导出诊断包（已脱敏的 zip）"),
         ("POST /environment", "重新检查环境"), ("POST /refresh", "刷新游戏库"),
+        ("POST /update {action:restart|retry}", "更新：restart = 重启并换上已下载好的新版，retry = 重试下载；进度看 GET /state 的 update"),
         ("POST /dismiss", "关掉提示"), ("POST /select {gameId}", "选中一款"),
     ];
 
@@ -280,7 +294,7 @@ public sealed partial class EnvironmentWindow
             ["library"] = connectedFolder, ["games"] = games, ["session"] = session,
             ["tasks"] = ControlJournal.Tasks(privateRoot), ["queue"] = Array.Empty<string>(), ["notice"] = null,
             ["error"] = importError.Length > 0 ? importError : aiControlError.Length > 0 ? aiControlError : null,
-            ["installReadiness"] = install, ["cachedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
+            ["installReadiness"] = install, ["update"] = UpdateStatus, ["cachedAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0,
             ["lastSnapshotPath"] = "", ["windows"] = Array.Empty<object>(),
         };
     }

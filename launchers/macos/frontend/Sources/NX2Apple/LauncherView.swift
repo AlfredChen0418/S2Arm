@@ -76,7 +76,7 @@ struct LauncherView: View {
         .tint(LauncherPalette.cream)
         .font(.manrope(13))
         .frame(minWidth: 900, idealWidth: 1280, minHeight: 680, idealHeight: 900)
-        .onAppear { model.refresh(); model.checkEnvironment(); model.startControl() }
+        .onAppear { model.refresh(); model.checkEnvironment(); model.startControl(); model.finishPendingUpdate(); model.checkForUpdate() }
         .sheet(item: Binding(get: { installFor.map(OptionsTarget.init) }, set: { installFor = $0?.id })) { target in
             InstallView(model: model, gameID: target.id).environmentObject(loc)
         }
@@ -116,6 +116,7 @@ struct LauncherView: View {
         HStack(spacing: 12) {
                 if model.loading { ProgressView().controlSize(.small) }
                 exportPill
+                updateButton
                 // 界面语言：一键切到另一种（同旧启动器 LanguageSwitch，维护者 10-23「不让玩家先选」）；当场生效、记住选择，不用重启（11-07 维护者 验收）
                 Button { loc.choose(loc.lang == .zh ? Lang.en.code : Lang.zh.code) } label: {
                     Label(loc.lang == .zh ? "English" : "简体中文", systemImage: "globe").font(.manrope(12.5, .semibold))
@@ -186,6 +187,26 @@ struct LauncherView: View {
         case .unknown: return LauncherPalette.unbuilt
         case .ready, .readyMac: return LauncherPalette.ready   // readyMac：Mac 上能玩，只差打 iPhone 包的项（环境检查页里单列）
         case .missing: return LauncherPalette.danger
+        }
+    }
+
+    /// 有新版：后台下载时一行小字，下好后一颗「更新并重启」，都在顶栏，不打断玩家。
+    @ViewBuilder private var updateButton: some View {
+        switch model.updateState {
+        case .working(let id, let percent):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.mini)
+                Text(txt(id).replacingOccurrences(of: "{0}", with: "\(percent ?? 0)")).font(.manrope(12)).monospacedDigit().foregroundStyle(.secondary)
+            }
+        case .ready:
+            Button { model.restartToUpdate() } label: {
+                Label(txt(model.busy ? "update.restart.busy" : "update.restart"), systemImage: "arrow.down.circle").font(.manrope(12.5, .semibold))
+            }
+            .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+        case .failed(let code):
+            Button { model.downloadUpdate() } label: { Text(txt("update.retry")).font(.manrope(12.5, .semibold)) }
+                .buttonStyle(LauncherSecondaryButtonStyle()).help(txt("update.error." + code))
+        case .idle: EmptyView()
         }
     }
 

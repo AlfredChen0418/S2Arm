@@ -40,6 +40,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
                                     等该游戏的任务结束：build = Mac 编译（缺省），ipa = iPhone 包；逐段打印进度，失败退出码 1
   targets [--models|--json]         打 iPhone 包的目标设备：当前目标、连着的设备（含设备名）、可选系统；--models 列可选机型
   target probe | target <机型号> <系统大版本>   重新检测连着的设备 / 没连时选机型
+  update [restart|retry]            新版后台下载的状态；restart = 重启并换上已下载好的新版，retry = 重试下载（出包中不能重启）
   errors [游戏号]                    最近失败任务的错误码、原因、建议、日志位置和日志末尾
   retry <任务号> | cancel <任务号>    重试 / 取消任务
   launch <游戏号>                    在 Mac 上启动游戏
@@ -508,6 +509,10 @@ def main():
         print(f'连着的设备 {len(t["connected"])} 台' + ''.join('\n  - ' + lab(d) for d in t['connected']))
         print('可选系统大版本：' + '、'.join(map(str, t['osChoices'])) + f'；可选机型 {len(t["models"])} 种' + ('：' if '--models' in rest else '（加 --models 列全）'))
         if '--models' in rest: [print(f'  {m["productType"]:12} {m["model"]}（{m["gpuArch"]}）') for m in t['models']]
+        return
+    if cmd == 'update':
+        if rest: print(json.dumps(call('POST', '/update', {'action': rest[0]}), ensure_ascii=False))
+        else: print(json.dumps(call('GET', '/state').get('update'), ensure_ascii=False))
         return
     if cmd == 'errors': errors(rest[0] if rest else None); return
     if cmd == 'install-check': install_check(rest[0], '--json' in rest); return

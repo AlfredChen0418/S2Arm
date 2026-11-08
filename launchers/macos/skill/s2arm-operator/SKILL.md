@@ -27,6 +27,10 @@ S2Arm 把玩家**自己的** Switch 游戏导出成能在 iPhone / iPad（同一
 - 还没有的功能：`delete`、`diag pull`。`diag export <输出.zip>` 可用。排查用 `errors` 和 `logs`。
 - 下文里的 Xcode、App Store、macOS 授权框只适用于 Mac。
 
+## 更新
+
+启动器发现新版会在后台下载，玩家数据不受影响。`s2armctl update` 看状态，下好后（state = ready）先问玩家，同意了再 `s2armctl update restart`。出包、装机进行中不能重启。
+
 ## 还没装 S2Arm：从 GitHub 开始
 
 1. 从 GitHub Releases 下最新版 `S2Arm-mac-arm64.dmg`：`gh release download --repo jhaizhou-ops/S2Arm --pattern S2Arm-mac-arm64.dmg`（没有 `gh` 就让玩家打开 https://github.com/jhaizhou-ops/S2Arm/releases/latest 下载）。Windows 玩家不走这份手册。
