@@ -217,6 +217,41 @@ class LaunchArgsTests(unittest.TestCase):
             ctl.main()
         self.assertEqual(posted, {"method": "POST", "path": "/uninstall", "body": {"gameId": "0100535012974000"}})
 
+class ErrorsCommandTests(unittest.TestCase):
+    """errors 命令输出里含 failureSummary（阶段、退出码、原文）。"""
+
+    def _run_errors(self, state):
+        out = io.StringIO()
+        with mock.patch.object(ctl, "call", return_value=state), \
+             contextlib.redirect_stdout(out):
+            ctl.errors()
+        return out.getvalue()
+
+    def test_errors_shows_failure_summary(self):
+        """诊断带 failureSummary 时，errors 命令要把它印出来。"""
+        state = {"tasks": [{"id": "t1", "operation": "ipa", "state": "failed", "started": 1,
+                             "message": "打包失败",
+                             "diagnostics": [{"code": "build_failed", "summary": "编译出错",
+                                              "suggestion": "重装 Xcode", "logPath": None,
+                                              "failureSummary": "Failed stage: compile\nExit code: 1\nLast output:\n  error: foo"}]}],
+                 "error": ""}
+        output = self._run_errors(state)
+        # 期望：failureSummary 内容出现在输出里
+        self.assertIn("Failed stage: compile", output)
+        self.assertIn("Exit code: 1", output)
+        self.assertIn("error: foo", output)
+
+    def test_errors_no_failure_summary_still_works(self):
+        """诊断没有 failureSummary 字段时不出错、不输出多余内容。"""
+        state = {"tasks": [{"id": "t2", "operation": "ipa", "state": "failed", "started": 2,
+                             "message": "打包失败",
+                             "diagnostics": [{"code": "disk_full", "summary": "磁盘不足",
+                                              "suggestion": "释放空间", "logPath": None}]}],
+                 "error": ""}
+        output = self._run_errors(state)
+        self.assertIn("disk_full", output)
+        self.assertNotIn("Failed stage", output)
+
 if __name__ == "__main__":
     unittest.main()
 

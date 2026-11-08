@@ -70,7 +70,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 
 ## 遇到问题怎么办
 
-先看 `s2armctl next`（出错时带 `code` 和处理办法）和 `s2armctl errors <游戏号>`（原因、建议、日志位置和日志末尾）。按下面对号处理。
+先看 `s2armctl next`（出错时带 `code` 和处理办法）和 `s2armctl errors <游戏号>`（原因、建议、日志位置和日志末尾；每条诊断附 failureSummary：失败阶段、退出码、最后几行原文）。按下面对号处理。
 
 ### 环境（这台 Mac）
 

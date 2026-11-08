@@ -347,6 +347,8 @@ public sealed partial class EnvironmentWindow
                 foreach (var key in new[] { "summary", "suggestion" })
                     if (diagnostic.TryGetProperty(key, out var message) && message.ValueKind == JsonValueKind.String)
                         text += "\n" + message.GetString();
+                if (diagnostic.TryGetProperty("failureSummary", out var failureSummary) && failureSummary.ValueKind == JsonValueKind.String)
+                    text += "\n" + failureSummary.GetString();
             }
         if (!string.IsNullOrWhiteSpace(job.Output.StandardError)) text += "\n" + job.Output.StandardError;
         return text;

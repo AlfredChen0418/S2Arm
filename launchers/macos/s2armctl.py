@@ -452,6 +452,8 @@ def errors(game=None):
     print(f'任务 {t["id"]}  {t["operation"]}  游戏 {t.get("gameId") or "-"}  {t["state"]}  {t.get("message") or ""}')
     for d in t.get('diagnostics') or []:
         print(f'- 错误码 {d.get("code")}  阶段 {d.get("stage") or "-"}\n  原因：{d.get("summary")}\n  建议：{d.get("suggestion")}\n  日志：{d.get("logPath") or "-"}')
+        if d.get('failureSummary'):
+            print('  ' + d['failureSummary'].replace('\n', '\n  '))
     logs = [d['logPath'] for d in t.get('diagnostics') or [] if d.get('logPath') and os.path.isfile(d['logPath'])]
     if logs:
         print(f'--- {logs[-1]} 末尾 ---'); print(''.join(open(logs[-1], errors='replace').readlines()[-40:]).rstrip())

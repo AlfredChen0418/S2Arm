@@ -24,6 +24,8 @@ struct ExportRun: Equatable {
         var suggestion = ""
         /// 这个平台用了多久（秒）。
         var seconds: Double = 0
+        /// 作业层给的失败事实（阶段、退出码、原文，英文标签）；没有为 nil。
+        var failureSummary: String?
     }
     let platforms: [ExportPlatform]
     /// 正在做的那个平台（platforms 的下标）。
@@ -396,7 +398,8 @@ public final class S2ArmLauncherModel: ObservableObject {
                                                                  packBytes: (r.raw["packBytes"] as? NSNumber)?.int64Value))
                 } catch let failure as JobFailure {
                     self.endPlatform(platform, ExportRun.Outcome(state: failure.state, message: failure.errorDescription ?? "", code: failure.code,
-                                                                 suggestion: failure.outcome.diagnostics.first?["suggestion"] as? String ?? ""))
+                                                                 suggestion: failure.outcome.diagnostics.first?["suggestion"] as? String ?? "",
+                                                                 failureSummary: failure.outcome.diagnostics.first?["failureSummary"] as? String))
                     if failure.state == .cancelled { throw failure }
                 } catch is CancellationError {
                     self.endPlatform(platform, ExportRun.Outcome(state: .cancelled))
@@ -468,6 +471,7 @@ public final class S2ArmLauncherModel: ObservableObject {
         lines += ["系统：" + ProcessInfo.processInfo.operatingSystemVersionString, "芯片：" + String(cString: chip)]
         lines += ["内存：" + bytes(Int64(ProcessInfo.processInfo.physicalMemory)), "可用空间：" + bytes(free), "Xcode：" + xcode]
         if !device.isEmpty { lines.append("目标设备：" + device) }
+        if let fs = outcome.failureSummary, !fs.isEmpty { lines += ["", "【失败详情】", fs] }
         lines += ["", "【最近日志】", log, "", "反馈：https://github.com/jhaizhou-ops/S2Arm/issues 或 X @happyjoejiang"]
         return lines.joined(separator: "\n")
     }

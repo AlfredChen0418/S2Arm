@@ -467,7 +467,7 @@ struct ExportSessionView: View {
                 }
                 Button(x("fail.retry")) { if let game { model.export(game, platforms: [platform]) } }.buttonStyle(LauncherSecondaryButtonStyle())
                 Button(copied == platform ? loc.t("s2arm.export.copied") : loc.t("s2arm.export.copyError")) {
-                    let fallback = model.errorSummary(name, outcome: ExportRun.Outcome(state: outcome.state, message: loc.backend(outcome.message), code: outcome.code, suggestion: loc.backend(outcome.suggestion)), game: session.name)
+                    let fallback = model.errorSummary(name, outcome: ExportRun.Outcome(state: outcome.state, message: loc.backend(outcome.message), code: outcome.code, suggestion: loc.backend(outcome.suggestion), failureSummary: outcome.failureSummary), game: session.name)
                     Task {
                         await model.copyErrorReport(platform: name, gameID: session.gameID, operations: [platform == .ios ? "ipa" : "build"], fallback: fallback)
                         copied = platform
