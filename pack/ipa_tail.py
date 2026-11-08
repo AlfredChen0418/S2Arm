@@ -73,8 +73,12 @@ def test_udids():
     原先只在完全没有描述文件时才申请，缺设备的旧描述文件一直被挑中"""
     sh = os.path.join(R, 'tools', 'devices.sh')
     if not os.path.isfile(sh): return ''
-    r = subprocess.run(['bash', '-c', '. "$1" > /dev/null 2>&1; for n in $(s2a_device_ids any); do s2a_device_field "$n" udid; done', '_', sh],
+    from orch.bash import find_bash
+    bash = find_bash()
+    if not bash: return ''
+    r = subprocess.run([bash, '-c', '. "$1" > /dev/null 2>&1; for n in $(s2a_device_ids any); do s2a_device_field "$n" udid; done', '_', sh],
                        capture_output=True, text=True)
+    if r.returncode: return ''
     return ' '.join(u for u in r.stdout.split() if len(u.replace('-', '').lstrip('0')) > 1)   # 占位 00000000-000000000000000N 去掉
 
 

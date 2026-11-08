@@ -23,6 +23,7 @@ import sys
 import tempfile
 import time
 
+from .bash import find_bash
 from .roots import REPO, Roots, copy_file, git, is_link, plain_entries, read, remove_owned, text
 
 ENTRY = {'rewrite': 'pack/stage_rewrite.sh', 'romfsidx': 'pack/stages/romfsidx.sh',
@@ -238,11 +239,16 @@ def machine_cfg(env, name):
     不在代码里写死开发机路径（11-07 启动器零配置）：开发机的数据目录在 machine.local 声明"""
     if env.get(name):
         return env[name]
-    try:
-        return subprocess.run(['bash', str(REPO / 'tools/machine.sh'), 'get', name], env=env, capture_output=True,
-                              text=True, timeout=30).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+    bash = find_bash(env)
+    if not bash:
         return ''
+    try:
+        r = subprocess.run([bash, str(REPO / 'tools/machine.sh'), 'get', name], env=env, capture_output=True,
+                           text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return ''
+    out = r.stdout.strip()
+    return out if r.returncode == 0 and '\0' not in out else ''
 
 
 def community(env):

@@ -105,7 +105,7 @@ def main(argv=None):
         return error.code
     except (OSError, ValueError, Conflict) as error:
         print('【红】编排中止：' + str(error), file=sys.stderr)
-        if isinstance(error, OSError):   # 系统调用层的错误只带系统消息（11-05 Windows 出包机无人深空「[WinError 31] 连到系统上的设备没有发挥作用」原样重跑不复现、定不了是哪一处）：调用栈一并写进日志
+        if isinstance(error, (OSError, ValueError)):   # 系统调用层的错误只带系统消息（11-05 Windows 出包机无人深空「[WinError 31] 连到系统上的设备没有发挥作用」原样重跑不复现、定不了是哪一处）：调用栈一并写进日志
             import traceback
             print(''.join('  ' + l for l in traceback.format_exception(error)[-12:]), file=sys.stderr, end='')
         return 1

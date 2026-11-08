@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -634,6 +635,34 @@ class LightTest(unittest.TestCase):
         self.assertEqual((output / 'aoc.tsv').read_bytes(), b'idx\ttitle_id\tversion\tfiles\tbytes\n2\t0100000000002002\t0\t1\t4\n')
         self.assertIn(b'bad.nsp', (output / 'aoc.log').read_bytes())
         self.assertFalse((output / 'exefs').exists())
+
+
+class WindowsBashTest(unittest.TestCase):
+    """#26：PATH 第一个 bash 是 WSL 存根。手算期望：存根不选；存根的 UTF-16 输出（非 0 退出 / 带 \\x00）不能进配置值"""
+
+    def test_stub_is_rejected_and_real_bash_preferred(self):
+        from pack.orch import bash as B
+        stub = r'C:\Windows\System32\bash.exe'
+        git = r'C:\Program Files\Git\bin\bash.exe'
+        ship = r'C:\S2Arm\Runtime\git\usr\bin\bash.exe'
+        self.assertTrue(B.is_wsl_stub(stub))
+        self.assertFalse(B.is_wsl_stub(git))
+        with mock.patch.object(B.shutil, 'which', return_value=stub), mock.patch.object(B.os.path, 'isfile', return_value=True):
+            self.assertEqual(B.find_bash({'S2A_BASH': ship}, nt=True), ship)     # 随包 bash 最优先
+            self.assertEqual(B.find_bash({}, nt=True), git)                      # 没有随包的用 Git Bash
+        with mock.patch.object(B.shutil, 'which', return_value=stub), mock.patch.object(B.os.path, 'isfile', side_effect=lambda p: p == stub):
+            self.assertIsNone(B.find_bash({}, nt=True))                          # 只有存根 = 没有 bash
+
+    def test_machine_cfg_ignores_stub_output(self):
+        from pack.orch import stages as S
+        stub_out = '\x00'.join('The attempted operation')
+        for rc, out in ((1, stub_out), (0, stub_out)):
+            with mock.patch.object(S, 'find_bash', return_value='bash'), \
+                 mock.patch.object(S.subprocess, 'run', return_value=mock.Mock(returncode=rc, stdout=out)):
+                self.assertEqual(S.machine_cfg({}, 'S2A_COMMUNITY_DIR'), '')
+        with mock.patch.object(S, 'find_bash', return_value='bash'), \
+             mock.patch.object(S.subprocess, 'run', return_value=mock.Mock(returncode=0, stdout='/data\n')):
+            self.assertEqual(S.machine_cfg({}, 'S2A_COMMUNITY_DIR'), '/data')    # 正常值原样返回
 
 
 if __name__ == '__main__':

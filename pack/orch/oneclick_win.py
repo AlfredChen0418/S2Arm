@@ -56,9 +56,8 @@ class Fail(Exception):
 
 
 def bash_exe():
-    for p in (os.environ.get('S2A_BASH'), r'C:\Program Files\Git\bin\bash.exe', shutil.which('bash')):
-        if p and os.path.isfile(p): return p
-    return None
+    from .bash import find_bash
+    return find_bash(nt=True)
 
 
 def mixed(p):   # Windows 原生 Python 与 Git Bash 都认的写法（R:/a/b）
