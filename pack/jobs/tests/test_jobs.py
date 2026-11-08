@@ -1184,6 +1184,25 @@ class JobsTests(unittest.TestCase):
         self.assertEqual([f for f in keep + other if not f.exists()], [])
         self.assertEqual([f for f in gone if f.exists()], [])
 
+    def test_prune_build_keeps_windows_work_root(self):
+        # #32：Windows 产物根在 work/ 下。手算期望：现行链接及指向、.romfs_store、direct*、pkg/product/main.npdm 留下；旧版本、其他中间产物、product/pkg（交付件已拷走）删掉；链接只删自身
+        game = self.game(packages=[self.package()]); self.catalogue([game])
+        work = self.c.library / "iPhone" / game["id"] / "work"
+        def f(rel):
+            q = work / rel; q.parent.mkdir(parents=True, exist_ok=True); q.write_text("x"); return q
+        keep = [f("roots/k@new/y"), f("roots/.romfs_store/b"), f("direct/lib"), f("direct_p1/lib"), f("pkg/product/main.npdm")]
+        (work / "roots/k@现行").symlink_to("k@new")
+        gone = [f("roots/k@old/z"), f("dcache/a"), f("pkg/tmp/b"), f("pkg/product/pkg/x.ipa")]
+        outside = self.c.library / "outside" / "z"; outside.parent.mkdir(parents=True); outside.write_text("x")
+        (work / "pkg/link").symlink_to(outside.parent)   # 指向外部的链接：只删链接，指向的文件在
+        with patch.object(library, "_windows_layout", return_value=True):
+            library.prune_build(self.c, game["id"])
+        self.assertEqual([q for q in keep if not q.exists()], [])
+        self.assertEqual([q for q in gone if q.exists()], [])
+        self.assertTrue((work / "roots/k@现行").is_symlink())
+        self.assertFalse(os.path.lexists(work / "pkg/link"))
+        self.assertTrue(outside.exists())
+
     def test_clean_cache_also_prunes_iphone_intermediates(self):
         game = self.game(packages=[self.package()]); self.catalogue([game])
         keep, gone, other = self._build_leftovers(game["id"])

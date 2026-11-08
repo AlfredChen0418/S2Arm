@@ -923,6 +923,36 @@ def _rm(c, root, p):
         p.unlink(missing_ok=True)
 
 
+def _is_link(p):
+    """软链或 Windows junction（目录软链建不了时 pack/orch/roots.py directory_link 退到 junction；Path.is_symlink 认不出 junction）"""
+    return p.is_symlink() or getattr(os.path, "isjunction", lambda _: False)(p)
+
+
+def _rm_entry(c, p):
+    """链接只删链接本身、不进指向；其余同 _rm"""
+    if _is_link(p):
+        contained(c.library, p.parent)   # contained 会顺着链接解析到指向处：核链接所在目录，删的是链接本身
+        os.unlink(p)
+    else:
+        _rm(c, c.library, p)
+
+
+def _prune_roots(c, d):
+    """产物根只留现行（*@现行 及其指向）与 RomFS 共享存储，清旧版本 → 清了几项。
+    RomFS 共享存储：现行指向其中的身份，删了现行就断；没人指向的旧身份由下次提交清（pack/roots.sh root_romfs_sweep）"""
+    links = list(d.glob("*@现行"))
+    current = {q.name for q in links} | {q.resolve().name for q in links if _is_link(q)}
+    n = 0
+    for q in d.iterdir():
+        if q.name not in current and q.name != ".romfs_store":
+            _rm_entry(c, q); n += 1
+    return n
+
+
+def _windows_layout():   # 单测可打桩：Windows 的产物根在 work/ 下（ipa.current_root）
+    return os.name == "nt"
+
+
 def prune_build(c, gid, *, retain_compiler=True):
     """成功后清本款中间产物，保留共享编库缓存；显式清缓存用 retain_compiler=False。失败不调用。
     自动清理保留产物根里的现行版本（roots/*@现行 及其指向，11-02 多平台共用阶段：接着导 Mac 时克隆它起步、平台无关阶段按键跳过；
@@ -938,12 +968,24 @@ def prune_build(c, gid, *, retain_compiler=True):
         for p in out.iterdir():
             if p.name == "logs" or p.name.endswith("资源包") or (p.is_file() and p.suffix == ".ipa"):
                 continue
-            if p.name == "roots" and retain_compiler and p.is_dir() and not p.is_symlink():
-                current = {q.name for q in p.glob("*@现行")} | {q.resolve().name for q in p.glob("*@现行") if q.is_symlink()}
+            if p.name == "roots" and retain_compiler and p.is_dir() and not _is_link(p):
+                n += _prune_roots(c, p)
+                continue
+            # Windows 的产物根在 work/ 下（ipa.current_root：work/pkg/product = 现行各项联接 + shaders/direct → work/direct），装进容器要用：
+            #   原先整个 work/ 被删，打完 iPhone 包再装必报 container_stale（#26 同一位报告者 #32）。保留 roots 的现行、pkg/product
+            #   （去掉已拷到游戏目录的交付件 product/pkg）与 direct*，其余照清
+            if _windows_layout() and p.name == "work" and retain_compiler and p.is_dir() and not _is_link(p):
                 for q in p.iterdir():
-                    # RomFS 共享存储：现行指向其中的身份，删了现行就断；没人指向的旧身份由下次提交清（pack/roots.sh root_romfs_sweep）
-                    if q.name not in current and q.name != ".romfs_store":
-                        _rm(c, c.library, q); n += 1
+                    if q.name == "roots" and q.is_dir() and not _is_link(q):
+                        n += _prune_roots(c, q)
+                    elif q.name == "pkg" and q.is_dir() and not _is_link(q):
+                        for r in q.iterdir():
+                            if r.name != "product":
+                                _rm_entry(c, r); n += 1
+                        if os.path.lexists(q / "product" / "pkg"):
+                            _rm_entry(c, q / "product" / "pkg"); n += 1
+                    elif not re.fullmatch(r"direct(_p\d+)?", q.name):
+                        _rm_entry(c, q); n += 1
                 continue
             _rm(c, c.library, p); n += 1
     direct = c.private / 'run/s2arm/cache/direct' / gid.upper()
