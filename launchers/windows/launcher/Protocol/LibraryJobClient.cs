@@ -11,7 +11,7 @@ public static class LibraryJobClient
     public static async Task<LibraryJobOutput> RunAsync(LauncherPaths paths, string privateRoot, string library,
         string? libraryId, string operation, IReadOnlyList<string>? selectedPaths, CancellationToken cancellationToken)
     {
-        if (operation is not ("setup" or "catalog" or "keys" or "import"))
+        if (operation is not ("setup" or "catalog" or "keys" or "import" or "diagnostics"))
             throw new ArgumentException("Unsupported library operation.", nameof(operation));
         cancellationToken.ThrowIfCancellationRequested();
         privateRoot = Path.GetFullPath(privateRoot);
@@ -23,9 +23,9 @@ public static class LibraryJobClient
             ["engineDir"] = Path.GetFullPath(paths.Engine), ["libraryId"] = libraryId
         };
         if (selectedPaths is not null) payload["paths"] = selectedPaths;
-        if (operation == "keys")
+        if (operation is "keys" or "diagnostics")
         {
-            if (selectedPaths?.Count != 1) throw new ArgumentException("Choose exactly one key file.");
+            if (selectedPaths?.Count != 1) throw new ArgumentException("Choose exactly one file.");
             payload["path"] = selectedPaths[0];
         }
         using var request = PrivateJobRequest.Create(privateRoot, JsonSerializer.Serialize(payload));

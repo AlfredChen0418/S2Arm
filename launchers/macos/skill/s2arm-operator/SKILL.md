@@ -24,7 +24,7 @@ S2Arm 把玩家**自己的** Switch 游戏导出成能在 iPhone / iPad（同一
 - 工具是启动器目录里的 `s2armctl.cmd`，用 `s2armctl.cmd start` 打开窗口并接上。也可以请玩家在「环境检查」页打开「允许 AI 操作 S2Arm」。
 - Windows 只出 iPhone / iPad 包：`prepare`、`launch`、`build <游戏号> mac`、`target`、`targets` 会被拒绝，不要用。
 - 装到手机走 Impactor：Apple ID 只能玩家本人在 Impactor 里登录，`install-check` 里没打勾的项照它说的请玩家做。`install` 已包含拷资源包，不用 `device` 和 `push-pack`。
-- 还没有的功能：`delete`、`diag`。排查用 `errors` 和 `logs`。
+- 还没有的功能：`delete`、`diag pull`。`diag export <输出.zip>` 可用。排查用 `errors` 和 `logs`。
 - 下文里的 Xcode、App Store、macOS 授权框只适用于 Mac。
 
 ## 还没装 S2Arm：从 GitHub 开始

@@ -161,7 +161,15 @@ public sealed partial class EnvironmentWindow
             case ("POST", "/launch"): return MacOnly("在电脑上启动游戏");
             case ("POST", "/fonts"): return ControlReply.Bad("Windows 版用应用自带的开源字体，不能换", 409);
             case ("POST", "/delete"): return ControlReply.Bad("Windows 启动器还不能删除游戏", 409);
-            case ("POST", "/diagnostics"): return ControlReply.Bad("Windows 启动器还不能导出诊断包：用 s2armctl logs 读日志", 409);
+            case ("POST", "/diagnostics"):
+            {
+                if (r.Text("action") == "pull") return ControlReply.Bad("Windows 版不能拉回 iPhone 诊断：装机日志用 s2armctl logs 读", 409);
+                if (r.Text("action") != "export" || r.Text("path") is not { Length: > 0 } output) return ControlReply.Bad("action 要 export，并带 path");
+                if (ControlBusy) return Busy();
+                if (!await ControlConnected()) return ControlReply.Bad(importError.Length > 0 ? importError : "游戏库没建好", 409);
+                var job = await LibraryJobClient.RunAsync(paths, privateRoot, connectedFolder!, libraryId, "diagnostics", [output], CancellationToken.None);
+                return job.Report.Succeeded ? ControlReply.Ok() : ControlReply.Bad(job.Report.Message, 500);
+            }
             case ("POST", "/installCheck"):
             {
                 if (ControlGame(r) is not { } game) return NoGame;
@@ -234,6 +242,7 @@ public sealed partial class EnvironmentWindow
         ("POST /install {gameId}", "用 Impactor 装到 iPhone（清单全齐才能装；Apple ID 由玩家本人在 Impactor 里登录）"),
         ("POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款"),
         ("POST /cancel {taskId} | /retry {taskId}", "停掉在跑的作业 / 重试出包、装机任务"),
+        ("POST /diagnostics {action:export, path}", "导出诊断包（已脱敏的 zip）"),
         ("POST /environment", "重新检查环境"), ("POST /refresh", "刷新游戏库"),
         ("POST /dismiss", "关掉提示"), ("POST /select {gameId}", "选中一款"),
     ];
