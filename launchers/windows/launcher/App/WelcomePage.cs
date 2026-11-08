@@ -52,7 +52,7 @@ public sealed partial class EnvironmentWindow
         });
         void JourneyBar() => journey.Children.Add(new Border
         { Width = 40, Height = 1, Background = Accent, Opacity = 0.35, VerticalAlignment = VerticalAlignment.Center });
-        JourneyNode("Switch"); JourneyBar(); JourneyNode("iPhone"); JourneyBar(); JourneyNode(T("welcome.win.journey.pc"));
+        JourneyNode("Switch"); JourneyBar(); JourneyNode(T("welcome.win.journey.pc")); JourneyBar(); JourneyNode("iPhone");
         intro.Children.Add(journey);
         intro.Children.Add(Spacer(34));
         intro.Children.Add(BigTitle(T("welcome.win.title")));
@@ -89,6 +89,15 @@ public sealed partial class EnvironmentWindow
             oneclick.Click += (_, _) => StartOneClick(WelcomeGame!);
             body.Children.Add(oneclick);
         }
+    }
+
+    private string EnvironmentSummary()
+    {
+        var lines = new List<string> { "S2Arm 环境检查未通过", "", "S2Arm：" + (typeof(EnvironmentWindow).Assembly.GetName().Version?.ToString() ?? "-"),
+            "系统：" + System.Runtime.InteropServices.RuntimeInformation.OSDescription, "" };
+        lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => $"{c.Name}（{c.Status}，{c.Code ?? "-"}）：{c.Message}"));
+        lines.Add(""); lines.Add(diagnostics);
+        return string.Join("\n", lines).Replace(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "~");
     }
 
     private Control GamesContent()
@@ -278,18 +287,19 @@ public sealed partial class EnvironmentWindow
         if (PcReady) { panel.Children.Add(Muted(T("welcome.win.step.pc.doneDetail"))); return panel; }
         if (report is null)
         {
-            // 尚未检查：Activated 事件会自动触发
-            panel.Children.Add(Muted(T("welcome.win.step.pc.checking")));
+            // 尚未检查：Activated 事件会自动触发；从压缩包里直接打开时不会有报告，要告诉玩家先解压
+            panel.Children.Add(Muted(T(summaryKey == "environment.unzip_first" ? summaryKey : "welcome.win.step.pc.checking")));
             return panel;
         }
         panel.Children.Add(Muted(T("welcome.win.step.pc.what")));
-        foreach (var item in report.Checks.Where(c => c.Status != "ok"))
+        // 随包项先列；Metal 编译器要玩家自己装，放最后（OrderBy 稳定，其余顺序不变）
+        foreach (var item in report.Checks.Where(c => c.Status != "ok").OrderBy(c => c.Id == "metal" ? 1 : 0))
         {
             var row = new StackPanel { Spacing = 4, Margin = new Thickness(0, 8, 0, 0) };
             row.Children.Add(new TextBlock { Text = item.Name, FontSize = 14.5, FontWeight = FontWeight.SemiBold,
                 Foreground = Ink, TextWrapping = TextWrapping.Wrap });
-            row.Children.Add(new TextBlock { Text = item.Message, FontSize = 13, Foreground = Brush.Parse("#A8A6A1"),
-                TextWrapping = TextWrapping.Wrap });
+            row.Children.Add(new TextBlock { Text = item.Id == "metal" && item.Status == "missing" ? T("welcome.win.metal.detail") : item.Message,
+                FontSize = 13, Foreground = Brush.Parse("#A8A6A1"), TextWrapping = TextWrapping.Wrap });
             var btns = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8 };
             if (item.OfficialUrl is { } url)
             {
@@ -299,9 +309,10 @@ public sealed partial class EnvironmentWindow
             if (btns.Children.Count > 0) row.Children.Add(btns);
             panel.Children.Add(row);
         }
-        var recheck = Action("action.recheck", () => _ = CheckAsync(), !busy);
-        recheck.Margin = new Thickness(0, 8, 0, 0);
-        panel.Children.Add(recheck);
+        var pcButtons = new StackPanel { Orientation = Orientation.Horizontal, Spacing = 8, Margin = new Thickness(0, 8, 0, 0) };
+        pcButtons.Children.Add(Action("action.recheck", () => _ = CheckAsync(), !busy));
+        pcButtons.Children.Add(CopyReportButton(null, null, EnvironmentSummary));
+        panel.Children.Add(pcButtons);
         return panel;
     }
 }

@@ -130,11 +130,30 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(self.item(report, "disk")["status"], "ok")
         self.assertIn("impactor", [c["id"] for c in report["checks"]])
 
-    def test_python_failure_still_lists_every_unverified_dependency(self):
-        self.probe.values["python"] = FileNotFoundError()
+    def test_python_failure_is_one_item_with_the_real_reason(self):
+        self.probe.values["python"] = self.mod.ProbeError("失败", nonzero=True, detail="退出码 1：ImportError: DLL load failed")
         report = self.report()
-        for name in ("capstone", "lz4", "numpy", "Pillow"):
-            self.assertEqual(self.item(report, "python." + name)["status"], "unverified")
+        self.assertEqual([c["id"] for c in report["checks"] if c["id"].startswith("python.")], [])
+        self.assertEqual(self.item(report, "python")["status"], "error")
+        self.assertIn("ImportError: DLL load failed", self.item(report, "python")["message"])
+
+    def test_exit_reason_names_missing_runtime_and_stderr(self):
+        self.assertIn("Visual C++", self.mod._exit_reason(-1073741515, b""))       # 0xC0000135
+        self.assertIn("Visual C++", self.mod._exit_reason(3221225595, b""))        # 0xC000007B
+        reason = self.mod._exit_reason(1, ("Traceback\n" + str(Path.home()) + "/x: boom\n").encode())
+        self.assertEqual(reason, "退出码 1：~/x: boom")
+
+    def test_impactor_uses_the_bundled_copy_when_launcher_says_where(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            sys.path.insert(0, str(Path(self.mod.__file__).resolve().parents[2] / "pack/orch"))
+            import impactor
+            folder = Path(tmp) / impactor.BUNDLE_DIR; folder.mkdir(parents=True)
+            native = self.mod.NativeProbe()
+            self.assertEqual(native("impactor", resources=tmp)["verdict"], "missing")
+            self.assertTrue(native("impactor", resources=tmp)["bundled"])
+            (folder / impactor.IMPACTOR_EXE).write_bytes(b"x"); (folder / impactor.PLUMESIGN_EXE).write_bytes(b"x")
+            found = native("impactor", resources=tmp)
+            self.assertEqual((found["verdict"], found["plumesign"], found["bundled"]), ("ok", True, True))
 
     def test_damaged_import_is_not_reported_as_absent(self):
         self.probe.values["python"]["packages"]["lz4"] = {"error": "ImportError"}
@@ -341,7 +360,6 @@ class EnvironmentTests(unittest.TestCase):
             self.probe = lambda kind, **opts: native(kind, **opts) if kind == "python" else fallback(kind, **opts)
             report = self.report(python=str(path))
             self.assertEqual(self.item(report, "python")["status"], "missing")
-            self.assertEqual(self.item(report, "python.numpy")["status"], "unverified")
             self.assertTrue(self.item(report, "disk")["ok"])
 
     def test_launch_missing_does_not_reclassify_probe_timeout(self):
@@ -350,7 +368,6 @@ class EnvironmentTests(unittest.TestCase):
         with patch.object(self.mod.subprocess, "Popen", side_effect=PermissionError(13, "PRIVATE")):
             report = self.report()
         self.assertEqual(self.item(report, "python")["status"], "missing")
-        self.assertEqual(self.item(report, "python.numpy")["status"], "unverified")
         self.assertNotIn("PRIVATE", json.dumps(report))
         self.probe = FakeProbe()
         self.probe.values["python"] = self.mod.ProbeError("只读探测超时")
@@ -910,8 +927,6 @@ class RecoveryMappingTests(unittest.TestCase):
         self.probe.values["python"] = FileNotFoundError()
         report = self.report()
         self.assert_recovery(report, "python", "missing", "tool_missing")
-        for name in ("capstone", "lz4", "numpy", "Pillow"):
-            self.assert_recovery(report, "python." + name, "unverified", "tool_missing")
         self.probe = FakeProbe()
         self.probe.values["python"]["version"] = [3, 10, 0]
         self.probe.values["python"]["packages"]["numpy"] = {"error": "ModuleNotFoundError"}

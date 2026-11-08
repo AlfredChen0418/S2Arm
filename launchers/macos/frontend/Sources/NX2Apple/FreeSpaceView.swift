@@ -100,6 +100,7 @@ struct FreeSpaceView: View {
         }
         .onAppear { model.loadSpace(gameID) }
         .frame(width: 640, height: 640)
+        .onDisappear { model.clearSpaceFreed() }
         .background(LauncherPalette.background)
         .font(.manrope(13))
         .preferredColorScheme(.dark)

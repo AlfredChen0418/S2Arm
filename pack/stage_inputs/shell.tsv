@@ -188,4 +188,5 @@
 入	tools/toolchain.env
 入	tools/weak_link_decl.py
 外	.gitignore	出壳过程里 git 命令读的忽略规则，不影响壳内容
+外	nuget.config	根目录的 NuGet 源配置，包版本由各工程钉死，不影响壳内容
 外	tools/gmake.sh	出壳挑 GNU Make 4 的路径（开发机工具），不影响壳内容

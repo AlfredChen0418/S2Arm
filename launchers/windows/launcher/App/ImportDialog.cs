@@ -83,9 +83,14 @@ public sealed partial class EnvironmentWindow
                 Foreground = Brush.Parse("#E55"), TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 12, 0, 0) });
         if (importError.Length > 0)
+        {
             panel.Children.Add(new TextBlock { Text = importError, FontSize = 13,
                 Foreground = Brush.Parse("#E55"), TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 12, 0, 0) });
+            var copyError = CopyReportButton(null, ["import", "keys", "setup"], () => importError);
+            copyError.Margin = new Thickness(0, 10, 0, 0); copyError.HorizontalAlignment = HorizontalAlignment.Left;
+            panel.Children.Add(copyError);
+        }
 
         var footer = new StackPanel { Orientation = Orientation.Horizontal,
             HorizontalAlignment = HorizontalAlignment.Right, Margin = new Thickness(0, 16, 0, 0), Spacing = 8 };

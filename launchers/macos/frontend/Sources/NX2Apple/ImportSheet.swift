@@ -66,6 +66,7 @@ struct ImportSheet: View {
             if let failure {
                 Text(loc.backend(failure)).font(.manrope(13)).foregroundStyle(LauncherPalette.danger)
                     .fixedSize(horizontal: false, vertical: true).padding(.top, 12)
+                CopyReportButton(model: model, gameID: nil, operations: ["import", "keys", "setup"], fallback: failure).padding(.top, 8)
             }
             Spacer(minLength: 16)
             HStack {
@@ -76,7 +77,7 @@ struct ImportSheet: View {
             }
         }
         .padding(30)
-        .frame(width: 560, height: 430)
+        .frame(width: 560, height: 500)
         .background(LauncherPalette.background)
         .font(.manrope(13))
         .preferredColorScheme(.dark)
@@ -145,5 +146,27 @@ struct InlineProgress: View {
                     .font(.manrope(12.5, .medium)).monospacedDigit().foregroundStyle(.secondary).lineLimit(1)
             }
         }
+    }
+}
+
+/// 「复制错误摘要」：正文由作业层生成（Mac / Windows 同一份）。operations 为 nil：这种失败没有作业记录（环境检查），直接用 fallback。
+struct CopyReportButton: View {
+    @ObservedObject var model: S2ArmLauncherModel
+    @EnvironmentObject var loc: Localizer
+    let gameID: String?
+    let operations: [String]?
+    let fallback: String
+    @State private var copied = false
+
+    var body: some View {
+        Button(copied ? loc.t("s2arm.export.copied") : loc.t("s2arm.export.copyError")) {
+            Task {
+                await model.copyErrorReport(platform: nil, gameID: gameID, operations: operations, fallback: fallback)
+                copied = true
+                try? await Task.sleep(for: .seconds(2))
+                copied = false
+            }
+        }
+        .buttonStyle(LauncherSecondaryButtonStyle())
     }
 }

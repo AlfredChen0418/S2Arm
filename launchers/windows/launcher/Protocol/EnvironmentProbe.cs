@@ -46,13 +46,17 @@ public static class EnvironmentProbe
         return info;
     }
 
+    /// <summary>引擎或运行时不在：通常是在压缩包里直接打开了 S2Arm.exe，系统只解出了这一个文件。</summary>
+    public static bool BundleIncomplete(LauncherPaths paths) =>
+        !Directory.Exists(Path.GetFullPath(paths.Engine)) || !File.Exists(Path.Combine(Path.GetFullPath(paths.Runtime), "s2arm_env.cmd"));
+
     public static async Task<ProbeOutput> RunAsync(LauncherPaths paths, CancellationToken cancellationToken)
     {
         var requestFile = Path.GetTempFileName();
         try
         {
             await File.WriteAllTextAsync(requestFile, JsonSerializer.Serialize(new
-                { schema = 1, target = "ios", shell = Path.GetFullPath(paths.Shell) }), cancellationToken);
+                { schema = 1, target = "ios", shell = Path.GetFullPath(paths.Shell), resources = Path.GetFullPath(AppContext.BaseDirectory) }), cancellationToken);
             return await RunProcessAsync(StartInfo(paths, requestFile), cancellationToken);
         }
         finally { File.Delete(requestFile); }

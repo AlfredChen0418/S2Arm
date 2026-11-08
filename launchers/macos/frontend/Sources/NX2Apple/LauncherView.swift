@@ -104,47 +104,79 @@ struct LauncherView: View {
         HStack(spacing: 12) {
             Text(brand).font(.manrope(22, .bold)).tracking(-0.6).lineLimit(1).fixedSize()
             Spacer()
-            if model.loading { ProgressView().controlSize(.small) }
-            exportPill
-            // 界面语言：一键切到另一种（同旧启动器 LanguageSwitch，维护者 10-23「不让玩家先选」）；当场生效、记住选择，不用重启（11-07 维护者 验收）
-            Button { loc.choose(loc.lang == .zh ? Lang.en.code : Lang.zh.code) } label: {
-                Label(loc.lang == .zh ? "English" : "简体中文", systemImage: "globe").font(.manrope(12.5, .semibold))
-            }
-            .buttonStyle(LauncherSecondaryButtonStyle())
-            .accessibilityIdentifier("top.language")
-            Button { model.showAddGames = true } label: {
-                Label(loc.t("s2arm.action.import"), systemImage: "plus").font(.manrope(12.5, .semibold))
-            }
-            .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
-            Button { model.showEnvironment = true } label: {
-                HStack(spacing: 7) {
-                    Circle().fill(environmentColor).frame(width: 7, height: 7)
-                    Text(loc.t("s2arm.env.title")).font(.manrope(12.5, .semibold))
-                }
-            }
-            .buttonStyle(LauncherSecondaryButtonStyle())
         }
         .padding(.leading, 90).padding(.trailing, 24)   // the window's traffic lights sit in the transparent title bar
         .frame(height: 52)   // = a unified toolbar's title bar: the system centres the traffic lights in it, so they share this bar's midline
         .background(TitlebarDoubleClick())
-        .background(UnifiedTitlebar())
+        .background(UnifiedTitlebar(actions: topActions))
     }
 
-    /// An empty unified toolbar makes the (transparent) title bar as tall as the top bar, and macOS then centres the
-    /// close / minimise / zoom buttons vertically in it: the brand line and the three buttons share one midline
-    /// without placing the buttons by hand (AppKit would move hand-placed buttons back on resize and full screen).
-    private struct UnifiedTitlebar: NSViewRepresentable {
+    /// 顶栏右侧的按钮放进系统工具栏本身：工具栏盖在窗口内容上，内容里的按钮收不到真实点击（11-08 维护者）。
+    private var topActions: some View {
+        HStack(spacing: 12) {
+                if model.loading { ProgressView().controlSize(.small) }
+                exportPill
+                // 界面语言：一键切到另一种（同旧启动器 LanguageSwitch，维护者 10-23「不让玩家先选」）；当场生效、记住选择，不用重启（11-07 维护者 验收）
+                Button { loc.choose(loc.lang == .zh ? Lang.en.code : Lang.zh.code) } label: {
+                    Label(loc.lang == .zh ? "English" : "简体中文", systemImage: "globe").font(.manrope(12.5, .semibold))
+                }
+                .buttonStyle(LauncherSecondaryButtonStyle())
+                .accessibilityIdentifier("top.language")
+                Button { model.showAddGames = true } label: {
+                    Label(loc.t("s2arm.action.import"), systemImage: "plus").font(.manrope(12.5, .semibold))
+                }
+                .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                Button { model.showEnvironment = true } label: {
+                    HStack(spacing: 7) {
+                        Circle().fill(environmentColor).frame(width: 7, height: 7)
+                        Text(loc.t("s2arm.env.title")).font(.manrope(12.5, .semibold))
+                    }
+                }
+                .buttonStyle(LauncherSecondaryButtonStyle())
+        }
+        .padding(.trailing, 8)
+        .labelStyle(.titleAndIcon)   // 工具栏里 Label 缺省只显示图标
+        .tint(LauncherPalette.cream)
+        .environment(\.colorScheme, .dark)
+    }
+
+    /// A unified toolbar makes the (transparent) title bar as tall as the top bar, and macOS then centres the close / minimise / zoom
+    /// buttons vertically in it. The right-hand actions are its one item, so real clicks reach them.
+    private struct UnifiedTitlebar<Actions: View>: NSViewRepresentable {
+        let actions: Actions
+
+        final class Coordinator: NSObject, NSToolbarDelegate {
+            static var item: NSToolbarItem.Identifier { NSToolbarItem.Identifier("s2arm.actions") }
+            let host: NSHostingView<Actions>
+            init(_ actions: Actions) { host = NSHostingView(rootView: actions) }
+            func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, Self.item] }
+            func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] { [.flexibleSpace, Self.item] }
+            func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier id: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
+                guard id == Self.item else { return nil }
+                let item = NSToolbarItem(itemIdentifier: id)
+                item.view = host
+                return item
+            }
+        }
+
         final class Host: NSView {
+            var coordinator: Coordinator?
             override func viewDidMoveToWindow() {
                 super.viewDidMoveToWindow()
                 guard let window, window.toolbar == nil else { return }
-                window.toolbar = NSToolbar(identifier: "s2arm.titlebar")
+                let toolbar = NSToolbar(identifier: "s2arm.titlebar")
+                toolbar.delegate = coordinator
+                toolbar.displayMode = .iconOnly
+                toolbar.allowsUserCustomization = false
+                window.toolbar = toolbar
                 window.toolbarStyle = .unified
                 window.titlebarSeparatorStyle = .none
             }
         }
-        func makeNSView(context: Context) -> NSView { Host() }
-        func updateNSView(_ nsView: NSView, context: Context) {}
+
+        func makeCoordinator() -> Coordinator { Coordinator(actions) }
+        func makeNSView(context: Context) -> NSView { let h = Host(); h.coordinator = context.coordinator; return h }
+        func updateNSView(_ nsView: NSView, context: Context) { context.coordinator.host.rootView = actions }
     }
 
     private struct OptionsTarget: Identifiable { let id: String }

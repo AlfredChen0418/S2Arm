@@ -218,8 +218,8 @@ def next_step(s, gid=None):
     if not s['environmentReady']:
         bad = [c for c in s['checks'] if not c['ok']]
         return dict(step='环境', who='human', do='；'.join(f'{c["name"]}：{c["message"]}' for c in bad) + '（按提示装好后 s2armctl env）', why='本机缺组件，要玩家本人按提示安装' if s.get('platform') == 'windows' else '本机缺组件，多数要玩家本人在 App Store / 系统里操作')
-    # Windows 回报每款要不要密钥：解包好的游戏不要，空库先问游戏，NSP / XCI 没密钥时导入会报 keys_missing 再问
-    if not s.get('hasImportedKeys') and (any(g.get('needsKeys', True) for g in s['games']) or (not s['games'] and s.get('platform') != 'windows')):
+    # 解包好的游戏不要密钥：空库先问游戏，NSP / XCI 没密钥时导入会报 keys_missing 再问
+    if not s.get('hasImportedKeys') and any(g.get('needsKeys', True) for g in s['games']):
         return dict(step='密钥', who='ask', do='问玩家自己从 Switch 导出的 prod.keys 放在哪，然后 s2armctl keys <路径>', why='S2Arm 不提供密钥，只能用玩家自己的')
     if not s['games']:
         return dict(step='导入', who='ask', do='问玩家游戏文件（NSP / XCI，本体 + 更新 + DLC 放一个文件夹）在哪，然后 s2armctl games <文件夹>', why='游戏库是空的')

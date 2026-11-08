@@ -34,7 +34,8 @@ struct JobSessionView: View {
     private var statusColor: Color {
         switch session.phase {
         case .running, .stopping: return LauncherPalette.building
-        case .finished(.completed), .finished(.cancelled): return LauncherPalette.ready
+        case .finished(.completed): return LauncherPalette.ready
+        case .finished(.cancelled): return LauncherPalette.unbuilt
         case .finished: return LauncherPalette.danger
         }
     }
@@ -55,6 +56,9 @@ struct JobSessionView: View {
                 Text(loc.backend(session.stage)).font(.manrope(16, .medium)).foregroundStyle(.secondary)
             }
             if finished == nil, session.kind != .play { progress }
+            if case .finished(let state) = session.phase, state == .failed || state == .interrupted {
+                CopyReportButton(model: model, gameID: session.gameID, operations: [], fallback: session.message)
+            }
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 6) {

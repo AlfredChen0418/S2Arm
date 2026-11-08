@@ -26,6 +26,7 @@ from urllib.parse import urlsplit
 
 ROOT = Path(__file__).resolve().parents[2]
 LIMIT = 65536
+PYTHON_PROBE_SECONDS = 90
 RUNTIME = "launchers/macos/requirements-runtime.txt"
 PREFLIGHT = "pack/jobs/toolchain.py"
 METAL_LOCK = "translator/dmsh_chain.lock"
@@ -33,7 +34,7 @@ LIBRARY = "pack/jobs/library.py"
 VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?")
 PINS = re.compile(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9_.+!-]+)")
 REQUEST_FIELDS = {"schema", "python", "targetDir", "requiredFreeBytes", "metal", "shell", "target",
-                  "anisette", "offline", "catalog", "gameId", "library"}
+                  "anisette", "offline", "catalog", "gameId", "library", "resources"}
 PACK = "pack/orch/oneclick_win.py:env_items"   # 出包件自检的唯一来源（随包运行时 / 预编件 / 预编壳…），同 oneclick_win --check
 PACK_OWN = {"python", "metal"}
 OFFICIAL = {"metal": "https://developer.apple.com/metal/tools/",                 # 苹果 Metal Developer Tools for Windows
@@ -42,11 +43,12 @@ OFFICIAL = {"metal": "https://developer.apple.com/metal/tools/",                
 
 
 class ProbeError(Exception):
-    """Bounded command failure; never exposes subprocess output."""
-    def __init__(self, message, *, missing=False, nonzero=False):
+    """Bounded command failure. detail is one short, path-free sentence for the player; the rest of the output is never exposed."""
+    def __init__(self, message, *, missing=False, nonzero=False, detail=""):
         super().__init__(message)
         self.missing = missing
         self.nonzero = nonzero
+        self.detail = detail
 
 
 def _read_file(path, limit=524288):
@@ -149,7 +151,7 @@ def _validate(request):
         raise ValueError("未知请求格式")
     if type(request.get("schema", 1)) is not int or request.get("schema", 1) != 1:
         raise ValueError("请求schema必须为1")
-    for key in ("python", "targetDir", "metal", "shell", "catalog", "gameId", "library"):
+    for key in ("python", "targetDir", "metal", "shell", "catalog", "gameId", "library", "resources"):
         if key in request and (not isinstance(request[key], str) or not request[key]
                                or len(request[key]) > 32768 or any(c in request[key] for c in "\0\r\n")):
             raise ValueError("路径字段格式错误")
@@ -171,23 +173,38 @@ def _validate(request):
             raise ValueError("公共备选必须显式为布尔值")
 
 
+def _exit_reason(code, stderr):
+    """子进程失败的真实原因：系统加载器的错误码翻成人话，其余取 stderr 最后一行（去掉家目录，限长）。"""
+    unsigned = code & 0xFFFFFFFF
+    if unsigned in (0xC0000135, 0xC000007B, 0xC0000139):
+        return f"缺少系统运行库（退出码 0x{unsigned:08X}）；请安装 Microsoft Visual C++ 运行库后重新检查"
+    try:
+        text = stderr.decode()
+    except UnicodeDecodeError:   # 非 Python 程序的报错按系统代码页（中文 Windows 是 GBK）
+        text = stderr.decode("mbcs" if os.name == "nt" else "latin-1", errors="replace")
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    last = lines[-1].replace(str(Path.home()), "~")[:200] if lines else "没有错误输出"
+    return f"退出码 {code}：{last}"
+
+
 class NativeProbe:
     """OS/command observations only, never a caller-supplied ready verdict."""
-    def __init__(self, timeout=3):
+    def __init__(self, timeout=15):
         self.timeout = timeout
 
-    def run(self, args, *, merge_stderr=False):
+    def run(self, args, *, merge_stderr=False, timeout=None):
+        limit = timeout or self.timeout
         env = dict(os.environ, PYTHONDONTWRITEBYTECODE="1", DOTNET_CLI_TELEMETRY_OPTOUT="1",
                    DOTNET_SKIP_FIRST_TIME_EXPERIENCE="1", DOTNET_NOLOGO="1")
         try:
             process = subprocess.Popen(args, stdout=subprocess.PIPE,
-                                       stderr=subprocess.STDOUT if merge_stderr else subprocess.DEVNULL,
+                                       stderr=subprocess.STDOUT if merge_stderr else subprocess.PIPE,
                                        env=env, creationflags=0x08000000 if os.name == "nt" else 0)
         except OSError:
             # PATH lookup can yield EACCES even for an absent command. Missing,
             # denied and invalid-image launches share one bounded public error.
-            raise ProbeError("找不到或无法执行所选工具", missing=True) from None
-        data, overflow = bytearray(), threading.Event()
+            raise ProbeError("找不到或无法执行所选工具", missing=True, detail="文件不在或被系统拦住，常见原因是没有完整解压或被杀毒软件隔离") from None
+        data, errors, overflow = bytearray(), bytearray(), threading.Event()
 
         def drain():
             try:
@@ -200,22 +217,36 @@ class NativeProbe:
             except OSError:
                 overflow.set()
 
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
+        def drain_errors():
+            try:
+                while block := process.stderr.read(4096):
+                    errors.extend(block)
+                    del errors[:-8192]
+            except OSError:
+                pass
+
+        readers = [threading.Thread(target=drain, daemon=True)]
+        if not merge_stderr:
+            readers.append(threading.Thread(target=drain_errors, daemon=True))
+        for reader in readers:
+            reader.start()
         try:
-            process.wait(timeout=self.timeout)
+            process.wait(timeout=limit)
         except subprocess.TimeoutExpired:
             process.kill()
             process.wait()
-            raise ProbeError("只读探测超时") from None
+            raise ProbeError("只读探测超时", detail=f"{limit:.0f} 秒内没有运行完，常见原因是杀毒软件在扫描第一次运行的文件") from None
         finally:
-            reader.join(timeout=1)
-            if not reader.is_alive():
+            for reader in readers:
+                reader.join(timeout=1)
+            if not readers[0].is_alive():
                 process.stdout.close()
-        if reader.is_alive() or overflow.is_set():
+            if not merge_stderr and not readers[-1].is_alive():
+                process.stderr.close()
+        if readers[0].is_alive() or overflow.is_set():
             raise ProbeError("只读探测失败或输出超限")
         if process.returncode:
-            raise ProbeError("只读探测失败退出", nonzero=True)
+            raise ProbeError("只读探测失败退出", nonzero=True, detail=_exit_reason(process.returncode, bytes(errors)))
         return bytes(data)
 
     def __call__(self, kind, **options):
@@ -233,8 +264,9 @@ class NativeProbe:
                 "'missing':isinstance(exc,ModuleNotFoundError) and exc.name==name}\n"
                 "print(json.dumps(out,ensure_ascii=True))\n"
             )
+            # 冷启动要加载 numpy 等原生库，杀毒软件第一次扫描时几十秒都正常
             return json.loads(self.run([options["executable"], "-I", "-B", "-c", code,
-                                       json.dumps(options["modules"])]))
+                                       json.dumps(options["modules"])], timeout=PYTHON_PROBE_SECONDS))
         if kind == "pack":
             sys.path.insert(0, str(ROOT))
             from pack.orch import oneclick_win
@@ -242,9 +274,13 @@ class NativeProbe:
         if kind == "impactor":
             sys.path.insert(0, str(ROOT / "pack/orch"))
             import install_win
-            st = install_win.impactor.status()
-            return {"verdict": st["verdict"], "version": st.get("version"), "tested": st["tested"],
-                    "download": st["download"], "plumesign": bool(install_win.plumesign_path())}
+            # 启动器目录在就只认随包那份；不传（源码树 / 命令行）才找玩家自己放的
+            resources = options.get("resources")
+            st = install_win.impactor.status(resources=resources)
+            bundled = install_win.impactor.bundled(resources)
+            return {"verdict": st["verdict"], "version": st.get("version"), "tested": st["tested"], "download": st["download"],
+                    "plumesign": bool(bundled.get("plumesign")) if bundled is not None else bool(install_win.plumesign_path()),
+                    "bundled": bundled is not None}
         if kind == "file":
             path = options.get("path")
             if not path:
@@ -534,13 +570,14 @@ def _pack(request, probe):
         return [_failure("pack.items", "出包件", exc, PACK)]
 
 
-def _impactor(probe):
+def _impactor(probe, request):
     """签名装机：玩家自装的官方 Impactor（实测版本）+ 同版本命令行 plumesign（pack/orch/install_win.py 用它）"""
     source = "pack/jobs/impactor.py:status + pack/orch/install_win.py:plumesign_path"
     try:
-        st = probe("impactor")
+        st = probe("impactor", resources=request.get("resources"))
         if st["verdict"] == "missing":
-            return _item("impactor", "Impactor（签名装机）", "missing", "没找到 Impactor。", source, url=st["download"])
+            return _item("impactor", "Impactor（签名装机）", "missing",
+                         "S2Arm 自带的 Impactor 不在了，安装包不完整：请重新下载并完整解压。" if st.get("bundled") else "没找到 Impactor。", source, url=st["download"])
         if st["verdict"] != "ok":
             return _item("impactor", "Impactor（签名装机）", "mismatch",
                          f"现装 {st.get('version')}，实测过的是 {st['tested']}。", source, {"version": st.get("version")}, url=st["download"])
@@ -823,12 +860,14 @@ def check(request, *, probe=None):
             checks.append(_item("python." + dist, "Python / " + dist, status,
                                 detail + "；要求 " + want + "。缺失/不符时对所选解释器人工执行 pip install -r " + RUNTIME + "。", RUNTIME))
     except Exception as exc:
-        checks.append(_failure("python", "Python", exc, PREFLIGHT + " + " + RUNTIME))
-        for dist in pins:
-            checks.append(_item("python." + dist, "Python / " + dist, "unverified",
-                                "所选解释器未能核实，尚不能检查该依赖；请先修复解释器后重查。", RUNTIME))
+        # 依赖都靠这个解释器核实：解释器没起来只报一条，并说清真实原因，不列一串「未能核实」
+        reason = getattr(exc, "detail", "")
+        item = _failure("python", "Python", exc, PREFLIGHT + " + " + RUNTIME)
+        if reason:
+            item["message"] = _safe("S2Arm 自带的 Python 没能运行：" + reason + "。")
+        checks.append(item)
     checks.extend(_pack(request, probe))
-    checks.append(_impactor(probe))
+    checks.append(_impactor(probe, request))
     checks.append(_metal(request, probe))
     checks.extend(_apple(probe))
     checks.append(_anisette(request, probe))

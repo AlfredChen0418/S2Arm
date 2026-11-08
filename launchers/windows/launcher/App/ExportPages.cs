@@ -161,7 +161,7 @@ public sealed partial class EnvironmentWindow
     /// <summary>The build tab opens the progress page while a pack is running or its result is on screen.</summary>
     private void OpenBuild()
     {
-        if (packState != "" && (packRunning || packGame?.Id == selectedGame)) { Navigate("progress"); return; }
+        if (packRunning || (packState == "succeeded" && packGame?.Id == selectedGame)) { Navigate("progress"); return; }
         Navigate("build");
     }
 
@@ -736,13 +736,7 @@ public sealed partial class EnvironmentWindow
             retry.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(retry);
             if (packState == "failed")
             {
-                var copy = new Button { Content = T("export.fail.retry"), Padding = new Thickness(16, 9),
-                    Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8) };
-                copy.Click += (_, _) =>
-                {
-                    var summary = ErrorSummary(game);
-                    if (TopLevel.GetTopLevel(this)?.Clipboard is { } cb) _ = cb.SetTextAsync(summary);
-                };
+                var copy = CopyReportButton(game.Id, ["ipa"], () => ErrorSummary(game));
                 buttons.Children.Add(copy);
             }
             result.Children.Add(buttons);
@@ -766,7 +760,28 @@ public sealed partial class EnvironmentWindow
         return result;
     }
 
-    // ---- error summary for clipboard (mirrors Mac errorSummary) ----
+    /// 「复制错误摘要」：正文由作业层 report.py 生成（Mac / Windows 同一份）；没有作业记录才用 fallback。
+    /// operations 为 null：这种失败没有作业记录（环境检查），直接用 fallback。
+    private Button CopyReportButton(string? gameId, string[]? operations, Func<string> fallback)
+    {
+        var copy = new Button { Content = T("export.fail.copy"), Padding = new Thickness(16, 9),
+            Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8) };
+        copy.Click += async (_, _) =>
+        {
+            var extra = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
+            {
+                ["app"] = typeof(EnvironmentWindow).Assembly.GetName().Version?.ToString() ?? "",
+                ["checks"] = (report?.Checks ?? []).Where(c => c.Status != "ok")
+                    .Select(c => new Dictionary<string, string> { ["name"] = c.Name, ["message"] = c.Message }).ToList()
+            });
+            var text = (operations is null ? null : await JobReportClient.RunAsync(paths, privateRoot, gameId, operations, extra)) ?? fallback();
+            if (TopLevel.GetTopLevel(this)?.Clipboard is { } clipboard) await clipboard.SetTextAsync(text);
+            copy.Content = T("export.fail.copied");
+        };
+        return copy;
+    }
+
+    // ---- error summary for clipboard (only when the job left no record) ----
 
     private string ErrorSummary(LibraryGame game)
     {
@@ -877,6 +892,8 @@ public sealed partial class EnvironmentWindow
             }), 18));
             if (installBusy) state.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 4 });
             if (installMessage.Length > 0) state.Children.Add(Muted(installMessage));
+            if (installState is "failed" or "invalid")
+                state.Children.Add(CopyReportButton(game.Id, ["install", "installRemove"], () => installMessage + "\n" + installDiagnostics));
             body.Children.Add(Card(state));
         }
         if (installDiagnostics.Length > 0)

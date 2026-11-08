@@ -255,6 +255,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     // ---- free space ----
 
     /// 读这款的占用（spaceSurvey）。换了一款先清掉上一款的。
+    func clearSpaceFreed() { spaceFreed = nil }
+
     func loadSpace(_ gameID: String) {
         if spaceGameID != gameID { spaceGameID = gameID; space = nil; spaceFreed = nil }
         spaceError = nil
@@ -468,6 +470,19 @@ public final class S2ArmLauncherModel: ObservableObject {
         if !device.isEmpty { lines.append("目标设备：" + device) }
         lines += ["", "【最近日志】", log, "", "反馈：https://github.com/jhaizhou-ops/S2Arm/issues 或 X @happyjoejiang"]
         return lines.joined(separator: "\n")
+    }
+
+    /// 把最近一次失败作业的错误摘要放进剪贴板。正文由作业层生成（带任务号、阶段、错误码、真实日志）；没有作业记录才用 fallback。
+    func copyErrorReport(platform: String?, gameID: String?, operations: [String]?, fallback: String) async {
+        let info = Bundle.main.infoDictionary ?? [:]
+        var extra: [String: Any] = ["app": info["CFBundleShortVersionString"] as? String ?? "", "build": info["S2ABuildID"] as? String ?? "",
+                                    "xcode": provider.client.environment.developerDir.replacingOccurrences(of: "/Contents/Developer", with: ""),
+                                    "checks": checks.filter { !$0.ok }.map { ["name": $0.name, "message": $0.message] }]
+        if let platform { extra["platform"] = platform }
+        if let device = currentDeviceTarget.flatMap({ ($0["model"] ?? $0["name"]) as? String }) { extra["device"] = device }
+        let report = operations == nil ? nil : await provider.client.errorReport(gameID: gameID, operations: operations ?? [], extra: extra)
+        let text = report ?? fallback
+        NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
     }
 
     /// 装机前清单（装机页开着时每几秒调一次）。换了一款先清掉上一款的清单。

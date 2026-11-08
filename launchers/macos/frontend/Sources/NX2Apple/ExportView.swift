@@ -84,9 +84,11 @@ struct ExportView: View {
             HStack(alignment: .firstTextBaseline) {
                 Text(loc.t("s2arm.export.platforms")).font(.manrope(15, .semibold)).foregroundStyle(.secondary).padding(.leading, 2)
                 Spacer()
-                Button(loc.t("s2arm.export.installExisting"), action: install)
-                    .buttonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
-                    .accessibilityIdentifier("export.install")
+                if game.iphoneReady {
+                    Button(loc.t("s2arm.export.installExisting"), action: install)
+                        .buttonStyle(.plain).font(.manrope(12.5, .semibold)).foregroundStyle(LauncherPalette.cream.opacity(0.85))
+                        .accessibilityIdentifier("export.install")
+                }
             }
             HStack(alignment: .top, spacing: 12) {
                 ForEach(ExportPlatform.allCases) { platform in tile(platform) }

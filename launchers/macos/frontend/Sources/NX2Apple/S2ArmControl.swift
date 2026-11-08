@@ -81,7 +81,6 @@ import S2ArmAppleAdapter
         case ("POST", "/games"):
             guard let ps = a["paths"] as? [String], !ps.isEmpty else { return .bad("缺 paths") }
             if let b = busy() { return b }
-            if model.keysReady == false { return .bad("还不能放游戏：先放密钥（s2armctl keys <prod.keys>）") }
             model.importGames(ps.map { URL(fileURLWithPath: $0) }); return .ok()
         case ("POST", "/prepare"):
             guard let g = game() else { return .bad("没有这个 gameId") }
@@ -221,12 +220,12 @@ import S2ArmAppleAdapter
             "fontsDir": NSNull(), "library": m.provider.client.environment.library,
             "games": m.games.map { g -> [String: Any] in
                 ["id": g.id, "name": g.name, "display": g.display, "compatibility": g.compatibility, "ready": g.playable,
-                 "needsPreparation": g.needsPreparation, "buildable": g.buildable, "missing": g.missing,
+                 "needsPreparation": g.needsPreparation, "needsKeys": g.needsKeys, "buildable": g.buildable, "missing": g.missing,
                  "baseBytes": g.packages.filter { $0.type == "base" }.reduce(Int64(0)) { $0 + $1.size }, "bytes": g.totalBytes] },
             "session": session,
             "tasks": ControlJournal.tasks(privateRoot: privateRoot), "queue": [String](), "executionTask": NSNull(),
             "notice": NSNull(),
-            "error": (m.actionError ?? m.libraryError ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
+            "error": (m.actionError ?? (m.libraryError == LibraryProvider.noLibraryMessage ? nil : m.libraryError) ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
             "installReadiness": rd,
             "cachedAt": Date().timeIntervalSince1970,
             "screenCaptureAllowed": Self.screenCaptureAllowed, "lastSnapshotPath": lastSnapshotPath,

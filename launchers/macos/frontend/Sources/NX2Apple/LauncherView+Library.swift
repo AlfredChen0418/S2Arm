@@ -130,7 +130,7 @@ extension LauncherView {
                 }
                 .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.loading)
                 .help(loc.t("s2arm.library.refresh")).accessibilityLabel(loc.t("s2arm.library.refresh"))
-                Text(String(format: loc.t("library.gameCount"), model.games.count))
+                Text(model.games.count == 1 ? loc.t("library.gameCountOne") : String(format: loc.t("library.gameCount"), model.games.count))
                     .font(.manrope(12)).foregroundStyle(.secondary)
             }
             ScrollViewReader { proxy in

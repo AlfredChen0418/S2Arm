@@ -126,6 +126,11 @@ def parser():
         p.add_argument("--task", required=True)
         if name == "cancel":
             p.add_argument("--signal", default="TERM", choices=("TERM", "KILL"))
+    report_parser = sub.add_parser("report", help="print the error summary of one failed task, or of the newest failed task")
+    report_parser.add_argument("--private-root", required=True)
+    report_parser.add_argument("--task")
+    report_parser.add_argument("--game")
+    report_parser.add_argument("--operations", help="comma separated")
     resume = sub.add_parser("resume", help="run the same task again from its journal (a killed attempt's stages are skipped by their own keys)")
     resume.add_argument("--private-root", required=True)
     resume.add_argument("--task", required=True)
@@ -194,6 +199,9 @@ def cli(argv, *, context_class=Context, operation_overrides=None):
                                   stage=record.get("stage") or "", attempts=record.get("attempts") or {}), ensure_ascii=False),
                   file=sys.stderr, flush=True)
             return run_request(request, context_class=context_class, operation_overrides=operation_overrides)
+        if args.command == "report":
+            import report
+            return report.main(args.private_root, args.task, args.game, args.operations.split(",") if args.operations else None)
         if args.command == "cancel":
             result = cancel(args.private_root, args.task, args.signal)
             print(json.dumps(result, ensure_ascii=False))

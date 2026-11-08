@@ -37,6 +37,10 @@ struct EnvironmentView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
                     let failing = model.checks.filter { !$0.ok }
+                    if !failing.isEmpty || model.environmentError != nil {
+                        CopyReportButton(model: model, gameID: nil, operations: nil,
+                                         fallback: (["S2Arm 环境检查未通过", ProcessInfo.processInfo.operatingSystemVersionString, model.environmentError ?? ""] + failing.map { "\($0.name)：\($0.message)" }).joined(separator: "\n"))
+                    }
                     ForEach(ordered(failing), id: \.self) { group in
                         let items = failing.filter { groupOf($0) == group }
                         CardGroup(groupName(group)) {

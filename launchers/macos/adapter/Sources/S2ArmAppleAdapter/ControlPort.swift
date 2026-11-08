@@ -148,7 +148,11 @@ final class ControlStateCache: @unchecked Sendable {
             if let req = ControlRequest.parse(b) {
                 if req.headers["x-s2arm-token"] != self.token { Self.send(c, .bad("令牌不对", code: 401)); return }
                 if req.method == "GET" && req.path == "/state" { Self.send(c, ControlReply(code: 200, body: self.cache.get())); return }   // 不经主线程
-                Task { @MainActor in Self.send(c, await self.handle(req)) }
+                Task { @MainActor in
+                    let reply = await self.handle(req)
+                    self.refreshCache()   // 客户端接着读 /state，不能读到命令之前的状态
+                    Self.send(c, reply)
+                }
                 return
             }
             if done || err != nil || b.count > (8 << 20) { c.cancel(); return }

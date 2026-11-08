@@ -230,7 +230,9 @@ public sealed partial class EnvironmentWindow : Window
     private async Task CheckAsync()
     {
         if (busy) return;
-        CapturePaths(); report = null; diagnostics = ""; busy = true;
+        CapturePaths(); report = null; diagnostics = "";
+        if (EnvironmentProbe.BundleIncomplete(paths)) { summaryKey = "environment.unzip_first"; Render(); return; }
+        busy = true;
         summaryKey = "environment.checking"; Render();
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(2));
         active = cancellation;

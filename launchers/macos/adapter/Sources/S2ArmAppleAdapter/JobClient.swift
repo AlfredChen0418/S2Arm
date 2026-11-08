@@ -210,6 +210,29 @@ public final class JobClient {
         return env
     }
 
+    /// 最近一次失败作业的错误摘要（作业层 report.py，Mac / Windows 共用）。没有作业记录时返回 nil，由界面退回基本信息。
+    public func errorReport(gameID: String?, operations: [String], extra: [String: Any]) async -> String? {
+        guard let python = try? pythonExecutable(), let entry = try? jobEntry() else { return nil }
+        var arguments = ["-B", "-I", entry.path, "report", "--private-root", environment.privateRoot.path]
+        if let gameID { arguments += ["--game", gameID] }
+        if !operations.isEmpty { arguments += ["--operations", operations.joined(separator: ",")] }
+        var env = processEnvironment()
+        if let data = try? JSONSerialization.data(withJSONObject: extra) { env["S2A_REPORT_EXTRA"] = String(decoding: data, as: UTF8.self) }
+        final class Output: @unchecked Sendable {
+            private let lock = NSLock(); private var lines: [String] = []
+            func add(_ line: String) { lock.lock(); lines.append(line); lock.unlock() }
+            var text: String { lock.lock(); defer { lock.unlock() }; return lines.joined(separator: "\n") }
+        }
+        let output = Output()
+        return await withCheckedContinuation { continuation in
+            do {
+                _ = try runner.start(executable: python, arguments: arguments, environment: env,
+                                     onLine: { output.add(String(decoding: $0, as: UTF8.self)) }, onStderr: { _ in },
+                                     onExit: { continuation.resume(returning: $0 == 0 ? output.text : nil) })
+            } catch { continuation.resume(returning: nil) }
+        }
+    }
+
     /// 交一个作业。onEvent / onFinish 都在 callbackQueue 上、按作业输出顺序到达；onFinish 只来一次、在最后。
     /// 起不来（缺 Python / 入口 / 写不进请求）直接抛错，不回调。
     @discardableResult

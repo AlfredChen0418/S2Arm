@@ -467,9 +467,13 @@ struct ExportSessionView: View {
                 }
                 Button(x("fail.retry")) { if let game { model.export(game, platforms: [platform]) } }.buttonStyle(LauncherSecondaryButtonStyle())
                 Button(copied == platform ? loc.t("s2arm.export.copied") : loc.t("s2arm.export.copyError")) {
-                    let text = model.errorSummary(name, outcome: ExportRun.Outcome(state: outcome.state, message: loc.backend(outcome.message), code: outcome.code, suggestion: loc.backend(outcome.suggestion)), game: session.name)
-                    NSPasteboard.general.clearContents(); NSPasteboard.general.setString(text, forType: .string)
-                    copied = platform
+                    let fallback = model.errorSummary(name, outcome: ExportRun.Outcome(state: outcome.state, message: loc.backend(outcome.message), code: outcome.code, suggestion: loc.backend(outcome.suggestion)), game: session.name)
+                    Task {
+                        await model.copyErrorReport(platform: name, gameID: session.gameID, operations: [platform == .ios ? "ipa" : "build"], fallback: fallback)
+                        copied = platform
+                        try? await Task.sleep(for: .seconds(2))
+                        if copied == platform { copied = nil }
+                    }
                 }
                 .buttonStyle(LauncherSecondaryButtonStyle())
             }
@@ -480,6 +484,7 @@ struct ExportSessionView: View {
             }
         }
         .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)   // 每行按内容宽度居中会让上下两个平台错开
     }
 
     // ---- log ----

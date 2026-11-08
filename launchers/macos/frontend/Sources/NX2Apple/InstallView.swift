@@ -46,6 +46,7 @@ struct InstallView: View {
                 VStack(alignment: .leading, spacing: 24) {
                     if let failed = model.inlineFailure, failed.kind == .install {
                         Text(loc.backend(failed.message)).font(.manrope(13)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
+                        CopyReportButton(model: model, gameID: gameID, operations: ["install", "installRemove"], fallback: failed.message)
                     }
                     if let r = model.installReadiness {
                         CardGroup(loc.t("s2arm.install.checklist"), footnote: footnote(r)) {
