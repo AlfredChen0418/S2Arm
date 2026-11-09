@@ -15,6 +15,8 @@ public sealed partial class EnvironmentWindow
     private JsonElement? updateReady;
     private string updateFailure = "";   // 错误码
     private static string InstallDir => Path.TrimEndingDirectorySeparator(AppContext.BaseDirectory);
+    // The release version lives in version.txt (written by bundle_win.py); the assembly version is always 1.0.0.0.
+    private static string AppVersion => UpdateClient.CurrentVersion(InstallDir) is { Length: > 0 } version ? version : "-";
     private string UpdatesFolder => Path.Combine(privateRoot, "updates");
     private bool UpdateBlocked => PackBusy || libraryBusy || importBusy || busy;
 

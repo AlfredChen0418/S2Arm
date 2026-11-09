@@ -779,7 +779,7 @@ public sealed partial class EnvironmentWindow
         {
             var extra = System.Text.Json.JsonSerializer.Serialize(new Dictionary<string, object?>
             {
-                ["app"] = typeof(EnvironmentWindow).Assembly.GetName().Version?.ToString() ?? "",
+                ["app"] = AppVersion,
                 ["checks"] = (report?.Checks ?? []).Where(c => c.Status != "ok")
                     .Select(c => new Dictionary<string, string> { ["name"] = c.Name, ["message"] = c.Message }).ToList()
             });

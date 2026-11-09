@@ -115,7 +115,7 @@ public sealed partial class EnvironmentWindow
             case ("GET", "/help"):
                 return ControlReply.Json(new Dictionary<string, object?>
                 {
-                    ["version"] = typeof(EnvironmentWindow).Assembly.GetName().Version?.ToString() ?? "", ["frontend"] = "S2Arm Windows",
+                    ["version"] = AppVersion, ["frontend"] = "S2Arm Windows",
                     ["endpoints"] = Endpoints.Select(e => new Dictionary<string, string> { ["call"] = e.Call, ["what"] = e.What }).ToList()
                 });
             case ("GET", "/targets"): case ("POST", "/target"):

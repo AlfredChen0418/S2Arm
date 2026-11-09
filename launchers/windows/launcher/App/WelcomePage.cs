@@ -96,7 +96,7 @@ public sealed partial class EnvironmentWindow
 
     private string EnvironmentSummary()
     {
-        var lines = new List<string> { "S2Arm 环境检查未通过", "", "S2Arm：" + (typeof(EnvironmentWindow).Assembly.GetName().Version?.ToString() ?? "-"),
+        var lines = new List<string> { "S2Arm 环境检查未通过", "", "S2Arm：" + AppVersion,
             "系统：" + System.Runtime.InteropServices.RuntimeInformation.OSDescription, "" };
         lines.AddRange((report?.Checks ?? []).Where(c => c.Status != "ok").Select(c => $"{c.Name}（{c.Status}，{c.Code ?? "-"}）：{c.Message}"));
         lines.Add(""); lines.Add(diagnostics);
