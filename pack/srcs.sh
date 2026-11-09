@@ -11,7 +11,7 @@
 #                              一个文件里有多个本体（11-05 索尼克×夏特：卡带里游戏 + 艺术集&原声集两个程序号）：--nacp-only 不带 --title-id 回 1「基础程序应恰好 1 个，实际 N」
 #                              （N ≥ 2）→ 改用 nx_unpack --inspect 按内容清单列出全部本体，每个程序号各出一行（同一路径多行，按程序号排序）、都进缓存；
 #                              调用方按程序号筛行，往 nx_unpack 传 --title-id=<程序号> 只取这一款。--inspect 读不出（退出 3）照旧记「-」不进缓存
-#                              结果按「路径 大小 修改时间」缓存在 S2A_SRC_IDS（缺省 run/s2arm/icons/.ids.tsv）；文件名一概不看（10-20 维护者定）
+#                              结果按「路径 大小 修改时间（纳秒）」缓存在 S2A_SRC_IDS（缺省 run/s2arm/icons/.ids.tsv）；文件名一概不看（10-20 维护者定）
 # nx_unpack：S2A_NX_UNPACK 给了就用；没给按本树源码哈希取 run/s2arm/bin/nx_unpack_<哈希>/nx_unpack，没有就现编（编到 .tmp 再 mv，内容寻址、只读使用）——
 #   共享的旧 bin/nx_unpack 不认新参数（--aoc-only），合入后不重编就会让刷新全红
 _srcs_h=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -66,7 +66,7 @@ src_ids() {
   while IFS= read -r f; do
     # stat -L：软链取目标的大小 / 修改时间，原件换了键跟着变。GNU（-c）与 BSD（-f）都试：GNU 的 -f 是文件系统统计、退出码也不可靠（#824 F-pack-stat-bsd），
     #   所以 -c 在前、BSD 不认 -c 才落到 -f；两样都读不出就停，不拿空键认包
-    k="$f	$(stat -L -c '%s	%Y' "$f" 2> /dev/null || stat -L -f '%z	%m' "$f" 2> /dev/null)" || { echo "【红】src_ids 读不出 $f 的大小 / 修改时间（stat）" >&2; return 1; }
+    k="$f	$(stat -L -c '%s	%.9Y' "$f" 2> /dev/null || stat -L -f '%z	%.9Fm' "$f" 2> /dev/null)" || { echo "【红】src_ids 读不出 $f 的大小 / 修改时间（stat）" >&2; return 1; }
     ids=$(awk -F'\t' -v k="$k" '$1"\t"$2"\t"$3 == k && !n[$4]++ {print $4}' "$SRC_IDS")   # 多本体的文件缓存里有多行：全取（并发重复写入的同号去重）
     # 退出 1（按内容的结论：更新 / DLC 包、缺密钥…）记「-」但不进缓存，下次重探；只有退出 0 的才进缓存；其余非 0 报机器原因（见头注）。
     #   10-26 自检 pack_stages_test 在 gate-host 偶发红：并行的失败用例先把 base.nsp 记成「-」，同批另一路读到就判成「没有这个程序号的包」

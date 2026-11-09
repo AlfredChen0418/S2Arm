@@ -279,7 +279,7 @@ with tempfile.TemporaryDirectory() as t:
     #   --to-extract 一步出解包目录（同 ① ② 两步的结果），中间的 <解包目录>.ns2_dump 不留；没给 --name、没控制分区时标题 = 文件名去掉「 [程序号][版本]」
     r8 = run(NUP, '--inspect', one)
     st = os.stat(os.path.join(one, 'x.nup'))
-    chk('⑧ --inspect 认包行', r8.stdout.strip().split('\t'), [os.path.abspath(os.path.join(one, 'x.nup')),str(st.st_size), str(int(st.st_mtime)), f'{APP:016X}'])
+    chk('⑧ --inspect 认包行', r8.stdout.strip().split('\t'), [os.path.abspath(os.path.join(one, 'x.nup')),str(st.st_size), f'{st.st_mtime_ns // 10**9}.{st.st_mtime_ns % 10**9:09d}', f'{APP:016X}'])
     ex8 = os.path.join(t, 'ex8')
     r8 = run(NUP, '--to-extract', src, ex8)
     chk('⑧ --to-extract 退出 0', r8.returncode, 0)

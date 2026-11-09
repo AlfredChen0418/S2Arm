@@ -1070,7 +1070,7 @@ class Stages:
         keys = env.get('S2A_KEYS', str(Path.home() / '.switch/prod.keys'))
         for number, path in enumerate(self._source_files()):
             st = path.stat()
-            identity = [str(path), str(st.st_size), str(int(st.st_mtime))]
+            identity = [str(path), str(st.st_size), f'{st.st_mtime_ns // 10**9}.{st.st_mtime_ns % 10**9:09d}']   # 纳秒，同 pack/srcs.sh（审计 P1-54）
             # Same contract as pack/srcs.sh src_ids: one container may hold several
             # base programs (a game plus a bundled art-book app); each program id
             # gets its own row, and a cached multi-base file has several rows.

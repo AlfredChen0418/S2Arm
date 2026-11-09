@@ -29,7 +29,8 @@ for f in files:
     except OSError: print(f"stat: cannot stat '{f}': No such file or directory", file=sys.stderr); rc = 1; continue
     if fs: print(f'  File: "{f}"\n    ID: 1 Namelen: 255 Type: ext2/ext3\nBlocks: Total: 999 Free: {time.time_ns() % 997} Available: 1'); continue
     if fmt is None: print(f'  File: {f}\n  Size: {s.st_size}'); continue
-    print(fmt.replace('%s', str(s.st_size)).replace('%Y', str(int(s.st_mtime))).replace('%n', f))
+    n = s.st_mtime_ns
+    print(fmt.replace('%s', str(s.st_size)).replace('%.9Y', f'{n // 10**9}.{n % 10**9:09d}').replace('%Y', str(int(s.st_mtime))).replace('%n', f))
 sys.exit(rc)
 EOF
 printf '#!/bin/bash\necho "sysctl: command not found" >&2; exit 127\n' > "$T/gnu/sysctl"
@@ -49,9 +50,13 @@ chmod +x "$T/nxu"
 ids() { PATH="$1:$PATH" S2A_NX_UNPACK=$T/nxu S2A_GAME_SRC=$T/src S2A_SRC_IDS=$T/ids.tsv bash -c "source '$H/pack/srcs.sh'; src_ids"; }
 calls() { awk 'END { print NR }' "$T/calls" 2> /dev/null || echo 0; }
 ids "$T/gnu" > "$T/i1"; head -c 100 /dev/zero > "$T/src/a.nsp"; touch -t 202610200100 "$T/src/a.nsp"; ids "$T/gnu" > "$T/i2"; c2=$(calls); ids "$T/gnu" > "$T/i3"; c3=$(calls)
-M=$("$PY" -c 'import os,sys;print(int(os.stat(sys.argv[1]).st_mtime))' "$T/src/a.nsp")
+M=$("$PY" -c 'import os,sys;n=os.stat(sys.argv[1]).st_mtime_ns;print(f"{n//10**9}.{n%10**9:09d}")' "$T/src/a.nsp")
 ck "② GNU stat：键 = 路径 / 100 / ${M}（实得 $(cut -f2,3 "$T/i2" | tr '\t' /)），换文件重认（调 ${c2} 次）、不变命中缓存（再认后 ${c3} 次）" \
   '[ "$(cut -f1-4 "$T/i2" | tr '\''\t'\'' '\''|'\'')" = "$T/src/a.nsp|100|$M|0100AAAA00000000" ] && [ "$(cut -f2 "$T/i1")" = 6 ] && [ "$c2" = 2 ] && [ "$c3" = 2 ] && [ "$(grep -c . "$T/i3")" = 1 ]'
+# 审计 P1-54：同一秒、同大小换内容（只有纳秒不同）也要重认。手算期望：调用次数从 2 变 3
+"$PY" -c 'import os,sys;p=sys.argv[1];n=os.stat(p).st_mtime_ns;open(p,"wb").write(b"x"*100);os.utime(p,ns=(n,n+1000))' "$T/src/a.nsp"
+ids "$T/gnu" > "$T/i5"; c5=$(calls)
+ck "②b 同秒同大小换内容重认（调 ${c5} 次，期望 3）" '[ "$c5" = 3 ]'
 ids "$T/nostat" > "$T/i4" 2> "$T/e4"; r=$?
 ck "③ stat 读不出 → 报红、rc=${r} 非 0、不交出行" '[ $r != 0 ] && [ ! -s "$T/i4" ] && grep -q 读不出 "$T/e4"'
 

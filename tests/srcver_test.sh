@@ -14,7 +14,7 @@ mkdir -p "$T/src" "$T/roots/acnh@v1/exefs" "$T/roots/acnh@v2/exefs"; ln -s acnh@
 for v in v1 v2; do { head -c 64 /dev/zero; printf "BUILD_$v.........." | head -c 16; head -c 32 /dev/zero; } > "$T/roots/acnh@$v/exefs/main"; printf 'title_id\t01006f8002326000\n' > "$T/roots/acnh@$v/unpack.tsv"; done
 echo base > "$T/src/game.nsp"; echo upd > "$T/src/upd.nsp"
 # 原件认包缓存预先写好（src_ids 按「路径 大小 修改时间」命中，不调 nx_unpack 认包）：卡带是本款，更新读不出程序号
-for f in game.nsp upd.nsp; do p=$T/src/$f; printf '%s\t%s\t%s\n' "$p" "$(stat -c '%s	%Y' "$p" 2> /dev/null || stat -f '%z	%m' "$p")" "$([ $f = game.nsp ] && echo 01006F8002326000 || echo -)"; done > "$T/ids.tsv"
+for f in game.nsp upd.nsp; do p=$T/src/$f; printf '%s\t%s\t%s\n' "$p" "$(stat -L -c '%s	%.9Y' "$p" 2> /dev/null || stat -L -f '%z	%.9Fm' "$p")" "$([ $f = game.nsp ] && echo 01006F8002326000 || echo -)"; done > "$T/ids.tsv"
 cat > "$T/nxu" <<'EOF'
 #!/bin/bash
 echo "$*" >> "$FAKE_CALLS"
