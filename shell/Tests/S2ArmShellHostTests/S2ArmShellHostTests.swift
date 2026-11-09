@@ -93,6 +93,8 @@ nonisolated(unsafe) private var lastPlayed = ""
     // 缺省：60 帧开、宽屏强制关、透明度 100、布局默认，没有「我的布局」时选项 = 默认 + 调整位置
     var s = S2ArmGameSettings.sections(for: "G1", stores: stores, state: .init(selected: "default", hasMine: false))
     #expect(row(s, "fps60")?.value == "on" && row(s, "widenForce")?.value == "off" && row(s, "vpadOpacity")?.value == "100")
+    #expect(row(s, "vpadHoldLock")?.value == "on")
+    #expect(row(S2ArmGameSettings.sections(for: "G1", stores: stores, state: .init(selected: "default", hasMine: false, holdLock: false)), "vpadHoldLock")?.value == "off")
     if case .choice(let o) = row(s, "vpadLayout")?.kind { #expect(o.map(\.id) == ["default", "edit"]) } else { Issue.record("布局行应是多选") }
     // 改：G1 关 60 帧、开宽屏强制、透明度 40 → G1 两项变了、G2 不变；透明度全局 0.4
     #expect(!S2ArmGameSettings.apply(id: "G1", setting: "fps60", value: "off", stores: stores))

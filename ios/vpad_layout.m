@@ -176,6 +176,24 @@ BOOL S2AVPadHapticStep(S2AVPadHapticState *state, uint32_t buttons, uint8_t acti
     return enabled && pulse;
 }
 
+uint32_t S2AVPadHoldLockStep(S2AVPadHoldLockState *state, uint32_t held, uint32_t lockable, double now, BOOL enabled) {
+    if (!enabled) { *state = (S2AVPadHoldLockState){0}; return 0; }
+    held &= lockable & 0xFFFF;
+    uint32_t before = state->locked, down = held & ~state->held, up = state->held & ~held;
+    // 先结算满 2 秒：主线程卡顿时定时器可能排在抬手之后，手指按够了就算数
+    for (int i = 0; i < 16; i++) if ((state->held & ~state->locked) >> i & 1 && now - state->downAt[i] >= kS2AVPadHoldLockSeconds) state->locked |= 1u << i;
+    for (int i = 0; i < 16; i++) if (down >> i & 1) { if (state->locked >> i & 1) state->unlocking |= 1u << i; else state->downAt[i] = now; }
+    state->locked &= ~(up & state->unlocking); state->unlocking &= ~up; state->held = held;
+    return before ^ state->locked;
+}
+double S2AVPadHoldLockDeadline(const S2AVPadHoldLockState *state) {
+    double due = 0;
+    for (int i = 0; i < 16; i++) if ((state->held & ~state->locked) >> i & 1) {
+        double t = state->downAt[i] + kS2AVPadHoldLockSeconds; if (due == 0 || t < due) due = t;
+    }
+    return due;
+}
+
 static BOOL stick_values(CGFloat deadzone, CGFloat saturation, CGFloat exponent) {
     return isfinite(deadzone) && deadzone >= 0 && deadzone <= .4 &&
         isfinite(saturation) && saturation >= .5 && saturation <= 1 &&
@@ -188,9 +206,24 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
     return CGPointMake(input.x / radius * length, input.y / radius * length);
 }
 
+// {schemaVersion:1, enabled:布尔} 的小文件。1 = 读到，0 = 没有文件，-1 = 损坏
+static int read_enabled(NSURL *file, BOOL *enabled) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    if (![fm fileExistsAtPath:file.path]) return 0;
+    NSDictionary *attributes = [fm attributesOfItemAtPath:file.path error:nil];
+    NSData *data = nil;
+    if ([attributes[NSFileType] isEqualToString:NSFileTypeRegular] && [attributes[NSFileSize] unsignedLongLongValue] <= 4096)
+        data = [NSData dataWithContentsOfURL:file options:0 error:nil];
+    id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (!fields(value, @[@"schemaVersion", @"enabled"]) || !number(value[@"schemaVersion"], 1, 1) ||
+        ![value[@"enabled"] isKindOfClass:NSNumber.class] || CFGetTypeID((__bridge CFTypeRef)value[@"enabled"]) != CFBooleanGetTypeID()) return -1;
+    *enabled = [value[@"enabled"] boolValue]; return 1;
+}
+
 @implementation S2AVPadLayoutStore {
     NSString *_selectionProblem;
     NSString *_hapticProblem;
+    NSString *_holdLockProblem;
 
     NSString *_stickProblem;
     NSString *_visibilityProblem;
@@ -200,18 +233,11 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
     if (!(self = [super init])) return nil;
     _directory = [directory copy]; _settingsDirectory = [settingsDirectory copy]; _selectedIdentifier = S2AVPadLayoutDefaultIdentifier; _diagnostics = @[];
     _hapticFeedbackEnabled = YES;
-    NSURL *haptics = [_settingsDirectory URLByAppendingPathComponent:@".haptics.json"];
-    if ([NSFileManager.defaultManager fileExistsAtPath:haptics.path]) {
-        NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:haptics.path error:nil];
-        NSData *data = nil;
-        if ([attributes[NSFileType] isEqualToString:NSFileTypeRegular] && [attributes[NSFileSize] unsignedLongLongValue] <= 4096)
-            data = [NSData dataWithContentsOfURL:haptics options:0 error:nil];
-        id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
-        if (fields(value, @[@"schemaVersion", @"enabled"]) && number(value[@"schemaVersion"], 1, 1) &&
-            [value[@"enabled"] isKindOfClass:NSNumber.class] && CFGetTypeID((__bridge CFTypeRef)value[@"enabled"]) == CFBooleanGetTypeID())
-            _hapticFeedbackEnabled = [value[@"enabled"] boolValue];
-        else _hapticProblem = @"F01.haptics：触感反馈设置损坏，暂用默认开启；原记录保留至重新设置成功";
-    }
+    if (read_enabled([_settingsDirectory URLByAppendingPathComponent:@".haptics.json"], &_hapticFeedbackEnabled) < 0)
+        _hapticProblem = @"F01.haptics：触感反馈设置损坏，暂用默认开启；原记录保留至重新设置成功";
+    _holdLockEnabled = YES;
+    if (read_enabled([_directory URLByAppendingPathComponent:@".hold_lock.json"], &_holdLockEnabled) < 0)
+        _holdLockProblem = @"F01.holdLock：按住锁定设置损坏，暂用默认开启；原记录保留至重新设置成功";
     _idleKeyOpacity = 0.25;
     NSURL *visibility = [_settingsDirectory URLByAppendingPathComponent:@".visibility.json"];
     if ([NSFileManager.defaultManager fileExistsAtPath:visibility.path]) {
@@ -274,6 +300,7 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
     NSMutableArray *result = [NSMutableArray array], *problems = [NSMutableArray array];
     if (_selectionProblem) [problems addObject:_selectionProblem];
     if (_hapticProblem) [problems addObject:_hapticProblem];
+    if (_holdLockProblem) [problems addObject:_holdLockProblem];
     if (_stickProblem) [problems addObject:_stickProblem];
     if (_visibilityProblem) [problems addObject:_visibilityProblem];
     NSError *error; NSArray *urls = [NSFileManager.defaultManager contentsOfDirectoryAtURL:_directory includingPropertiesForKeys:nil options:NSDirectoryEnumerationSkipsHiddenFiles error:&error];
@@ -312,6 +339,12 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"enabled": (enabled ? @YES : @NO)} options:0 error:error];
     if (!data || ![data writeToURL:[_settingsDirectory URLByAppendingPathComponent:@".haptics.json"] options:NSDataWritingAtomic error:error]) return NO;
     _hapticFeedbackEnabled = enabled; _hapticProblem = nil; return YES;
+}
+- (BOOL)setHoldLockEnabled:(BOOL)enabled error:(NSError **)error {
+    if (![self prepareDirectory:error]) return NO;
+    NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"enabled": (enabled ? @YES : @NO)} options:0 error:error];
+    if (!data || ![data writeToURL:[_directory URLByAppendingPathComponent:@".hold_lock.json"] options:NSDataWritingAtomic error:error]) return NO;
+    _holdLockEnabled = enabled; _holdLockProblem = nil; return YES;
 }
 - (BOOL)setStickDeadzone:(CGFloat)deadzone saturation:(CGFloat)saturation exponent:(CGFloat)exponent error:(NSError **)error {
     if (!stick_values(deadzone, saturation, exponent)) return fail(error, @"F01.stick", @"死区须为 0–0.4，外圈饱和须为 0.5–1，响应指数须为 0.5–3");

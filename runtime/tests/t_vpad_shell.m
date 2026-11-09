@@ -12,6 +12,7 @@
 char *s2a_shell_vpad_layout_json(const char *game_id, double safe_w, double safe_h);
 int s2a_shell_vpad_save(const char *game_id, const char *centers_json, double safe_w, double safe_h);
 int s2a_shell_vpad_select(const char *game_id, const char *layout_id);
+int s2a_shell_vpad_set_hold_lock(const char *game_id, int enabled);
 static int bad;
 #define CK(c, ...) do { if (c) printf("✓ "); else { printf("✗ "); bad++; } printf(__VA_ARGS__); printf("\n"); } while (0)
 static NSDictionary *rd(const char *g) { char *j = s2a_shell_vpad_layout_json(g, 832, 419); if (!j) return nil;
@@ -35,6 +36,7 @@ int main(void) {
         d = rd("g1");
         CK([d[@"selected"] isEqualToString:@"default"] && [d[@"hasMine"] boolValue] && near([btn(d, @"A")[@"x"] doubleValue], 0.5), "④ selected default、mine 保留、底稿仍是 mine（A x %.3f）", [btn(d, @"A")[@"x"] doubleValue]);
         CK(rd("../x") == nil && rd(".h") == nil && s2a_shell_vpad_save("../x", "{}", 832, 419) == 0 && s2a_shell_vpad_select("../x", "mine") == 0, "⑤ 不合规游戏号读写都拒绝");
+        CK([rd("g1")[@"holdLock"] boolValue] && s2a_shell_vpad_set_hold_lock("g1", 0) == 1 && ![rd("g1")[@"holdLock"] boolValue] && [rd("g2")[@"holdLock"] boolValue] && s2a_shell_vpad_set_hold_lock("../x", 0) == 0, "⑦ 按住锁定缺省开；g1 关了不影响 g2；不合规游戏号拒绝");
         CK(s2a_shell_vpad_select("g1", "mine") == 1, "⑥ 选回 mine");
         S2AVPadLayoutStore *s = [[S2AVPadLayoutStore alloc] initWithDirectory:[NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"games/g1/VPadLayouts"]]
                                                            settingsDirectory:[NSURL fileURLWithPath:[root stringByAppendingPathComponent:@"VPadLayouts"]]];

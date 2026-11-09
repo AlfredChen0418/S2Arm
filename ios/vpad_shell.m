@@ -36,7 +36,7 @@ char *s2a_shell_vpad_layout_json(const char *game_id, double safe_w, double safe
         NSString *sel = s.selectedIdentifier;
         NSString *kind = [sel isEqualToString:S2AVPadLayoutMineIdentifier] ? @"mine" : [sel isEqualToString:S2AVPadLayoutDefaultIdentifier] ? @"default"
                        : [sel isEqualToString:S2AVPadLayoutTouchIdentifier] ? @"touch" : @"other";
-        NSDictionary *doc = @{@"selected": kind, @"hasMine": @(hasMine), @"buttons": b.buttons};
+        NSDictionary *doc = @{@"selected": kind, @"hasMine": @(hasMine), @"holdLock": @(s.holdLockEnabled), @"buttons": b.buttons};
         NSData *d = [NSJSONSerialization dataWithJSONObject:doc options:0 error:nil]; if (!d) return NULL;
         char *out = malloc(d.length + 1); if (!out) return NULL;
         memcpy(out, d.bytes, d.length); out[d.length] = 0; return out;
@@ -52,6 +52,15 @@ int s2a_shell_vpad_save(const char *game_id, const char *centers_json, double sa
         S2AVPadLayout *m = [base_for(s, safe, &hasMine) layoutWithButtonCenters:c safeRect:safe identifier:S2AVPadLayoutMineIdentifier name:@"我的布局" error:&e];
         BOOL ok = m && [s replaceLayout:m error:&e] && [s selectIdentifier:S2AVPadLayoutMineIdentifier error:&e] && [s markManual:&e];
         if (!ok) NSLog(@"S2Arm 游戏库：保存 %s 的按键位置失败：%@", game_id, e.localizedDescription);
+        return ok ? 1 : 0;
+    }
+}
+
+int s2a_shell_vpad_set_hold_lock(const char *game_id, int enabled) {
+    @autoreleasepool {
+        S2AVPadLayoutStore *s = store_for(game_id); if (!s) return 0;
+        NSError *e; BOOL ok = [s setHoldLockEnabled:enabled != 0 error:&e];
+        if (!ok) NSLog(@"S2Arm 游戏库：%s 保存按住锁定失败：%@", game_id, e.localizedDescription);
         return ok ? 1 : 0;
     }
 }

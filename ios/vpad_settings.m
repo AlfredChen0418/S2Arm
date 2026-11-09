@@ -51,7 +51,7 @@
 }
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView { return _store.diagnostics.count ? 5 : 4; }
 - (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
-    return section == 0 ? _layouts.count + 2 : section == 1 ? 4 : section == 2 ? 2 : section == 3 ? 3 : _store.diagnostics.count;
+    return section == 0 ? _layouts.count + 2 : section == 1 ? 4 : section == 2 ? 3 : section == 3 ? 3 : _store.diagnostics.count;
 }
 // 0 = 默认布局，1 = 触屏直通，之后是用户布局（内置两项没有对应文件，所以固定占前两行）
 - (NSString *)identifierAtRow:(NSInteger)row {
@@ -82,6 +82,13 @@
         cell.textLabel.text = @[@"导入布局", @"另存当前布局", @"导出当前布局", @"恢复按键布局"][indexPath.row];
         cell.accessibilityIdentifier = @[@"vpad.layouts.import", @"vpad.layouts.save", @"vpad.layouts.export", @"vpad.layouts.reset"][indexPath.row];
         cell.textLabel.textColor = self.view.tintColor;
+    } else if (indexPath.section == 2 && indexPath.row == 2) {
+        cell.textLabel.text = @"按住锁定 ZL / ZR"; cell.detailTextLabel.text = @"按住 2 秒锁定，再点一下解锁；只对这款游戏生效";
+        cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.holdLockEnabled;
+        toggle.accessibilityIdentifier = @"vpad.holdLock.enabled"; toggle.accessibilityLabel = @"按住锁定 ZL / ZR";
+        [toggle addTarget:self action:@selector(holdLockChanged:) forControlEvents:UIControlEventValueChanged];
+        cell.accessoryView = toggle;
     } else if (indexPath.section == 2 && indexPath.row == 1) {
         cell.textLabel.text = @"触感反馈"; cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.hapticFeedbackEnabled;
@@ -127,6 +134,11 @@
     NSError *error;
     if (![_store setHapticFeedbackEnabled:toggle.on error:&error]) { toggle.on = _store.hapticFeedbackEnabled; [self showError:error]; return; }
     // Feedback is independent of manual layout selection / touch mode.
+    [self reload];
+}
+- (void)holdLockChanged:(UISwitch *)toggle {
+    NSError *error;
+    if (![_store setHoldLockEnabled:toggle.on error:&error]) { toggle.on = _store.holdLockEnabled; [self showError:error]; return; }
     [self reload];
 }
 - (void)opacityChanged:(UISlider *)slider {

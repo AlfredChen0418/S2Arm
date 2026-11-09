@@ -2,6 +2,7 @@
 //   左半屏空白处按下 = 浮动左摇杆（按下点为中心，拖 60 pt 推满，松手消失）；右半屏空白处按下 = 浮动右摇杆（同上，转镜头）；
 //   摇杆按下 LS / RS 三种按法：看得见的 LS / RS 键（默认布局：LS 在十字键上方、RS 在 ABXY 左下，照 Switch 手柄原位）；
 //   浮动摇杆点一下不拖（≤0.25 秒、≤10 点）= 按一下；双击左 / 右半屏（第二下按住）= 按住。ABXY 右下按 Switch 原位（A 右、B 下、X 上、Y 左）；十字键左上；ZL L / R ZR 上缘两侧；－ ＋ 顶部中间。
+//   ZL / ZR 按住 2 秒锁定（松手后游戏仍收到按下，键上小锁变闭锁 + 轻震），再点一下抬手解锁；功能开着时小锁常驻，按游戏在设置里可关。
 //   碰屏恢复按键高亮，3 秒无触摸降到设定的最低透明度（缺省 25%，可调 0–100%）；热区不变。
 // 线程：UIKit 主线程写，InputPump 的 HID 线程约 60 Hz 读 s2a_vpad_read（固定快照，不访问设备）。
 // 触屏直通：游戏自己带一套 Switch 触屏 UI（main.bin 有 SwitchTouchInput / TouchInterface、"New touch event" 等符号，
@@ -19,6 +20,7 @@
 // 弱链接[lab]：s2a_dprompt_notice（dprompt.m 提供的提示条；输入工作台不编 dprompt.m，取不到就不提示）
 // 弱链接[lab]：s2a_dprompt_ask（dprompt.m 提供的带两个按钮的提示条；输入工作台不编 dprompt.m，取不到就退回 s2a_dprompt_notice 或不提示）
 #import <UIKit/UIKit.h>
+#import <QuartzCore/QuartzCore.h>
 #import "controller.h"
 #import "vpad.h"
 #import "vpad_settings.h"
@@ -168,6 +170,7 @@ void s2a_dprompt_ask(NSString *title, NSString *body, NSString *accept, NSString
     NSTimer *_fade;
     UIImpactFeedbackGenerator *_impactFeedback;
     S2AVPadHapticState _hapticState;
+    S2AVPadHoldLockState _holdLock; NSTimer *_holdLockTimer; double _holdLockDue;   // ZL / ZR 按住锁定
     CGFloat _stickTravel[2];
     S2AVPadLayoutStore *_layoutStore;
     S2AVPadLayout *_layout;
@@ -191,6 +194,7 @@ void s2a_dprompt_ask(NSString *title, NSString *body, NSString *accept, NSString
     NSMapTable<UITouch *, NSValue *> *_dragOffset;
 }
 static const CGFloat kHit = 10;
+static const uint32_t kHoldLockKeys = (1u << B_ZL) | (1u << B_ZR);
 // 方案三「描线」（11-07 维护者 选定）：无底色只描线 + 细投影，ABXY 字淡青，按下淡白填充；不扎眼、亮暗场景都看得清
 static UIColor *vp_line(void) { return [UIColor colorWithWhite:1 alpha:0.78]; }
 static UIColor *vp_text(void) { return [UIColor colorWithWhite:1 alpha:0.86]; }
@@ -207,6 +211,21 @@ static CGFloat vp_opacity(void) {
     return v;
 }
 static void vp_shadow(CALayer *l) { l.shadowColor = UIColor.blackColor.CGColor; l.shadowOpacity = 0.45; l.shadowRadius = 1; l.shadowOffset = CGSizeMake(0, 1); }
+// ZL / ZR 右侧的小锁：功能开着时常驻，开锁 = 没锁定，闭锁（淡青）= 锁定中。两张图建键时备好，切换只翻 highlighted。
+static const NSInteger kLockBadgeTag = 1000;
+static void vp_add_lock_badge(UIView *key) {
+    UIImageSymbolConfiguration *size = [UIImageSymbolConfiguration configurationWithPointSize:10 weight:UIImageSymbolWeightBold];
+    UIImageView *badge = [[UIImageView alloc] initWithImage:[[UIImage systemImageNamed:@"lock.open.fill" withConfiguration:size] imageWithTintColor:vp_text() renderingMode:UIImageRenderingModeAlwaysOriginal]
+                                           highlightedImage:[[UIImage systemImageNamed:@"lock.fill" withConfiguration:size] imageWithTintColor:vp_face() renderingMode:UIImageRenderingModeAlwaysOriginal]];
+    badge.tag = kLockBadgeTag; badge.accessibilityIdentifier = @"vpad.holdLock.badge"; badge.translatesAutoresizingMaskIntoConstraints = NO; vp_shadow(badge.layer);
+    [key addSubview:badge];
+    [NSLayoutConstraint activateConstraints:@[[badge.trailingAnchor constraintEqualToAnchor:key.trailingAnchor constant:-6], [badge.centerYAnchor constraintEqualToAnchor:key.centerYAnchor]]];
+}
+static void vp_lock(UIView *key, BOOL enabled, BOOL locked) {
+    UIImageView *badge = (UIImageView *)[key viewWithTag:kLockBadgeTag]; if (!badge) return;
+    badge.hidden = !enabled; badge.highlighted = locked;
+    key.accessibilityValue = !enabled ? nil : locked ? @"已锁定" : @"未锁定";
+}
 static NSArray<NSString *> *button_ids(void) {
     return @[@"A", @"B", @"X", @"Y", @"LS", @"RS", @"L", @"R", @"ZL", @"ZR", @"PLUS", @"MINUS", @"LEFT", @"UP", @"RIGHT", @"DOWN"];
 }
@@ -249,18 +268,19 @@ static NSString *button_label(NSString *identifier) {
     [self wake];
     return self;
 }
-- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; [_fade invalidate]; }
+- (void)dealloc { [NSNotificationCenter.defaultCenter removeObserver:self]; [_fade invalidate]; [_holdLockTimer invalidate]; }
 - (void)clearTouches {
     [_fade invalidate]; _fade = nil;
     [_held removeAllObjects]; _stickPress = 0;
     _hapticState = (S2AVPadHapticState){0}; memset(_stickTravel, 0, sizeof _stickTravel); _impactFeedback = nil;
+    _holdLock = (S2AVPadHoldLockState){0}; [_holdLockTimer invalidate]; _holdLockTimer = nil; _holdLockDue = 0;   // 失焦 / 接手柄 / 开设置都放开：不留看不见的按住
     memset(_ax, 0, sizeof _ax); memset(_lastUp, 0, sizeof _lastUp);
     for (int i = 0; i < 2; i++) { _stick[i] = nil; _ring[i].hidden = _knob[i].hidden = YES; }
     [_slot removeAllObjects];
     @synchronized(self) {
         for (int i = 0; i < 16; i++) if (_slotState[i] == 1) _slotState[i] = 2;   // 按住的手指补一帧 End 再释放
     }
-    for (UILabel *key in _keys) vp_fill(key, NO);
+    for (UILabel *key in _keys) { vp_fill(key, NO); vp_lock(key, _layoutStore.holdLockEnabled, NO); }
     int32_t axes[4] = {0};
     // Disconnect clears pad.c's short-press latch as well as held state. Merely
     // publishing zero buttons leaves a press queued for the next HID read.
@@ -286,6 +306,7 @@ static NSString *button_label(NSString *identifier) {
         key.textColor = face ? vp_face() : vp_text(); key.font = [UIFont boldSystemFontOfSize:(key.tag >= B_LEFT || key.tag == B_LS || key.tag == B_RS) ? 13 : face ? 17 : 14];
         key.backgroundColor = UIColor.clearColor; vp_fill(key, NO); key.layer.borderWidth = 1.6; key.layer.borderColor = vp_line().CGColor;
         key.layer.masksToBounds = NO; vp_shadow(key.layer);   // 投影要画在框外：不裁边
+        if (kHoldLockKeys >> key.tag & 1) { vp_add_lock_badge(key); vp_lock(key, _layoutStore.holdLockEnabled, NO); }
         [self addSubview:key]; [keys addObject:key];
     }
     _keys = keys;
@@ -503,30 +524,46 @@ static NSString *button_label(NSString *identifier) {
     NSString *identifier = [_layout buttonAt:p safeRect:_safeRect slop:kHit];
     return identifier ? (int)[button_ids() indexOfObject:identifier] : -1;
 }
+// 手指不动时没有触屏事件：到期时间变了才重排定时器，推摇杆的连续事件不反复建
+- (void)armHoldLock {
+    double due = S2AVPadHoldLockDeadline(&_holdLock);
+    if (due == _holdLockDue) return;
+    [_holdLockTimer invalidate]; _holdLockTimer = nil; _holdLockDue = due;
+    if (due <= 0) return;
+    __weak S2AVPadView *weakSelf = self;
+    _holdLockTimer = [NSTimer scheduledTimerWithTimeInterval:MAX(0, due - CACurrentMediaTime()) repeats:NO block:^(NSTimer *t) { (void)t;
+        S2AVPadView *view = weakSelf; if (!view) return;
+        view->_holdLockTimer = nil; view->_holdLockDue = 0; [view publish]; }];
+}
 - (void)publish {
     if (self.hidden || !_inputEnabled || _settingsOpen || _editing) return;
-    uint32_t b = _stickPress; for (NSNumber *n in _held.objectEnumerator) if (n.intValue >= 0) b |= 1u << n.intValue;
+    uint32_t held = 0; for (NSNumber *n in _held.objectEnumerator) if (n.intValue >= 0) held |= 1u << n.intValue;
+    uint32_t lockChanged = S2AVPadHoldLockStep(&_holdLock, held, kHoldLockKeys, CACurrentMediaTime(), _layoutStore.holdLockEnabled && !_touchOnly);
+    uint32_t b = _stickPress | held | _holdLock.locked;
     int32_t axes[4]; for (int i = 0; i < 4; i++) axes[i] = _ax[i];
     s2a_pad_update(S2A_PAD_TOUCH, 1, b, axes);
-    for (UILabel *l in _keys) vp_fill(l, b >> l.tag & 1);
+    for (UILabel *l in _keys) { vp_fill(l, b >> l.tag & 1); vp_lock(l, _layoutStore.holdLockEnabled, _holdLock.locked >> l.tag & 1); }
     // pad_update 已释放输入锁；UIKit 反馈只在主线程触屏事件上运行，不进入 HID / 游戏震动链。
     uint8_t active = (_stick[0] ? 1 : 0) | (_stick[1] ? 2 : 0);
     uint8_t edges = (_stickTravel[0] >= 1 ? 1 : 0) | (_stickTravel[1] >= 1 ? 2 : 0);
-    if (S2AVPadHapticStep(&_hapticState, b, active, edges, _layoutStore.hapticFeedbackEnabled && !_touchOnly)) {
+    BOOL pulse = S2AVPadHapticStep(&_hapticState, b, active, edges, _layoutStore.hapticFeedbackEnabled && !_touchOnly);
+    if (pulse || (lockChanged && _layoutStore.hapticFeedbackEnabled)) {
         if (!_impactFeedback) _impactFeedback = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleLight];
         [_impactFeedback impactOccurred]; [_impactFeedback prepare];
     }
+    if (lockChanged) [self wake];
+    [self armHoldLock];
 }
 // 碰屏恢复按键高亮；闲置 3 秒后降至玩家设定的最低透明度（缺省 25%）。
 - (void)wake {
     if (self.hidden || _touchOnly || _editing) return;   // 纯触屏没有要显示 / 淡出的按键；编辑中按键常亮
     [_fade invalidate]; for (UILabel *l in _keys) {
         [l.layer removeAnimationForKey:@"opacity"];
-        l.alpha = S2AVPadKeyOpacity(_layoutStore.idleKeyOpacity, YES) * vp_opacity();
+        l.alpha = _holdLock.locked >> l.tag & 1 ? 1 : S2AVPadKeyOpacity(_layoutStore.idleKeyOpacity, YES) * vp_opacity();   // 锁定的键不淡出，闭锁标记始终看得清
     }
     _fade = [NSTimer scheduledTimerWithTimeInterval:3 repeats:NO block:^(NSTimer *t) { (void)t;
         if (self->_held.count) { [self wake]; return; }
-        [UIView animateWithDuration:0.4 animations:^{ for (UILabel *l in self->_keys) l.alpha = S2AVPadKeyOpacity(self->_layoutStore.idleKeyOpacity, NO) * vp_opacity(); }]; }];
+        [UIView animateWithDuration:0.4 animations:^{ for (UILabel *l in self->_keys) if (!(self->_holdLock.locked >> l.tag & 1)) l.alpha = S2AVPadKeyOpacity(self->_layoutStore.idleKeyOpacity, NO) * vp_opacity(); }]; }];
 }
 - (void)setInputEnabled:(BOOL)enabled {
     BOOL hide = !enabled && !_touchOnly;   // 纯触屏模式下接了实体手柄也留着这一层：手指和手柄是两条独立输入

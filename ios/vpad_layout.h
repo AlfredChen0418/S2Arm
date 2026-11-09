@@ -47,6 +47,14 @@ static inline BOOL S2AVPadStickTapIsPress(double held, double maxMove) {
 typedef struct { uint32_t buttons; uint8_t reachedEdges; } S2AVPadHapticState;
 BOOL S2AVPadHapticStep(S2AVPadHapticState *state, uint32_t buttons, uint8_t activeSticks, uint8_t edgeSticks, BOOL enabled);
 
+// ZL / ZR 按住锁定：held 是手指此刻按着的位，发给游戏的是 held | locked。按住满 2 秒切成锁定，锁定后再点一下、抬手时解锁，
+//   手指按着期间已发按键不变。now 单调秒数；返回本拍切换的位（调用方据此反馈）；enabled = NO 立即清空且不算切换。
+static const double kS2AVPadHoldLockSeconds = 2;
+typedef struct { uint32_t held, locked, unlocking; double downAt[16]; } S2AVPadHoldLockState;
+uint32_t S2AVPadHoldLockStep(S2AVPadHoldLockState *state, uint32_t held, uint32_t lockable, double now, BOOL enabled);
+// 下一次要检查的时刻（最早的「按着、没锁」键满 2 秒）；没有返回 0。手指不动时没有触屏事件，靠它定时。
+double S2AVPadHoldLockDeadline(const S2AVPadHoldLockState *state);
+
 // 输入为相对落点 / 摇杆半径的 UIKit 坐标；返回单位圆内的同向值，Y 翻转由调用方处理。
 // t = clamp((length - deadzone) / (saturation - deadzone), 0, 1)，输出长度 t^exponent。
 CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation, CGFloat exponent);
@@ -66,6 +74,9 @@ CGPoint S2AVPadStickResponse(CGPoint input, CGFloat deadzone, CGFloat saturation
 // App-local UI feedback; independent of game rumble and layout selection. Default YES.
 @property(nonatomic, readonly) BOOL hapticFeedbackEnabled;
 - (BOOL)setHapticFeedbackEnabled:(BOOL)enabled error:(NSError **)error;
+// ZL / ZR 按住锁定：按游戏存在 directory，默认 YES。
+@property(nonatomic, readonly) BOOL holdLockEnabled;
+- (BOOL)setHoldLockEnabled:(BOOL)enabled error:(NSError **)error;
 - (instancetype)initWithDirectory:(NSURL *)directory;
 // 布局与选择记录存 directory（多款容器壳 = 该游戏自己的目录），闲置透明度 / 触感 / 摇杆手感存 settingsDirectory（App 级，全部游戏共用）
 - (instancetype)initWithDirectory:(NSURL *)directory settingsDirectory:(NSURL *)settingsDirectory;
