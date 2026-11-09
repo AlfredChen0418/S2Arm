@@ -160,6 +160,13 @@ public sealed partial class EnvironmentWindow
             case ("POST", "/prepare"): return MacOnly("Mac 编译");
             case ("POST", "/launch"): return MacOnly("在电脑上启动游戏");
             case ("POST", "/fonts"): return ControlReply.Bad("Windows 版用应用自带的开源字体，不能换", 409);
+            case ("POST", "/customize"):
+            {
+                if (ControlBusy) return Busy();
+                if (ControlGame(r) is not { } customized) return NoGame;
+                _ = CustomizeAsync(customized, r.Text("name"), r.Text("coverPath"));
+                return ControlReply.Ok();
+            }
             case ("POST", "/delete"): return ControlReply.Bad("Windows 启动器还不能删除游戏", 409);
             case ("POST", "/diagnostics"):
             {
@@ -255,6 +262,7 @@ public sealed partial class EnvironmentWindow
         ("POST /keys {path}", "导入 prod.keys"),
         ("POST /games {paths:[…]}", "放入游戏（NSP / XCI 文件、游戏文件夹或解包好的游戏文件夹）"),
         ("POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」；target = ios（iPhone / iPad，缺省）；android / harmony 回 409「即将上线」"),
+        ("POST /customize {gameId, name?, coverPath?}", "改游戏显示名 / 封面（JPG、PNG）；不传的不动，传空字符串恢复默认；下次装到 iPhone 时带上"),
         ("POST /ipa {gameId, spaceOverride?}", "打 iPhone 包（出 IPA + 资源包）；spaceOverride = true 同界面「仍然继续」"),
         ("POST /installCheck {gameId}", "装机前清单：几秒后看 GET /state 的 installReadiness"),
         ("POST /install {gameId}", "用 Impactor 装到 iPhone（清单全齐才能装；Apple ID 由玩家本人在 Impactor 里登录）"),
@@ -272,7 +280,7 @@ public sealed partial class EnvironmentWindow
         var keysReady = catalog?.KeysReady;
         var games = (catalog?.Games ?? []).Where(g => !g.Hidden).Select(g => new Dictionary<string, object?>
         {
-            ["id"] = g.Id, ["name"] = g.Name, ["display"] = g.Version, ["compatibility"] = "", ["ready"] = g.IphoneReady, ["iphoneReady"] = g.IphoneReady,
+            ["id"] = g.Id, ["name"] = g.Name, ["customName"] = g.CustomName, ["customCover"] = g.CustomCover, ["display"] = g.Version, ["compatibility"] = "", ["ready"] = g.IphoneReady, ["iphoneReady"] = g.IphoneReady,
             ["needsPreparation"] = false, ["needsKeys"] = g.NeedsKeys, ["buildable"] = g.Missing.Count == 0, ["missing"] = g.Missing,
             ["baseBytes"] = (g.Packages ?? []).Where(p => p.Type == "base").Sum(p => p.Size), ["bytes"] = g.TotalBytes
         }).ToList();

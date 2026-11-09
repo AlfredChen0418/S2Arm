@@ -800,6 +800,76 @@ def _mtime(path):
         return 0
 
 
+CUSTOM_NAME_LIMIT = 64
+CUSTOM_COVER_LIMIT = 16 << 20
+_CUSTOM_COVER = re.compile(r"cover\.custom\.[0-9a-f]{8}\.jpg")
+
+
+def game_custom(c, gid):
+    """玩家改过的显示名和封面（games/<程序号>/custom.json）。只影响显示，不改 catalog.json，不让已出的包失效；重新导入也不会覆盖。"""
+    folder = contained(c.library, c.library / "games" / gid)
+    try:
+        data = read(folder / "custom.json", {})
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    name = data.get("name") if isinstance(data.get("name"), str) else ""
+    cover = data.get("cover") if isinstance(data.get("cover"), str) and _CUSTOM_COVER.fullmatch(data["cover"]) else ""
+    return dict(name=name, cover=folder / cover if cover and (folder / cover).is_file() else None)
+
+
+def _custom_cover_bytes(path):
+    try:
+        with open(path, "rb") as source:
+            info = os.fstat(source.fileno())
+            if not stat.S_ISREG(info.st_mode):
+                raise Failure("封面要选一张图片文件。")
+            if info.st_size > CUSTOM_COVER_LIMIT:
+                raise Failure("封面图片太大了：请选 16 MB 以内的图片。")
+            data = source.read(CUSTOM_COVER_LIMIT + 1)
+    except OSError as error:
+        raise Failure("读不了这张图片，请换一张试试。") from error
+    if not data.startswith((b"\xff\xd8\xff", b"\x89PNG\r\n\x1a\n")):
+        raise Failure("封面只支持 JPG 或 PNG 图片。")
+    return data
+
+
+def customize(c):
+    """改游戏显示名 / 封面：name、coverPath 没给就不动，给空字符串恢复默认。"""
+    with c.lock():
+        gid = c.game()["id"]
+        c.begin("保存游戏名字和封面")
+        folder = contained(c.library, c.library / "games" / gid)
+        current = game_custom(c, gid)
+        name, cover = current["name"], current["cover"].name if current["cover"] else ""
+        data = None
+        if "name" in c.r:
+            name = c.r["name"].strip() if isinstance(c.r["name"], str) else None
+            if name is None or len(name) > CUSTOM_NAME_LIMIT or any(ord(ch) < 32 or ord(ch) == 127 for ch in name):
+                raise Failure(f"游戏名字要在 {CUSTOM_NAME_LIMIT} 个字以内，不能有换行。")
+        if "coverPath" in c.r:
+            if not isinstance(c.r["coverPath"], str):
+                raise Failure("封面路径不对。")
+            cover = ""
+            if c.r["coverPath"]:
+                data = _custom_cover_bytes(c.r["coverPath"])
+                cover = f"cover.custom.{hashlib.sha256(data).hexdigest()[:8]}.jpg"   # 换文件名：两端按路径缓存封面，同名会显示旧图
+        folder.mkdir(parents=True, exist_ok=True)
+        if data is not None:
+            temporary = folder / (cover + ".partial")
+            temporary.write_bytes(data)
+            os.replace(temporary, folder / cover)
+        if name or cover:
+            atomic(folder / "custom.json", dict(schema=1, name=name, cover=cover))
+        else:
+            (folder / "custom.json").unlink(missing_ok=True)
+        for old in folder.glob("cover.custom.*.jpg"):
+            if old.name != cover:
+                old.unlink(missing_ok=True)
+    return dict(gameId=gid, name=name, cover=str(folder / cover) if cover else "")
+
+
 def catalog(c):
     from build import validate_runtime
     import toolchain
@@ -825,7 +895,10 @@ def catalog(c):
         # F06：按宿主二进制真实能力报，不能一律 True（否则 UI 的「旧引擎缺接口」提示永远不出现）
         game["inputConfig"] = toolchain.input_interface(c, current / "S2ArmGame.app/Contents/MacOS/s2arm-host")[0] if game["ready"] else input_supported
         cover = c.library / "games" / game["id"] / "cover.jpg"
-        game["cover"] = str(cover) if cover.is_file() else ""
+        custom = game_custom(c, game["id"])
+        game["customName"], game["customCover"] = bool(custom["name"]), custom["cover"] is not None
+        game["name"] = custom["name"] or game["name"]
+        game["cover"] = str(custom["cover"] or cover) if custom["cover"] or cover.is_file() else ""
         choices = [p for p in selected_packages(game) if p["type"] in ("base", "update")]
         if choices:
             game["display"] = max(choices, key=lambda p: p["version"])["display"]
@@ -1162,7 +1235,7 @@ def space_survey(c):
     for g in games:
         c.check()
         parts = space_parts(c, g["id"])
-        rows.append(dict(gameId=g["id"], name=g.get("name") or g["id"],
+        rows.append(dict(gameId=g["id"], name=game_custom(c, g["id"])["name"] or g.get("name") or g["id"],
                          parts=[dict(id=k, title=t, rebuild=r, bytes=_part_bytes(parts[k])) for k, t, r in SPACE_PARTS],
                          kept=[dict(id=k, bytes=_part_bytes(parts[k])) for k in SPACE_KEPT]))
     return dict(games=rows)

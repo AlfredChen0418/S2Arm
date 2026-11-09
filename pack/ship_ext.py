@@ -39,6 +39,7 @@ if sys.path and Path(sys.path[0]).resolve() == HERE:   # 直接按脚本跑时 p
 sys.path.insert(0, str(REPO))
 sys.path.insert(0, str(REPO / 'tools'))
 from pack import app_bundle  # noqa: E402
+from pack.container_custom import apply_custom  # noqa: E402
 from pack.shell import manifest as shell_manifest  # noqa: E402
 from pack.display_name import NoTitle, ascii_display_name, display_name, localized_names, nacp_path, title  # noqa: E402
 from module_order import load_order  # noqa: E402  Horizon 装载序（main → subsdk0..N → sdk）：排序规则只有这一份
@@ -376,6 +377,7 @@ def cmd_container(a):
                 if c.returncode:
                     red(f"{gid} 存档游戏身份校验失败：{(c.stderr or c.stdout).strip()[-200:]}")
             (gd / CTX).write_text(ctx_text(gid), encoding="utf-8", newline="\n")
+        apply_custom(app, games, a.custom, GAMES)
         (app / CATALOGUE).write_text(json.dumps(dict(schema=1, shell_id=sid, games=games), ensure_ascii=False, indent=1) + "\n", encoding="utf-8", newline="\n")
         sign_app(app, a.sign, a.bundle_id, a.team)
         os.replace(app, out)
@@ -417,7 +419,7 @@ def main():
     b = sub.add_parser("build"); b.add_argument("--shell", required=True); b.add_argument("--root", required=True); b.add_argument("--out", required=True)
     b.add_argument("--bundle-id", required=True); b.add_argument("--suffix", default=""); b.add_argument("--icon", required=True)
     b.add_argument("--set", action="append", default=[])
-    c = sub.add_parser("container"); c.add_argument("--shell", required=True); c.add_argument("--out", required=True); c.add_argument("--base")
+    c = sub.add_parser("container"); c.add_argument("--shell", required=True); c.add_argument("--out", required=True); c.add_argument("--base"); c.add_argument("--custom")
     c.add_argument("--game", action="append", default=[]); c.add_argument("--bundle-id", required=True); c.add_argument("--icon", required=True)
     c.add_argument("--display-name", default=PLACEHOLDER_NAME); c.add_argument("--sign", choices=("none", "adhoc", "dev"), default="none"); c.add_argument("--team", default="")
     d = sub.add_parser("container-drop"); d.add_argument("--base", required=True); d.add_argument("--game", required=True); d.add_argument("--out", required=True)

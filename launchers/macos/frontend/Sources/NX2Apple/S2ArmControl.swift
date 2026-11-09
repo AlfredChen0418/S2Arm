@@ -112,6 +112,10 @@ import S2ArmAppleAdapter
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
             model.removeFromPhone(g); return .ok()
+        case ("POST", "/customize"):
+            guard let g = game() else { return .bad("没有这个 gameId") }
+            if let b = busy() { return b }
+            model.customize(g, name: str("name"), coverPath: str("coverPath")); return .ok()
         case ("POST", "/delete"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -192,6 +196,7 @@ import S2ArmAppleAdapter
         ["POST /prepare {gameId}", "Mac 准备运行（出 Mac 版）"],
         ["POST /ipa {gameId, spaceOverride?}", "打 iPhone 包（出 IPA + 资源包）；没装 .NET SDK 会先自动装；spaceOverride = true 同界面「仍然继续」"],
         ["POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」，磁盘预检不够也照出；target = ios（iPhone / iPad，缺省）| mac | android | harmony；安卓、鸿蒙回 409「即将上线，敬请期待」"],
+        ["POST /customize {gameId, name?, coverPath?}", "改游戏显示名 / 封面（JPG、PNG）；不传的不动，传空字符串恢复默认；下次装到 iPhone 时带上"],
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
         ["POST /install {gameId}", "装到 iPhone（iPhone 版做好就能装，其余清单项只提示）"],
         ["POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）"],
@@ -237,7 +242,7 @@ import S2ArmAppleAdapter
             "checks": m.checks.map { ["name": $0.name, "ok": $0.ok, "message": $0.message, "group": $0.group, "action": $0.action ?? NSNull()] as [String: Any] },
             "fontsDir": NSNull(), "library": m.provider.client.environment.library,
             "games": m.games.map { g -> [String: Any] in
-                ["id": g.id, "name": g.name, "display": g.display, "compatibility": g.compatibility, "ready": g.playable,
+                ["id": g.id, "name": g.name, "customName": g.customName, "customCover": g.customCover, "cover": g.cover ?? "", "display": g.display, "compatibility": g.compatibility, "ready": g.playable,
                  "needsPreparation": g.needsPreparation, "needsKeys": g.needsKeys, "buildable": g.buildable, "missing": g.missing,
                  "baseBytes": g.packages.filter { $0.type == "base" }.reduce(Int64(0)) { $0 + $1.size }, "bytes": g.totalBytes] },
             "session": session, "busy": m.busy,

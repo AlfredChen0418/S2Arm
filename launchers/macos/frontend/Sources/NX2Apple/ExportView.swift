@@ -12,6 +12,8 @@ struct ExportView: View {
     @ObservedObject var model: S2ArmLauncherModel
     @EnvironmentObject var loc: Localizer
     @ObservedObject var covers: CoverCache
+    @State private var renaming = false
+    @State private var renameText = ""
     let game: GameSummary
     /// 打开装机页（已出过 iPhone 包的款直接装）。
     let install: () -> Void
@@ -44,14 +46,42 @@ struct ExportView: View {
             .keyboardShortcut("[", modifiers: .command)
             .accessibilityIdentifier("export.back")
             HStack(alignment: .center, spacing: 24) {
-                GameArtwork(covers: covers, cover: game.cover)
-                .frame(width: 236, height: 236 / 1.8).clipShape(RoundedRectangle(cornerRadius: 10))
-                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08)))
-                .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
-                .accessibilityHidden(true)
+                Button { chooseCover(game) } label: {
+                    GameArtwork(covers: covers, cover: game.cover)
+                    .frame(width: 236, height: 236 / 1.8).clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.white.opacity(0.08)))
+                    .overlay(alignment: .bottomTrailing) { editBadge.padding(8) }
+                    .shadow(color: .black.opacity(0.35), radius: 14, y: 6)
+                }
+                .buttonStyle(.plain).disabled(model.busy || model.customizing)
+                .help(loc.t("s2arm.custom.cover.help"))
+                .accessibilityLabel(loc.t("s2arm.custom.cover.help"))
+                .accessibilityIdentifier("export.cover")
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(game.name).font(.manrope(36, .heavy)).tracking(-1.0).lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    Button { renameText = game.name; renaming = true } label: {
+                        HStack(alignment: .firstTextBaseline, spacing: 10) {
+                            Text(game.name).font(.manrope(36, .heavy)).tracking(-1.0).lineLimit(2)
+                                .fixedSize(horizontal: false, vertical: true).multilineTextAlignment(.leading)
+                            Image(systemName: "pencil").font(.system(size: 15, weight: .semibold)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .buttonStyle(.plain).disabled(model.busy || model.customizing)
+                    .help(loc.t("s2arm.custom.name.help"))
+                    .accessibilityIdentifier("export.name")
+                    .alert(loc.t("s2arm.custom.name.title"), isPresented: $renaming) {
+                        TextField(loc.t("s2arm.custom.name.placeholder"), text: $renameText)
+                        Button(loc.t("s2arm.custom.save")) { model.customize(game, name: renameText) }
+                        if game.customName { Button(loc.t("s2arm.custom.name.reset")) { model.customize(game, name: "") } }
+                        Button(loc.t("s2arm.custom.cancel"), role: .cancel) {}
+                    }
+                    if game.customCover {
+                        Button(loc.t("s2arm.custom.cover.reset")) { model.customize(game, coverPath: "") }
+                            .buttonStyle(.plain).font(.manrope(12.5)).foregroundStyle(.secondary).underline()
+                            .disabled(model.busy || model.customizing).accessibilityIdentifier("export.cover.reset")
+                    }
+                    if let failed = model.customizeError {
+                        Text(loc.backend(failed)).font(.manrope(12.5)).foregroundStyle(LauncherPalette.danger).fixedSize(horizontal: false, vertical: true)
+                    }
                     Text(String(format: loc.t("s2arm.export.version"), game.display.isEmpty ? (game.version("base") ?? "-") : game.display))
                         .font(.manrope(14)).foregroundStyle(.secondary)
                     HStack(spacing: 6) {
@@ -179,6 +209,20 @@ struct ExportView: View {
     }
 
     // ---- action bar ----
+
+    private var editBadge: some View {
+        Image(systemName: "photo").font(.system(size: 12, weight: .semibold)).foregroundStyle(.white)
+            .padding(7).background(.black.opacity(0.55), in: Circle())
+    }
+
+    private func chooseCover(_ game: GameSummary) {
+        let panel = NSOpenPanel()
+        panel.title = loc.t("s2arm.custom.cover.help")
+        panel.allowedContentTypes = [.jpeg, .png]
+        panel.canChooseFiles = true; panel.canChooseDirectories = false; panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        model.customize(game, coverPath: url.path)
+    }
 
     private func reason(_ blocker: ExportBlocker) -> String {
         switch blocker {

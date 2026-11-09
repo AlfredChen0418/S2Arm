@@ -85,7 +85,7 @@ public sealed record GamePackage(string Type, string TitleId, int Version, strin
 
 public sealed record LibraryGame(string Id, string Name, string Version, string Cover, bool Hidden,
     IReadOnlyList<string> Missing, bool IphoneReady = false, double? IphoneInstalledAt = null,
-    bool IphoneFree = false, IReadOnlyList<GamePackage>? Packages = null)
+    bool IphoneFree = false, IReadOnlyList<GamePackage>? Packages = null, bool CustomName = false, bool CustomCover = false)
 {
     /// <summary>NSP / XCI need prod.keys; extracted folders and NUP containers do not (mirrors GameSummary.needsKeys).</summary>
     public bool NeedsKeys => (Packages ?? []).Any(p => p.Format is not ("nup" or "dump" or "extract" or "loose"));
@@ -141,7 +141,9 @@ public sealed record LibraryCatalog(IReadOnlyList<LibraryGame> Games, bool KeysR
                 var iphoneReady = game.TryGetProperty("iphoneReady", out var ir) && ir.GetBoolean();
                 games.Add(new(id, LibraryJobResult.Text(game, "name"),
                     LibraryJobResult.Text(game, "display", true), LibraryJobResult.Text(game, "cover", true),
-                    game.GetProperty("hidden").GetBoolean(), missing, iphoneReady, iphoneAt, iphoneFree, packages.AsReadOnly()));
+                    game.GetProperty("hidden").GetBoolean(), missing, iphoneReady, iphoneAt, iphoneFree, packages.AsReadOnly(),
+                    game.TryGetProperty("customName", out var customName) && customName.ValueKind == JsonValueKind.True,
+                    game.TryGetProperty("customCover", out var customCover) && customCover.ValueKind == JsonValueKind.True));
             }
             var keys = result.GetProperty("keys");
             return new(games.AsReadOnly(), keys.GetProperty("ready").GetBoolean(),

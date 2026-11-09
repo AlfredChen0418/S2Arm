@@ -21,6 +21,10 @@ public struct S2ArmShellHostView: View {
                                          opacity: (UserDefaults.standard.object(forKey: "S2AVPadOpacity") as? Double).map { min(1, max(0.1, $0)) } ?? 1,
                                          close: { model.closeLayoutEditor() })
                 }
+                if let id = model.editingIdentity {
+                    S2ArmGameIdentityView(title: model.identityName(id), initialName: model.identityName(id), hasCustom: model.hasCustomIdentity(id),
+                                          save: { model.saveIdentity(id, name: $0, cover: $1) }, reset: { model.resetIdentity(id) }, close: { model.closeIdentityEditor(id) })
+                }
             }
         #endif
     }

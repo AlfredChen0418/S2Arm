@@ -62,10 +62,12 @@ public sealed partial class EnvironmentWindow
             if (connectedFolder is not null && game.Cover.Length > 0)
             {
                 var root = Path.GetFullPath(Path.Combine(connectedFolder, "games")) + Path.DirectorySeparatorChar;
-                var expected = Path.GetFullPath(Path.Combine(root, game.Id, "cover.jpg"));
+                var folder = Path.GetFullPath(Path.Combine(root, game.Id)) + Path.DirectorySeparatorChar;
                 var path = Path.GetFullPath(game.Cover);
-                if (expected.StartsWith(root, StringComparison.OrdinalIgnoreCase) &&
-                    string.Equals(path, expected, StringComparison.OrdinalIgnoreCase) && new FileInfo(path).Length <= 8 * 1024 * 1024)
+                // 只认这款游戏目录下的 cover.jpg 或玩家换的 cover.custom.<8 位十六进制>.jpg（后端 _CUSTOM_COVER）
+                if (folder.StartsWith(root, StringComparison.OrdinalIgnoreCase) && path.StartsWith(folder, StringComparison.OrdinalIgnoreCase) &&
+                    System.Text.RegularExpressions.Regex.IsMatch(Path.GetFileName(path), @"^cover(\.custom\.[0-9a-f]{8})?\.jpg$") &&
+                    Path.GetDirectoryName(path) + Path.DirectorySeparatorChar == folder && new FileInfo(path).Length <= 16 * 1024 * 1024)
                 {
                     if (!covers.TryGetValue(path, out var image))
                     {

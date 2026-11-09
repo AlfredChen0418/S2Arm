@@ -35,6 +35,7 @@ USAGE = """s2armctl —— 让 AI 助手操作 S2Arm（每条命令 = 玩家点�
   ipa <游戏号> [--space-override]    打 iPhone 包（出 IPA + 资源包）；--space-override 同界面「仍然继续」，磁盘预检不够也照出（先征得玩家同意）
   build <游戏号> [ios|mac|android|harmony] [--space-override]   出包，按目标：ios = iPhone / iPad（缺省）、mac = Mac；安卓、鸿蒙即将上线
   install-check <游戏号> [--json]    装到 iPhone 前的清单：iPhone 版做好没有、Xcode 登录 Apple ID、连上、信任、开发者模式；没好的写谁做什么
+  customize <游戏号> [--name 名字] [--cover 图片] [--reset-name] [--reset-cover]   改显示名 / 封面（JPG、PNG），下次装到 iPhone 时带上
   delete <游戏号>                    删除这款游戏（IPA / 资源包 / 中间产物 / 缓存；存档与原始游戏文件保留），等删完再返回
   wait <游戏号> [--op build|ipa] [--timeout 秒]
                                     等该游戏的任务结束：build = Mac 编译（缺省），ipa = iPhone 包；逐段打印进度，失败退出码 1
@@ -513,6 +514,15 @@ def main():
         sys.exit('Windows 上用 s2armctl install-check <游戏号> 看手机状态；s2armctl install <游戏号> 会装 App 并拷资源包')
     if cmd == 'device': device(rest[0]); return
     if cmd == 'push-pack': push_pack(rest[0]); return
+    if cmd == 'customize':
+        def value(flag): return rest[rest.index(flag) + 1] if flag in rest else None
+        body = {'gameId': rest[0]}
+        if value('--name') is not None: body['name'] = value('--name')
+        if value('--cover') is not None: body['coverPath'] = os.path.abspath(value('--cover'))
+        if '--reset-name' in rest: body['name'] = ''
+        if '--reset-cover' in rest: body['coverPath'] = ''
+        if len(body) == 1: sys.exit('要给 --name、--cover、--reset-name 或 --reset-cover')
+        print(json.dumps(call('POST', '/customize', body), ensure_ascii=False)); return
     if cmd == 'delete':
         before = {t['id'] for t in call('GET', '/state')['tasks']}
         call('POST', '/delete', {'gameId': rest[0]}); wait_op('delete', before); return

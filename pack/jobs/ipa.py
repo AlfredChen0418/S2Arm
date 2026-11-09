@@ -352,6 +352,18 @@ def write_container_ipa(c, app, ipa, log):
     c.run([os.sys.executable, "-X", "utf8", "-B", c.engine / "pack/app_bundle.py", "write_ipa", app, ipa], log, c.env())
 
 
+def container_custom(c):
+    """容器里各款的显示名和封面：改过的用玩家的；custom = False 的给原名原图，已经带着旧自定义的容器条目靠它恢复。"""
+    from library import game_custom
+    out = {}
+    for game in c.catalog()["games"]:
+        custom = game_custom(c, game["id"])
+        original = c.library / "games" / game["id"] / "cover.jpg"
+        cover = custom["cover"] or (original if original.is_file() else None)
+        out[game["id"]] = dict(custom=bool(custom["name"] or custom["cover"]), name=custom["name"] or game.get("name") or "", cover=str(cover) if cover else "")
+    return out
+
+
 def assemble(c, gid, root=None, dest=None):
     """把这款放进容器（一个 App 装多款）：在游戏库 iPhone/container/S2Arm.app 上重组装，已有各款原样带过来（pack/ship_ext.py container --base），出 S2Arm.app + S2Arm.ipa。
     壳变了（升级过启动器）：同一个宿主要配同一版产物，已有各款也按本壳产物根重组；哪款不是本壳出的就报 container_stale 点名，不装半套。
@@ -386,9 +398,10 @@ def assemble(c, gid, root=None, dest=None):
     tmp = Path(tempfile.mkdtemp(prefix=".container-", dir=out))
     log = c.private / "logs" / (c.task + "-container.log")
     try:
+        (tmp / "custom.json").write_text(json.dumps(container_custom(c), ensure_ascii=False), encoding="utf-8")
         try:
             c.run([os.sys.executable, "-X", "utf8", "-B", c.engine / "pack/ship_ext.py", "container", "--shell", shell, "--out", tmp / "S2Arm.app", "--bundle-id", CONTAINER_BUNDLE,
-                   "--icon", icon, "--sign", "none" if os.name == "nt" else "adhoc", *[x for r in roots.values() for x in ("--game", r)], *(["--base", base] if base.is_dir() else [])], log, c.env())
+                   "--icon", icon, "--sign", "none" if os.name == "nt" else "adhoc", "--custom", tmp / "custom.json", *[x for r in roots.values() for x in ("--game", r)], *(["--base", base] if base.is_dir() else [])], log, c.env())
         except Failure as e:
             text = log.read_text(encoding="utf-8", errors="replace") if log.is_file() else ""
             if e.code == "tool_exit" and "地址空间类型不一致" in text:

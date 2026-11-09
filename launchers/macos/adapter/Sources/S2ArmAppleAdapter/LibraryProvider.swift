@@ -33,6 +33,9 @@ public struct GameSummary: Identifiable, Equatable {
     public let display: String
     /// 封面文件路径（游戏库 games/<id>/cover.jpg）；没有为 nil。
     public let cover: String?
+    /// 玩家改过名字 / 封面（可以恢复默认）
+    public let customName: Bool
+    public let customCover: Bool
     /// 运行文件已准备好、可以启动。
     public let ready: Bool
     public let needsPreparation: Bool
@@ -48,7 +51,8 @@ public struct GameSummary: Identifiable, Equatable {
 
     public init(id: String, name: String, display: String = "", cover: String? = nil, ready: Bool = false,
                 needsPreparation: Bool = false, compatibility: String = "experimental", missing: [String] = [], packages: [GamePackage] = [],
-                iphoneReady: Bool = false, iphoneInstalledAt: Double? = nil, iphoneFree: Bool = false) {
+                iphoneReady: Bool = false, iphoneInstalledAt: Double? = nil, iphoneFree: Bool = false, customName: Bool = false, customCover: Bool = false) {
+        self.customName = customName; self.customCover = customCover
         self.iphoneReady = iphoneReady; self.iphoneInstalledAt = iphoneInstalledAt; self.iphoneFree = iphoneFree
         self.id = id; self.name = name; self.display = display; self.cover = cover; self.ready = ready
         self.needsPreparation = needsPreparation; self.compatibility = compatibility; self.missing = missing; self.packages = packages
@@ -64,7 +68,8 @@ public struct GameSummary: Identifiable, Equatable {
                   packages: (g["packages"] as? [[String: Any]] ?? []).compactMap(GamePackage.init(catalog:)),
                   iphoneReady: g["iphoneReady"] as? Bool ?? false,
                   iphoneInstalledAt: ((g["iphoneInstall"] as? [String: Any])?["at"] as? NSNumber)?.doubleValue,
-                  iphoneFree: (g["iphoneInstall"] as? [String: Any])?["free"] as? Bool ?? false)
+                  iphoneFree: (g["iphoneInstall"] as? [String: Any])?["free"] as? Bool ?? false,
+                  customName: g["customName"] as? Bool ?? false, customCover: g["customCover"] as? Bool ?? false)
     }
 
     /// 某类原件里版本最新的那个的显示版本（base / update）；没有这类为 nil。

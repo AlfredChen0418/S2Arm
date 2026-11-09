@@ -58,6 +58,18 @@ class WaitTests(unittest.TestCase):
                 ctl.main()
             call.assert_called_once_with("POST", path, body)
 
+    def test_customize_sends_only_what_was_given(self):
+        for argv, body in [(["customize", "G", "--name", "新名"], {"gameId": "G", "name": "新名"}),
+                           (["customize", "G", "--reset-cover"], {"gameId": "G", "coverPath": ""}),
+                           (["customize", "G", "--reset-name"], {"gameId": "G", "name": ""})]:
+            with mock.patch.object(ctl, "call", return_value={"ok": True}) as call, mock.patch.object(ctl.sys, "argv", ["s2armctl", *argv]), mock.patch("builtins.print"):
+                ctl.main()
+            call.assert_called_once_with("POST", "/customize", body)
+        with mock.patch.object(ctl, "call") as call, mock.patch.object(ctl.sys, "argv", ["s2armctl", "customize", "G"]):
+            with self.assertRaises(SystemExit):
+                ctl.main()
+        call.assert_not_called()
+
     def test_queued_then_running_then_completed(self):
         old = task("old", "completed", 1)
         states = [state(old, task("queued-game", "queued", 2), queue=["game"]),

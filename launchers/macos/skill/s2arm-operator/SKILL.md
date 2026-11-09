@@ -61,6 +61,7 @@ s2armctl next --json    # 同上，给程序读：{step, who, do, why, game, tas
 s2armctl keys <prod.keys 路径>              # 放密钥，等导入完成才返回
 s2armctl games <游戏文件夹>                  # 放游戏：本体、更新、DLC 放同一个文件夹；等导入完成才返回
 s2armctl build <游戏号> ios                  # 导出 iPhone / iPad 版（同一个包）；mac = 这台 Mac；android / harmony 即将上线
+s2armctl customize <游戏号> --name 名字 --cover 图片  # 改游戏显示名 / 封面；--reset-name、--reset-cover 恢复默认；下次装到 iPhone 时带上
 s2armctl wait <游戏号> --op ipa --timeout 7200   # 等导出结束：逐段打进度，结尾打每段耗时；失败退出码 1
 s2armctl install-check <游戏号>              # 装机前清单：iPhone 版、Xcode 登录 Apple ID、数据线连上、信任、开发者模式
 s2armctl install <游戏号>                    # 装到 iPhone：签名 → 数据线安装 → 拷游戏资源、逐文件核对

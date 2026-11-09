@@ -153,6 +153,8 @@ public final class S2ArmLauncherModel: ObservableObject {
     var welcomeGame: GameSummary? { games.first { $0.id == welcomeGameID } }
     // 装到 iPhone 前的清单
     @Published private(set) var installReadiness: InstallReadiness?
+    @Published private(set) var customizing = false
+    @Published private(set) var customizeError: String?
     @Published private(set) var installChecking = false
     @Published private(set) var installError: String?
     private(set) var installGameID: String?
@@ -578,6 +580,17 @@ public final class S2ArmLauncherModel: ObservableObject {
             try await self?.provider.deleteGame(game.id, events: sink)
             if self?.selectedID == game.id { self?.selectedID = nil }
             return nil
+        }
+    }
+
+    /// 改名字 / 换封面（nil 不动，空字符串恢复默认）：很快，不进作业页，失败写在出包页上。
+    func customize(_ game: GameSummary, name: String? = nil, coverPath: String? = nil) {
+        guard !busy, !customizing else { return }
+        customizing = true; customizeError = nil
+        Task {
+            do { try await provider.customizeGame(game.id, name: name, coverPath: coverPath); refresh() }
+            catch { customizeError = error.localizedDescription }
+            customizing = false
         }
     }
 

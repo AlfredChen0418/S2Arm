@@ -24,19 +24,32 @@ public final class S2ArmShellHostModel {
     @ObservationIgnored private let layoutState: (String) -> S2ArmGameSettings.LayoutState
     /// 正在调整虚拟手柄布局的那款（非空时宿主视图盖上编辑页）
     public var editingLayout: String?
+    /// 正在改名字和封面的那款（非空时宿主视图盖上编辑页）
+    public var editingIdentity: String?
+    @ObservationIgnored private let identityStore: GameIdentityStore
+    /// 清单里写的条目：恢复默认时回到它
+    @ObservationIgnored private var listedTiles: [String: GameTile] = [:]
+    @ObservationIgnored private var listedBanners: [String: URL] = [:]
     /// 编辑页底图：游戏号 → 封面文件
     public private(set) var bannerURLs: [String: URL]
 
     /// play 缺省走 C 出口；单测可换
     public init(catalogue: Catalogue, play: ((String) -> Void)? = nil, stores: S2ArmGameSettings.Stores = .live,
                 layoutState: @escaping (String) -> S2ArmGameSettings.LayoutState = S2ArmGameSettings.layoutState,
-                gameDataReady: ((String) -> Bool)? = nil, pickGameData: ((String) -> Void)? = nil) {
+                gameDataReady: ((String) -> Bool)? = nil, pickGameData: ((String) -> Void)? = nil, identityStore: GameIdentityStore = .live) {
         self.stores = stores; self.layoutState = layoutState; bannerURLs = catalogue.bannerURLs
-        games = catalogue.tiles.map { GameDetail(game: $0, sections: S2ArmGameSettings.sections(for: $0.id, stores: stores, state: layoutState($0.id))) }
+        self.identityStore = identityStore
+        listedTiles = Dictionary(catalogue.tiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        listedBanners = catalogue.bannerURLs
+        games = catalogue.tiles.map { tile in
+            var state = layoutState(tile.id); state.customIdentity = identityStore.load(tile.id) != nil
+            return GameDetail(game: tile, sections: S2ArmGameSettings.sections(for: tile.id, stores: stores, state: state))
+        }
         listedStates = Dictionary(catalogue.tiles.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
         self.play = play ?? { id in _ = id.withCString { s2a_shell_play($0) } }
         self.gameDataReady = gameDataReady ?? { id in id.withCString { s2a_shell_game_data_ready($0) } != 0 }
         self.pickGameData = pickGameData ?? { id in id.withCString { s2a_shell_pick_game_data($0) } }
+        for tile in catalogue.tiles { applyIdentity(tile.id) }
         for p in catalogue.problems { NSLog("S2Arm 游戏库：%@", p) }
         refreshGameData()
         // 测试开关（真机自动化要 XCTest 触控 ID 授权、人不在时点不进去；同 diag.m S2A_OPEN_SETTINGS，环境变量只有 devicectl / Xcode 起 App 能给，玩家碰不到）：
@@ -87,6 +100,11 @@ public final class S2ArmShellHostModel {
 
     /// 设置行改了：存下、刷新这一款的设置行；选「调整位置…」打开编辑页
     public func change(_ id: String, _ setting: String, _ value: String) {
+        if setting == S2ArmGameSettings.identity {
+            if value == S2ArmGameSettings.editIdentity { editingIdentity = id }
+            refresh(id)
+            return
+        }
         if S2ArmGameSettings.apply(id: id, setting: setting, value: value, stores: stores) { editingLayout = id }
         refresh(id)
     }
@@ -94,7 +112,36 @@ public final class S2ArmShellHostModel {
     public func closeLayoutEditor() { if let id = editingLayout { editingLayout = nil; refresh(id) } }
     func refresh(_ id: String) {
         guard let i = games.firstIndex(where: { $0.id == id }) else { return }
-        games[i].sections = S2ArmGameSettings.sections(for: id, stores: stores, state: layoutState(id))
+        var state = layoutState(id); state.customIdentity = identityStore.load(id) != nil
+        games[i].sections = S2ArmGameSettings.sections(for: id, stores: stores, state: state)
+    }
+
+    /// 改名字和封面的编辑页要用：当前显示的名字，以及有没有自定义
+    public func identityName(_ id: String) -> String { games.first(where: { $0.id == id })?.game.title ?? "" }
+    public func hasCustomIdentity(_ id: String) -> Bool { identityStore.load(id) != nil }
+
+    public func saveIdentity(_ id: String, name: String, cover: Data?) {
+        // 名字没动时不存成自定义，否则电脑端以后改名就传不到这台手机
+        let keep = name == listedTiles[id]?.title ? "" : name
+        do { try identityStore.save(id, name: keep, cover: cover) }
+        catch { NSLog("S2Arm 游戏库：保存 %@ 的名字和封面失败：%@", id, error.localizedDescription) }
+        closeIdentityEditor(id)
+    }
+    public func resetIdentity(_ id: String) { identityStore.clear(id); closeIdentityEditor(id) }
+    public func closeIdentityEditor(_ id: String) { editingIdentity = nil; applyIdentity(id); refresh(id) }
+
+    /// 把这台手机上的名字和封面叠到清单条目上；没有就回到清单原样，状态保持不变。
+    private func applyIdentity(_ id: String) {
+        guard let i = games.firstIndex(where: { $0.id == id }), var tile = listedTiles[id] else { return }
+        tile.state = games[i].game.state
+        bannerURLs[id] = listedBanners[id]
+        if let custom = identityStore.load(id) {
+            if !custom.name.isEmpty { tile.title = custom.name }
+            if let url = custom.cover, let data = try? Data(contentsOf: url), let art = Artwork(id: id + ".custom.\(data.hashValue)", data: data) {
+                tile.banner = art; tile.icon = art; bannerURLs[id] = url
+            }
+        }
+        games[i].game = tile
     }
 
     public func startControllers() {

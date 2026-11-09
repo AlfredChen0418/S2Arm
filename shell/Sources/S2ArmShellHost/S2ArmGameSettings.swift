@@ -10,7 +10,7 @@ import ShellUI
 /// - 按键透明度：App 级 `S2AVPadOpacity`（0.1–1，缺省 1），全部游戏共用；宿主 ios/vpad.m 进游戏时读
 /// - 虚拟手柄布局：按游戏，走 C 接口 s2a_shell_vpad_*（宿主 ios/vpad_shell.m），与游戏内拖动编辑同一份文件
 public enum S2ArmGameSettings {
-    public static let fps60 = "fps60", widenForce = "widenForce", opacity = "vpadOpacity", layout = "vpadLayout", holdLock = "vpadHoldLock"
+    public static let fps60 = "fps60", widenForce = "widenForce", opacity = "vpadOpacity", layout = "vpadLayout", holdLock = "vpadHoldLock", identity = "gameIdentity", editIdentity = "edit"
     /// 布局多选里打开二级编辑页的那一项（不是一个方案）
     public static let editLayout = "edit"
 
@@ -23,7 +23,7 @@ public enum S2ArmGameSettings {
     }
 
     /// 本款布局的当前状态（宿主接口给的 JSON）；读不到（Mac 单测、宿主没链）按「默认、没有我的布局」
-    public struct LayoutState: Equatable { public var selected: String; public var hasMine: Bool; public var holdLock = true }
+    public struct LayoutState: Equatable { public var selected: String; public var hasMine: Bool; public var holdLock = true; public var customIdentity = false }
     public static func layoutState(_ id: String) -> LayoutState {
         guard let p = id.withCString({ s2a_shell_vpad_layout_json($0, 832, 419) }) else { return LayoutState(selected: "default", hasMine: false) }
         defer { free(p) }
@@ -41,6 +41,9 @@ public enum S2ArmGameSettings {
         options.append(SettingOption(editLayout, "调整位置…"))
         let current = state.selected == "mine" && state.hasMine ? "mine" : "default"
         return [
+            SettingSection(id: "s2a.identity", title: "显示", rows: [
+                SettingRow(id: identity, label: "名字和封面", note: "只改这台 iPhone 上的显示", kind: .choice([SettingOption("current", state.customIdentity ? "已自定义" : "默认"), SettingOption(editIdentity, "修改…")]), value: "current"),
+            ]),
             SettingSection(id: "s2a.picture", title: "画面", rows: [
                 SettingRow(id: fps60, label: "60 帧", note: "关掉回到游戏自己的帧率（多为 30 帧），更省电", kind: .toggle(on: "on", off: "off"), value: on60 ? "on" : "off"),
                 SettingRow(id: widenForce, label: "宽屏强制启用", note: "没验证过的游戏也铺满全屏；画面若被拉伸会自动退回 16:9", kind: .toggle(on: "on", off: "off"), value: force ? "on" : "off"),

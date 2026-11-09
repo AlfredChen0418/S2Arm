@@ -114,3 +114,28 @@ nonisolated(unsafe) private var lastPlayed = ""
     // 选「调整位置…」= 打开编辑页，不存值
     #expect(S2ArmGameSettings.apply(id: "G1", setting: "vpadLayout", value: "edit", stores: stores))
 }
+
+// 这台 iPhone 上的名字和封面：叠在清单上、可恢复默认，不影响别的款。期望值手写
+@MainActor @Test func gameIdentityOverridesCatalogue() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let json = #"{"schema":1,"games":[{"title_id":"0100000000000001","name":"原名一"},{"title_id":"0100000000000002","name":"原名二"}]}"#
+    let catalogue = Catalogue.parse(Data(json.utf8), baseDirectory: root)
+    let store = GameIdentityStore(root: root)
+    let model = S2ArmShellHostModel(catalogue: catalogue, gameDataReady: { _ in true }, pickGameData: { _ in }, identityStore: store)
+    let a = "0100000000000001", b = "0100000000000002"
+    #expect(model.games.map(\.game.title) == ["原名一", "原名二"] && !model.hasCustomIdentity(a))
+    model.change(a, S2ArmGameSettings.identity, S2ArmGameSettings.editIdentity)
+    #expect(model.editingIdentity == a)
+    model.saveIdentity(a, name: "  我的游戏  ", cover: nil)
+    #expect(model.editingIdentity == nil && model.games[0].game.title == "我的游戏" && model.games[1].game.title == "原名二")
+    #expect(store.load(a)?.name == "我的游戏" && store.load(b) == nil)
+    // 下次启动：从磁盘读回
+    let again = S2ArmShellHostModel(catalogue: catalogue, gameDataReady: { _ in true }, pickGameData: { _ in }, identityStore: store)
+    #expect(again.games[0].game.title == "我的游戏")
+    // 名字没改：不算自定义
+    model.saveIdentity(b, name: "原名二", cover: nil)
+    #expect(store.load(b) == nil && !model.hasCustomIdentity(b))
+    model.resetIdentity(a)
+    #expect(model.games[0].game.title == "原名一" && store.load(a) == nil)
+}

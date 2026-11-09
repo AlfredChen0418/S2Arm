@@ -1497,6 +1497,78 @@ class JobsTests(unittest.TestCase):
         self.assertIn(beat(19999).strip().encode(), out); self.assertNotIn(beat(0).strip().encode(), out)
         self.assertLessEqual(len(out), 16000 * 2 + 64000 + 200)
 
+    def customize_game(self, **fields):
+        gid = "0100000000010000"
+        cat = self.c.catalog()
+        if not any(g["id"] == gid for g in cat["games"]):
+            atomic(self.c.library / "catalog.json", dict(schema=1, games=[dict(id=gid, name="原名", display="", packages=[], hidden=False)]))
+        request = dict(self.request, taskId=str(uuid.uuid4()), operation="customize", gameId=gid, **fields)
+        return library.customize(Context(request)), gid
+
+    def test_customize_name_and_cover_are_display_only_and_restorable(self):
+        png = self.root / "my.png"; png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * 100)
+        result, gid = self.customize_game(name="  我的游戏  ", coverPath=str(png))
+        self.assertEqual(result["name"], "我的游戏")
+        folder = self.c.library / "games" / gid
+        covers = list(folder.glob("cover.custom.*.jpg"))
+        self.assertEqual(len(covers), 1); self.assertEqual(covers[0].read_bytes(), png.read_bytes())
+        self.assertEqual(self.c.catalog()["games"][0]["name"], "原名")   # 只改显示，不改登记名
+        rendered = library.game_custom(self.c, gid)
+        self.assertEqual((rendered["name"], rendered["cover"]), ("我的游戏", covers[0]))
+        # 只改名字：封面不动
+        self.customize_game(name="第二个名字")
+        self.assertEqual(list(folder.glob("cover.custom.*.jpg")), covers)
+        # 换图：文件名变（两端按路径缓存），旧图删掉
+        jpg = self.root / "my.jpg"; jpg.write_bytes(b"\xff\xd8\xff" + b"y" * 100)
+        self.customize_game(coverPath=str(jpg))
+        after = list(folder.glob("cover.custom.*.jpg"))
+        self.assertEqual(len(after), 1); self.assertNotEqual(after, covers)
+        self.assertEqual(library.game_custom(self.c, gid)["name"], "第二个名字")
+        # 恢复默认
+        self.customize_game(name="", coverPath="")
+        self.assertEqual(list(folder.glob("cover.custom.*.jpg")), [])
+        self.assertFalse((folder / "custom.json").exists())
+        self.assertEqual(library.game_custom(self.c, gid), dict(name="", cover=None))
+
+    def test_customize_rejects_bad_input_and_keeps_previous(self):
+        self.customize_game(name="好名字")
+        bad = self.root / "bad.txt"; bad.write_bytes(b"not an image")
+        huge = self.root / "huge.png"; huge.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x" * (16 << 20))
+        for fields in (dict(name="x" * 65), dict(name="换\n行"), dict(name=3), dict(coverPath=str(bad)), dict(coverPath=str(huge)), dict(coverPath=str(self.root / "none.png"))):
+            with self.assertRaises(Failure, msg=str(list(fields))):
+                self.customize_game(**fields)
+        custom = library.game_custom(self.c, "0100000000010000")
+        self.assertEqual((custom["name"], custom["cover"]), ("好名字", None))
+
+    def test_container_custom_lists_custom_and_default_entries(self):
+        import ipa
+        png = self.root / "my.png"; png.write_bytes(b"\x89PNG\r\n\x1a\n" + b"x")
+        _, gid = self.customize_game(name="新名", coverPath=str(png))
+        item = ipa.container_custom(self.c)[gid]
+        self.assertEqual((item["custom"], item["name"]), (True, "新名"))
+        self.assertIn("cover.custom.", item["cover"])
+        self.customize_game(name="", coverPath="")
+        self.assertEqual(ipa.container_custom(self.c)[gid], dict(custom=False, name="原名", cover=""))
+
+    def test_ship_ext_applies_custom_and_restores_default(self):
+        import importlib.util, json as j
+        spec = importlib.util.spec_from_file_location("container_custom_under_test", ROOT / "pack/container_custom.py")
+        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+        app = self.root / "S2Arm.app"; game = app / "Games" / "A"; game.mkdir(parents=True); (game / "icon.jpg").write_bytes(b"old")
+        cover = self.root / "c.jpg"; cover.write_bytes(b"custom")
+        spec_file = self.root / "custom.json"
+        entries = [dict(title_id="A", name="原名"), dict(title_id="B", name="别的款")]
+        spec_file.write_text(j.dumps(dict(A=dict(custom=True, name="新名", cover=str(cover)))), encoding="utf-8")
+        module.apply_custom(app, entries, str(spec_file), "Games")
+        self.assertEqual(entries, [dict(title_id="A", name="新名", icon="Games/A/icon.jpg", customized=True), dict(title_id="B", name="别的款")])
+        self.assertEqual((game / "icon.jpg").read_bytes(), b"custom")
+        # 恢复默认：带着旧自定义的条目换回原名原图、去掉标记；没自定义过的条目不碰
+        original = self.root / "o.jpg"; original.write_bytes(b"original")
+        spec_file.write_text(j.dumps(dict(A=dict(custom=False, name="原名", cover=str(original)), B=dict(custom=False, name="库里的名字", cover=""))), encoding="utf-8")
+        module.apply_custom(app, entries, str(spec_file), "Games")
+        self.assertEqual(entries, [dict(title_id="A", name="原名", icon="Games/A/icon.jpg"), dict(title_id="B", name="别的款")])
+        self.assertEqual((game / "icon.jpg").read_bytes(), b"original")
+
     def test_diagnostic_bounded_reads_and_atomic_publication(self):
         import unittest.mock as um
         logs = self.c.private / "logs"; logs.mkdir()

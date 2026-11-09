@@ -8,6 +8,7 @@ using Avalonia.Controls.Primitives;
 using Avalonia.Input.Platform;
 using Avalonia.Layout;
 using Avalonia.Media;
+using Avalonia.Platform.Storage;
 using Avalonia.Threading;
 using S2Arm.Launcher.Protocol;
 
@@ -60,6 +61,8 @@ public sealed partial class EnvironmentWindow
     private InstallReadiness? readiness;
     private string? readinessFor;
     private bool installChecking, installBusy, installCheckFailed;
+    private bool customizing;
+    private string customizeError = "";
     // A checklist that could not be read must not lock the player out: start and let the install job give the real reason.
     private bool InstallAllowed => readiness?.Ready == true || (readiness is null && installCheckFailed);
     private string installState = "", installMessage = "", installDiagnostics = "";
@@ -190,9 +193,25 @@ public sealed partial class EnvironmentWindow
     private Control GameHeader(LibraryGame game)
     {
         var header = new Grid { ColumnDefinitions = new ColumnDefinitions("Auto,*"), ColumnSpacing = 24 };
-        header.Children.Add(GameCover(game, 120));
+        var coverButton = new Button { Content = GameCover(game, 120), Background = Brushes.Transparent, Padding = new Thickness(0), IsEnabled = !PackBusy && !customizing };
+        coverButton.Click += (_, _) => _ = ChooseCoverAsync(game);
+        ToolTip.SetTip(coverButton, T("custom.cover.help"));
+        AutomationId(coverButton, "export.cover");
+        header.Children.Add(coverButton);
         var title = new StackPanel { Spacing = 8, VerticalAlignment = VerticalAlignment.Center };
-        title.Children.Add(Label(game.Name, 30));
+        var nameButton = new Button { Content = Label(game.Name, 30), Background = Brushes.Transparent, Padding = new Thickness(0), IsEnabled = !PackBusy && !customizing };
+        nameButton.Click += (_, _) => _ = RenameGameAsync(game);
+        ToolTip.SetTip(nameButton, T("custom.name.help"));
+        AutomationId(nameButton, "export.name");
+        title.Children.Add(nameButton);
+        if (game.CustomCover)
+        {
+            var reset = new Button { Content = T("custom.cover.reset"), Background = Brushes.Transparent, Foreground = Brush.Parse("#9A9AA0"), Padding = new Thickness(0), FontSize = 13, IsEnabled = !PackBusy && !customizing };
+            reset.Click += (_, _) => _ = CustomizeAsync(game, null, "");
+            AutomationId(reset, "export.cover.reset");
+            title.Children.Add(reset);
+        }
+        if (customizeError.Length > 0) title.Children.Add(new TextBlock { Text = customizeError, FontSize = 13, Foreground = Brush.Parse("#E55"), TextWrapping = TextWrapping.Wrap });
         title.Children.Add(Muted(game.Version.Length == 0 ? T("export.version_unknown") : T("library.version") + " · " + game.Version, 14));
         if (game.Missing.Count > 0)
             title.Children.Add(Muted(T("library.requirements") + " · " + string.Join(" / ", game.Missing)));
@@ -961,6 +980,70 @@ public sealed partial class EnvironmentWindow
             OperationCanceledException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         { installState = "failed"; installDiagnostics = error.Message; }
         finally { installBusy = false; readinessFor = null; Render(); }
+    }
+
+    private async Task ChooseCoverAsync(LibraryGame game)
+    {
+        var files = await StorageProvider.OpenFilePickerAsync(new FilePickerOpenOptions
+        {
+            Title = T("custom.cover.help"), AllowMultiple = false,
+            FileTypeFilter = [new FilePickerFileType(T("custom.cover.help")) { Patterns = ["*.jpg", "*.jpeg", "*.png"] }]
+        });
+        if (files.Count == 1 && files[0].TryGetLocalPath() is { } path) await CustomizeAsync(game, null, path);
+    }
+
+    private async Task RenameGameAsync(LibraryGame game)
+    {
+        var dialog = new Window
+        {
+            Title = T("custom.name.title"), Width = 420, SizeToContent = SizeToContent.Height,
+            CanResize = false, WindowStartupLocation = WindowStartupLocation.CenterOwner,
+            Background = Canvas, Foreground = Ink,
+            FontFamily = new FontFamily("avares://S2Arm/Assets/Fonts#Manrope")
+        };
+        string? result = null;
+        var body = new StackPanel { Spacing = 16, Margin = new Thickness(28) };
+        body.Children.Add(Label(T("custom.name.title"), 20));
+        var box = new TextBox { Text = game.Name, MaxLength = 64 };
+        AutomationId(box, "export.name.input");
+        body.Children.Add(box);
+        var buttons = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
+        Button DialogButton(string key, bool primary, Action click)
+        {
+            var button = new Button { Content = T(key), Padding = new Thickness(16, 9), CornerRadius = new CornerRadius(8), Margin = new Thickness(12, 0, 0, 0),
+                Background = primary ? Accent : Brush.Parse("#29292D"), Foreground = primary ? Canvas : Ink };
+            button.Click += (_, _) => { click(); dialog.Close(); };
+            buttons.Children.Add(button);
+            return button;
+        }
+        if (game.CustomName) DialogButton("custom.name.reset", false, () => result = "");
+        DialogButton("action.cancel", false, () => { });
+        AutomationId(DialogButton("custom.save", true, () => result = box.Text ?? ""), "export.name.save");
+        body.Children.Add(buttons);
+        dialog.Content = body;
+        await dialog.ShowDialog(this);
+        if (result is not null) await CustomizeAsync(game, result, null);
+    }
+
+    /// <summary>name / coverPath: null leaves it alone, empty restores the default.</summary>
+    private async Task CustomizeAsync(LibraryGame game, string? name, string? coverPath)
+    {
+        if (customizing || PackBusy) return;
+        customizing = true; customizeError = ""; Render();
+        var extra = new Dictionary<string, object?>();
+        if (name is not null) extra["name"] = name;
+        if (coverPath is not null) extra["coverPath"] = coverPath;
+        try
+        {
+            var job = await PackJobClient.RunAsync(PackRequest("customize", game.Id, extra), null, CancellationToken.None);
+            if (!job.Report.Succeeded) customizeError = job.Report.Message;
+        }
+        catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
+            InvalidOperationException or OperationCanceledException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
+        { customizeError = error.Message; }
+        finally { customizing = false; }
+        if (customizeError.Length == 0) await RunLibraryAsync("catalog", null);
+        Render();
     }
 
     private async Task ConfirmRemoveAsync(LibraryGame game)
