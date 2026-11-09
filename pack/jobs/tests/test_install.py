@@ -276,17 +276,22 @@ class FlowTests(unittest.TestCase):
             with self.assertRaises(Failure) as e: packer.assemble(self.c, "0100000000090000")
         self.assertEqual(e.exception.code, "container_stale")
 
-    def _ready(self, devices, teams=(dict(id="team-a", name="我", free=True),), rc=0):
+    def _ready(self, devices, teams=(dict(id="team-a", name="我", free=True),), rc=0, usb=(), raises=None):
         """跑装机前清单：devicectl list devices 回 devices（手造的 devicectl 行），Xcode 团队 teams"""
         import diag
         data = {"result": {"devices": list(devices)}}
-        with um.patch.object(install, "xcode_teams", return_value=list(teams)), um.patch.object(diag, "devicectl", lambda c, *a, timeout=0: (rc, data, "")):
+        import target
+        def devicectl(c, *a, timeout=0):
+            if raises: raise raises
+            return rc, data, ""
+        with um.patch.object(install, "xcode_teams", return_value=list(teams)), um.patch.object(diag, "devicectl", devicectl), \
+             um.patch.object(target, "usb_idevices", return_value=list(usb)):
             r = install.readiness(self.c)
         return r, {i["id"]: i for i in r["items"]}
 
     @staticmethod
     def _dev(name="测试设备2", transport="wired", pairing="paired", devmode="enabled", tunnel="disconnected", platform="iOS", reality="physical"):
-        return {"hardwareProperties": {"reality": reality, "platform": platform},
+        return {"identifier": name, "hardwareProperties": {"reality": reality, "platform": platform},
                 "connectionProperties": {"transportType": transport, "pairingState": pairing, "tunnelState": tunnel},
                 "deviceProperties": {"name": name, "developerModeStatus": devmode}}
 
@@ -294,7 +299,7 @@ class FlowTests(unittest.TestCase):
         gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
         r, it = self._ready([self._dev()])
         self.assertTrue(r["ready"]); self.assertEqual(r["device"], "测试设备2")
-        self.assertEqual([i["id"] for i in r["items"]], ["package", "appleId", "connected", "trusted", "developerMode"])
+        self.assertEqual([i["id"] for i in r["items"]], ["package", "appleId", "connected", "trusted", "developerMode", "deviceReady"])
         self.assertTrue(r["ipaPath"].endswith(".ipa"))
         self.assertEqual((r["account"], it["appleId"]["title"]), ("我", "已登录 Apple ID"))
         self.assertTrue(all(i["detail"] == "" for i in r["items"]))   # 好了的项不带说明
@@ -336,7 +341,103 @@ class FlowTests(unittest.TestCase):
         self.assertFalse(it["connected"]["ok"]); self.assertIn("不止一台", it["connected"]["detail"]); self.assertEqual(r["device"], ""); self.assertTrue(it["trusted"]["waiting"])
         # 读不到设备列表（devicectl 失败）= 当没连
         r, it = self._ready([self._dev()], rc=1)
-        self.assertFalse(it["connected"]["ok"])
+        self.assertFalse(it["connected"]["ok"]); self.assertIn("读不到设备列表", it["connected"]["detail"])
+
+    def test_readiness_single_paired_network_device_counts(self):
+        gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
+        r, it = self._ready([self._dev(transport="localNetwork")])
+        self.assertTrue(it["connected"]["ok"]); self.assertEqual(r["device"], "测试设备2")
+        _, it = self._ready([self._dev(transport="localNetwork"), self._dev(name="另一台", transport="localNetwork")])
+        self.assertFalse(it["connected"]["ok"]); self.assertIn("多台配对过", it["connected"]["detail"])
+        _, it = self._ready([self._dev(transport="localNetwork"), self._dev(name="线连的")])
+        self.assertTrue(it["connected"]["ok"])   # 有线优先，同网另一台不算两台
+
+    def _link(self, states, want="", polling=False, usb=(), results=None, raises=None):
+        """device_link：states 是每次 list devices 依次读到的设备表（读完停在最后一张）；results = {子命令: (rc, 原文)}"""
+        import diag, target
+        calls, seen = [], [0]
+        def devicectl(c, *a, timeout=0):
+            if a[:2] == ("list", "devices"):
+                if raises: raise raises
+                state = states[min(seen[0], len(states) - 1)]; seen[0] += 1
+                return state if isinstance(state, tuple) else (0, {"result": {"devices": state}}, "")
+            calls.append(a[:3]); rc, raw = (results or {}).get(a[1], (0, ""))
+            return rc, {}, raw
+        with um.patch.object(diag, "devicectl", devicectl), um.patch.object(target, "usb_idevices", return_value=list(usb)):
+            return install.device_link(self.c, want, polling=polling), calls
+
+    def _p(self, name="甲", transport="wired", pairing="paired", tunnel="disconnected", devmode="enabled", ddi=True, ident="D1", udid="SAMPLE-UDID-00112233"):
+        d = self._dev(name=name, transport=transport, pairing=pairing, tunnel=tunnel, devmode=devmode)
+        d["identifier"] = ident; d["hardwareProperties"]["udid"] = udid; d["deviceProperties"]["ddiServicesAvailable"] = ddi
+        return d
+
+    def test_link_reports_why_the_list_is_unreadable(self):
+        self.assertIn("超时", self._link([], raises=subprocess.TimeoutExpired("devicectl", 60), usb=["iPad"])[0]["problem"])   # 读不到优先：不说成「没插」
+        self.assertIn("CoreDevice", self._link([(127, {}, "x")])[0]["problem"])
+        link, _ = self._link([(1, {}, "boom")])
+        self.assertIn("读不到设备列表", link["problem"]); self.assertEqual(link["trace"][0]["rc"], 1); self.assertEqual(link["trace"][0]["raw"], "boom")
+
+    def test_link_usb_branches(self):
+        self.assertIn("USB 上没看到", self._link([[]])[0]["problem"])
+        link, _ = self._link([[self._p(transport=None, tunnel="unavailable")]], usb=["iPad"])
+        self.assertEqual(link["stage"], "connected"); self.assertIn("还没列出", link["problem"])
+
+    def test_link_pairs_an_untrusted_phone(self):
+        link, calls = self._link([[self._p(pairing="unpaired")], [self._p()]])
+        self.assertEqual(link["stage"], ""); self.assertIn(("manage", "pair", "--device"), calls)
+        link, _ = self._link([[self._p(pairing="unpaired")]], results={"pair": (1, "user denied")})
+        self.assertEqual(link["stage"], "trusted"); self.assertIn("信任", link["problem"]); self.assertIn("user denied", link["problem"])
+
+    def test_link_polling_does_not_repeat_the_trust_prompt(self):
+        states = [[self._p(pairing="unpaired")]]
+        self.assertIn(("manage", "pair", "--device"), self._link(states, polling=True)[1])
+        link, calls = self._link(states, polling=True)
+        self.assertEqual(calls, []); self.assertEqual(link["stage"], "trusted")
+
+    def test_link_developer_mode_stops_before_connecting(self):
+        link, calls = self._link([[self._p(devmode="disabled", ddi=False)]])
+        self.assertEqual(link["stage"], "developerMode"); self.assertEqual(calls, []); self.assertIn("开发者模式", link["problem"])
+
+    def test_link_brings_up_an_idle_tunnel(self):
+        link, calls = self._link([[self._p(ddi=False)], [self._p(tunnel="connected")]])
+        self.assertEqual(link["stage"], ""); self.assertEqual(calls, [("device", "info", "details")])
+        link, calls = self._link([[self._p(tunnel="connected")]])
+        self.assertEqual((link["stage"], calls), ("", []))   # 已经通了不折腾
+        link, _ = self._link([[self._p(transport="localNetwork", ddi=False)]], results={"info": (1, "device locked")})
+        self.assertEqual(link["stage"], "prepare"); self.assertIn("开发连接", link["problem"]); self.assertIn("device locked", link["problem"])
+
+    def test_link_updates_disk_images_when_services_stay_down(self):
+        down = [self._p(tunnel="connected", ddi=False)]
+        link, calls = self._link([down, down, [self._p(tunnel="connected")]])
+        self.assertEqual(link["stage"], ""); self.assertEqual(calls, [("device", "info", "details"), ("manage", "ddis", "update"), ("device", "info", "details")])
+        link, _ = self._link([down], results={"info": (0, "still no ddi")})
+        self.assertEqual(link["stage"], "prepare"); self.assertIn("开发者服务", link["problem"])
+
+    def test_link_stale_choice(self):
+        link, _ = self._link([[self._p(tunnel="connected")]], want="旧手机")
+        self.assertEqual((link["stage"], link["device"]["identifier"]), ("", "D1"))
+        link, _ = self._link([[self._p(name="甲"), self._p(name="乙", ident="D2")]], want="旧手机")
+        self.assertEqual(link["stage"], "connected")
+        for text in ("旧手机", "甲", "乙"): self.assertIn(text, link["problem"])
+        link, _ = self._link([[self._p(name="甲"), self._p(name="乙", ident="D2"), self._p(name="网上的", ident="D3", transport="localNetwork")]], want="旧手机")
+        self.assertNotIn("网上的", link["problem"])   # 有线优先：同网配对的不列
+        link, _ = self._link([[self._p(name="线连的", tunnel="connected"), self._p(name="网上的", ident="D3", transport="localNetwork")]], want="旧手机")
+        self.assertEqual((link["stage"], link["device"]["identifier"]), ("", "D1"))
+        link, _ = self._link([[self._p(name="甲", tunnel="connected"), self._p(name="乙", ident="D2", tunnel="connected")]], want="乙")
+        self.assertEqual(link["device"]["identifier"], "D2")
+
+    def test_phone_failure_writes_a_redacted_report(self):
+        import diag, target
+        udid = "00008140-" + "AB" * 8
+        data = {"result": {"devices": [self._p(name="张三的手机", ddi=False, udid=udid)]}}
+        def devicectl(c, *a, timeout=0):
+            return (0, data, "") if a[:2] == ("list", "devices") else (1, {}, f"error on {udid}")
+        with um.patch.object(diag, "devicectl", devicectl), um.patch.object(target, "usb_idevices", return_value=[]), self.assertRaises(Failure) as e:
+            install.phone(self.c)
+        self.assertEqual(e.exception.code, "device_not_ready"); self.assertNotIn(udid, str(e.exception))
+        report = (self.c.private / "logs" / f"{self.c.task}-device.log").read_text(encoding="utf-8")
+        self.assertNotIn(udid, report); self.assertNotIn("张三", report)
+        for field in ("rc=1", "transport=wired", "pairing=paired", "tunnel=disconnected", "developerMode=enabled", "ddi=False", "boot="): self.assertIn(field, report)
 
     def test_no_pack_dir_fails_before_install(self):
         # 审计 18:00 P1-58：没有「…资源包」目录不装、不报成功（原先照装，启动器写死「资源包也拷好了」）
