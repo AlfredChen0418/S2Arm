@@ -105,6 +105,33 @@ class IosPlatform(JobCase):
         self.assertEqual(seen, [["xcodebuild", "-downloadPlatform", "iOS", "-architectureVariant", "arm64"]])   # Apple 芯片只下 arm64 版（8.5 GB，不下 10.6 GB 通用版）
         self.assertEqual([e.get("done") for e in events if "done" in e], [12.5, 100.0])
 
+    def _download_with_exits(self, exits):
+        """假 xcodebuild：按次序给退出码，64 表示不认参数。"""
+        seen = []
+        self.runtimes = [("26.5", "23F77")]
+
+        def run(args, on_line=None, **kw):
+            seen.append([str(a) for a in args])
+            self.c.last_rc = exits[len(seen) - 1]
+            if self.c.last_rc:
+                raise toolchain.Failure("用法帮助", code="tool_exit")
+        with patch.object(self.c, "run", run), patch.object(self.c, "emit", lambda *a, **k: None), \
+             patch.object(toolchain, "probe", self._probe), patch.object(toolchain, "SDK_SIM_MAPPING", self.mapping), \
+             patch.object(toolchain.subprocess, "run", self._run):
+            return seen, toolchain.download_ios_platform(self.c)
+
+    def test_old_xcode_retries_without_architecture_variant(self):
+        seen, result = self._download_with_exits([64, 0])
+        self.assertEqual(seen, [["xcodebuild", "-downloadPlatform", "iOS", "-architectureVariant", "arm64"], ["xcodebuild", "-downloadPlatform", "iOS"]])
+        self.assertEqual(result, {})
+
+    def test_xcode_without_download_support_asks_to_update_not_usage_text(self):
+        with self.assertRaises(toolchain.Failure) as caught:
+            self._download_with_exits([64, 64])
+        self.assertEqual(caught.exception.code, "xcode_sdk_too_old")
+        self.assertIn("Xcode 更新到 26", str(caught.exception))
+        self.assertNotIn("用法", str(caught.exception))
+
     def test_downloaded_but_unregistered_asks_for_recheck(self):
         self.runtimes = [("26.5", "23F77")]
         self.unready = {"23F77"}
