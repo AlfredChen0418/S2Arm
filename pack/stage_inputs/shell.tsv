@@ -144,6 +144,7 @@
 入	runtime/tests/mk
 入	pack/app.entitlements
 入	pack/app_bundle.py
+入	pack/container_custom.py
 入	pack/contracts/artifact.v2.schema.json
 入	pack/contracts/compare.py
 入	pack/contracts/job-event.v1.schema.json
