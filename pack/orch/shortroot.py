@@ -183,3 +183,10 @@ def leave(links):
             remove_entry(link)
         except OSError:
             pass
+
+
+if __name__ == "__main__":   # 启动器空闲时扫崩溃残留：python -m pack.orch.shortroot sweep
+    if sys.argv[1:] == ["sweep"]:
+        print(f"拆掉残留入口 {sweep()} 个")
+    else:
+        sys.exit("用法：python -m pack.orch.shortroot sweep")
