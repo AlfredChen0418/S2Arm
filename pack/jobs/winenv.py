@@ -469,7 +469,6 @@ class RecoveryContractError(ValueError):
 
 
 @functools.lru_cache(maxsize=1)
-@functools.lru_cache(maxsize=1)
 def _long_path():
     """pack/orch/winlong.long_path：>240 字符的路径给 Win32 前先加 \\\\?\\（按路径加载，不依赖 sys.path）"""
     spec = importlib.util.spec_from_file_location("_s2a_winenv_winlong", ROOT / "pack/orch/winlong.py")
@@ -478,6 +477,7 @@ def _long_path():
     return module.long_path
 
 
+@functools.lru_cache(maxsize=1)
 def _libloc():
     """游戏库位置判法（pack/jobs/libloc.py，与 Mac 预检同一份纯函数）；按路径加载，不依赖 sys.path"""
     spec = importlib.util.spec_from_file_location("_s2a_winenv_libloc", ROOT / "pack/jobs/libloc.py")
