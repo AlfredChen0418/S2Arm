@@ -165,6 +165,9 @@ static _Atomic uint64_t g_tex_init_n, g_tex_rel_n;   // DM_NVN_ALLOCPROF: textur
 #define AP_B uint64_t _ap0 = g_allocprof > 0 ? g_dev.currentAllocatedSize : 0
 #define AP_E(i) do { if (g_allocprof > 0) { uint64_t _n = g_dev.currentAllocatedSize; if (_n > _ap0) g_ap_fn[i] += _n - _ap0; } } while (0)   // Per-frame arenas created so far (4 MiB each; for the memory report)
 static _Atomic int g_last_commit_error;
+// A cancelled CPU handle read invalidates this submission's remaining bindings.
+// All shader-work emitters check it, including tessellation / geometry helpers.
+static int g_handle_read_failed;
 static _Atomic uint64_t g_commit_error_n;   // 命令缓冲执行出错的累计次数（nvnDeviceWaitForError 按它判有没有新错误）
 void s2a_direct_gpu_error(const char *desc);   // S2Arm（graphics/nvn/host_adapt.m）：命令缓冲报错 → §11.3 直连异常（打红行，不切换）
 void s2a_gpu_safe_stop(const char *why);   // graphics/nvn/host_adapt.m：安全停之后宿主那一侧（冻游戏线程、iOS 上出错误页 / Mac 收局）
@@ -1133,7 +1136,7 @@ void nvn_be_sub_begin(void) {
     warm_claim();
     if (g_cb) MDIE("submit re-entered");
     g_sub_thread = pthread_self(); atomic_store(&g_sub_thread_set, 1);
-    atomic_store(&g_last_commit_error, 0);
+    atomic_store(&g_last_commit_error, 0); g_handle_read_failed = 0;
     g_sub_pool = objc_autoreleasePoolPush();
     main_barrier_reset(); g_cb = rec_cb_new();
     // Do not wait for the GPU mid-frame (hot real device: with a fixed rotation of 3, when the GPU cannot keep up every frame blocks here, and the submit thread runs at low frequency after waking, instruction count −18% but CPU time +49%):
@@ -1442,29 +1445,34 @@ static inline void enc_r_half_mask(id e, uint8_t mask) {
 }
 static void udc_encode(void);   // every draw encode: the unwritten-attachment ledger (see udc_note_draw)
 // Draws and dispatches: on Metal 3 the argument tables go first (m3_bind_draw / m3_bind_dispatch), and index / indirect buffers given by GPU address become a buffer and offset (m3_buf_at)
-static inline void enc_r_draw(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n) { udc_encode(); if (g_m3) m3_bind_draw(e); [e drawPrimitives:p vertexStart:v vertexCount:n]; }
-static inline void enc_r_draw_instanced(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n, NSUInteger i, NSUInteger b) { udc_encode(); if (g_m3) m3_bind_draw(e); [e drawPrimitives:p vertexStart:v vertexCount:n instanceCount:i baseInstance:b]; }
+static inline void enc_r_draw(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n) { if (g_handle_read_failed) return; udc_encode(); if (g_m3) m3_bind_draw(e); [e drawPrimitives:p vertexStart:v vertexCount:n]; }
+static inline void enc_r_draw_instanced(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger v, NSUInteger n, NSUInteger i, NSUInteger b) { if (g_handle_read_failed) return; udc_encode(); if (g_m3) m3_bind_draw(e); [e drawPrimitives:p vertexStart:v vertexCount:n instanceCount:i baseInstance:b]; }
 static inline void enc_r_draw_indirect(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, uint64_t gpu) {
+    if (g_handle_read_failed) return;
     udc_encode(); if (!g_m3) { [e drawPrimitives:p indirectBuffer:gpu]; return; }
     NSUInteger o; id<MTLBuffer> b; m3_bind_draw(e); if (!m3_buf_at(gpu, &b, &o)) return;
     [(id<MTLRenderCommandEncoder>)e drawPrimitives:p indirectBuffer:b indirectBufferOffset:o];
 }
 static inline void enc_r_draw_indexed(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, NSUInteger n, MTLIndexType t, uint64_t gpu, NSUInteger len, NSUInteger i, NSInteger bv, NSUInteger bi) {
+    if (g_handle_read_failed) return;
     udc_encode(); if (!g_m3) { [e drawIndexedPrimitives:p indexCount:n indexType:t indexBuffer:gpu indexBufferLength:len instanceCount:i baseVertex:bv baseInstance:bi]; return; }
     NSUInteger o; id<MTLBuffer> b; m3_bind_draw(e); if (!m3_buf_at(gpu, &b, &o)) return;
     [(id<MTLRenderCommandEncoder>)e drawIndexedPrimitives:p indexCount:n indexType:t indexBuffer:b indexBufferOffset:o instanceCount:i baseVertex:bv baseInstance:bi];
 }
 static inline void enc_r_draw_indexed_indirect(id<MTL4RenderCommandEncoder> e, MTLPrimitiveType p, MTLIndexType t, uint64_t gpu, NSUInteger len, uint64_t ind) {
+    if (g_handle_read_failed) return;
     udc_encode(); if (!g_m3) { [e drawIndexedPrimitives:p indexType:t indexBuffer:gpu indexBufferLength:len indirectBuffer:ind]; return; }
     NSUInteger o, io; id<MTLBuffer> b, ib; m3_bind_draw(e); if (!m3_buf_at(gpu, &b, &o) || !m3_buf_at(ind, &ib, &io)) return;
     [(id<MTLRenderCommandEncoder>)e drawIndexedPrimitives:p indexType:t indexBuffer:b indexBufferOffset:o indirectBuffer:ib indirectBufferOffset:io];
 }
 // NVN2 task / mesh draws (nvn_geometry.inc mtk_encode): groups object threadgroups (mesh ones without a task shader); Metal 3 takes the indirect arguments as buffer + offset
 static inline void enc_r_mesh(id e, NSUInteger groups, NSUInteger ot, NSUInteger mt) {
+    if (g_handle_read_failed) return;
     udc_encode(); if (g_m3) m3_bind_mesh(e);
     [e drawMeshThreadgroups:MTLSizeMake(groups, 1, 1) threadsPerObjectThreadgroup:MTLSizeMake(ot, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(mt, 1, 1)];
 }
 static inline void enc_r_mesh_indirect(id e, uint64_t ind, NSUInteger ot, NSUInteger mt) {
+    if (g_handle_read_failed) return;
     udc_encode(); if (!g_m3) { [e drawMeshThreadgroupsWithIndirectBuffer:ind threadsPerObjectThreadgroup:MTLSizeMake(ot, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(mt, 1, 1)]; return; }
     NSUInteger o; id<MTLBuffer> b; m3_bind_mesh(e); if (!m3_buf_at(ind, &b, &o)) return;
     [(id<MTLRenderCommandEncoder>)e drawMeshThreadgroupsWithIndirectBuffer:b indirectBufferOffset:o threadsPerObjectThreadgroup:MTLSizeMake(ot, 1, 1) threadsPerMeshThreadgroup:MTLSizeMake(mt, 1, 1)];
@@ -1497,14 +1505,15 @@ static inline void enc_end_on(id e, BOOL metal4) {
 static inline void enc_c_end(id e) { m4_end(e); }
 static inline void enc_c_pso(id e, id<MTLComputePipelineState> p) { [e setComputePipelineState:p]; }
 static inline void enc_c_args(id e, uint64_t gpu, NSUInteger i) { (void)e; if (rec_on() && !g_m3) rec_table_op(RO_T_ADDR, g_ct, gpu, i); else tab_addr(g_ct, gpu, i); }
-static inline void enc_c_dispatch(id e, MTLSize n, MTLSize t) { if (g_m3) m3_bind_dispatch(e); [e dispatchThreadgroups:n threadsPerThreadgroup:t]; }
-static inline void enc_c_dispatch_threads(id e, MTLSize n, MTLSize t) { if (g_m3) m3_bind_dispatch(e); [e dispatchThreads:n threadsPerThreadgroup:t]; }   // 最后一组不补满
+static inline void enc_c_dispatch(id e, MTLSize n, MTLSize t) { if (g_handle_read_failed) return; if (g_m3) m3_bind_dispatch(e); [e dispatchThreadgroups:n threadsPerThreadgroup:t]; }
+static inline void enc_c_dispatch_threads(id e, MTLSize n, MTLSize t) { if (g_handle_read_failed) return; if (g_m3) m3_bind_dispatch(e); [e dispatchThreads:n threadsPerThreadgroup:t]; }   // 最后一组不补满
 // 同一计算编码器里前后两次派发的依赖（后一个读前一个写的缓冲）：Metal 4 编码器内派发可并行，要编码器内屏障；Metal 3 用缓冲域内存屏障（同 blit_barrier）。
 //   用来把一串互相依赖的派发放进一个编码器，省掉每个编码器开头的整队屏障 / 栅栏（tess_draw 的搬运 → 外壳 → 计数 → 前缀和 → 展开）
 //   编码器内屏障本身与 blit_barrier 共用一份（enc_c_inner_barrier，定义在它旁边）
 static void enc_c_inner_barrier(id e);
 static inline void enc_c_dep(id e) { enc_c_inner_barrier(e); }
 static inline void enc_c_dispatch_indirect(id e, uint64_t ind, MTLSize t) {
+    if (g_handle_read_failed) return;
     if (!g_m3) { [(id<MTL4ComputeCommandEncoder>)e dispatchThreadgroupsWithIndirectBuffer:ind threadsPerThreadgroup:t]; return; }
     NSUInteger o; id<MTLBuffer> b; m3_bind_dispatch(e); if (!m3_buf_at(ind, &b, &o)) return;
     [(id<MTLComputeCommandEncoder>)e dispatchThreadgroupsWithIndirectBuffer:b indirectBufferOffset:o threadsPerThreadgroup:t];
@@ -1722,12 +1731,17 @@ static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
         g_gw[s].page = g_gw[s].page == pg || g_gw[s].fence <= done ? pg : ~0ull;
         if (fence > g_gw[s].fence) g_gw[s].fence = fence; }
 }
-static int gw_live(uint64_t lo, uint64_t hi) {
+// Only committed writes enter this table (gw_commit). Page collisions / an
+// untracked large write conservatively contribute their fence, never the open
+// submission's future fence. Unrelated non-colliding pages do not delay a read.
+static uint64_t gw_pending_fence(uint64_t lo, uint64_t hi) {
+    if (hi <= lo) return 0;
     uint64_t done = g_done;   // read without the lock as elsewhere: a stale value only refuses more
-    if (g_gw_all > done) return 1;
-    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > done) return 1; }
-    return 0;
+    uint64_t fence = g_gw_all;
+    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > fence) fence = g_gw[s].fence; }
+    return fence > done ? fence : 0;
 }
+static int gw_live(uint64_t lo, uint64_t hi) { return gw_pending_fence(lo, hi) != 0; }
 // The submission's GPU writes go into the page table with its fence (nvn_be_sub_commit)
 static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
@@ -9168,8 +9182,26 @@ static uint64_t push_gpu(int c, int slot) {
 // Read on the CPU side at replay time (the memory at the same moment a real GPU would read it at execution); slot unbound / out of range / unreadable = 0 (empty slot: dummy texture / dummy sampler).
 // A location with a GPU-side write queued in this submit (pend_hits) is still read at its current value; the first case is reported red.
 // The same read serves storage buffer addresses kept in uniform memory (SBUFU: 8 bytes)
+static int ubo_wait_submitted(uint64_t lo, uint64_t hi) {
+    uint64_t fence = gw_pending_fence(lo, hi);
+    if (!fence) return 1;
+    // A CPU decode cannot be ordered by the next GPU encoder's barrier. Wait
+    // only for the submitted writers of these pages; poll so shutdown / GPU
+    // safe stop can interrupt without waiting for a never-completing fence.
+    for (;;) {
+        int stopping = dm_gfx_session_stopping();
+        if (stopping || mtl_gpu_halted() || atomic_load(&g_last_commit_error)) {
+            g_handle_read_failed = 1; atomic_store(&g_last_commit_error, 1);
+            if (!stopping) { MLOG("【红】 CPU uniform-handle read cancelled before writer fence %llu completed (range %#llx..%#llx); remaining shader work is skipped", (unsigned long long)fence, (unsigned long long)lo, (unsigned long long)hi);
+                s2a_direct_gpu_error("CPU uniform-handle read could not reach its submitted GPU writer"); }
+            return 0;
+        }
+        if (nvn_be_wait(fence, 100000000ull) && !atomic_load(&g_last_commit_error)) return 1;
+    }
+}
 static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     memset(out, 0, n);
+    if (g_handle_read_failed) return;
     if (stage < 0 || stage >= 6 || reg < 0 || reg >= 16) return;
     const p_bind_buf *u = &S.ubo[stage][reg];
     if (!u->addr || (uint64_t)off + n > u->size) return;
@@ -9178,6 +9210,7 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     if (pend_hits(u->addr + off, n)) { int kind; if (pend_read(u->addr + off, n, out, &kind)) return;   // written by an inline update queued in this submission: its data
         RED_ONCE(47, "the uniform buffer holding bindless handles (stage %d slot %d +%#x) has GPU-side writes in this submission (%s): the current value is read", stage, reg, off,
                  kind == 2 ? "a buffer copy" : kind == 3 ? "a fill" : kind == 1 ? "an inline update covering part of it" : "more writes than the host tracks"); }
+    if (!ubo_wait_submitted(u->addr + off, u->addr + off + n)) return;
     const uint8_t *p = addr_cpu(u->addr + off, n);
     if (p) memcpy(out, p, n);
 }
@@ -9424,7 +9457,7 @@ static void audit_probe_report(uint64_t frame) {
          (unsigned long long)g_p20_checked, (unsigned long long)g_p20_type, (unsigned long long)g_p20_type_d2d, (unsigned long long)g_p20_cls);
 }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex);
-static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
+static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) { if (g_handle_read_failed) return 0; AP_B; int r = encode_args_(en, sh, nvn_stage, metal_vertex); AP_E(3); return r; }
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
     if (!sh->arg_len) return 1;   // no argument buffer (shader_args_init)
     args_sync_dirty();
@@ -9739,6 +9772,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
         else { uint64_t g = sh->size_abi && sh->size_exact ? size_abi_pass_support_on(nvn_stage, uc) : ug;
             for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_SUPPORT) slots[sh->rf.b[i].aid] = g; }
     }
+    if (g_handle_read_failed) return 0;   // no zero / stale handle becomes a valid binding on cancellation
     if (size_abi) {
         uint64_t gpu = size_abi_support(nvn_stage);
         for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_SUPPORT) slots[sh->rf.b[i].aid] = gpu;
