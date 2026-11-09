@@ -12,6 +12,8 @@
        11-02 本机 Jetsam（怪猎 96 GB / 马力欧派对 52 GB 同时跑）。异度3 实测：峰值 18.2 → 13.8 GB、墙钟 225 → 213 秒、产物逐字节同；Workstation GC 峰值一样且慢 81%，不换 -->
   <ItemGroup>
     <RuntimeHostConfigurationOption Include="System.GC.ConserveMemory" Value="7" />
+    <!-- SPIRV-Cross 转 MSL 递归深，.NET 线程池默认栈约 1.5 MB 不够（#51：几千支里有一支把进程栈溢出 rc=134，栈溢出接不住）。单位字节；只占虚拟地址，用多少提交多少 -->
+    <RuntimeHostConfigurationOption Include="System.Threading.DefaultStackSize" Value="67108864" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../S2A.Dsh.csproj" />
