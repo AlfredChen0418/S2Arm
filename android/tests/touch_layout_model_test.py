@@ -59,6 +59,10 @@ def run(source_root, negative_controls):
              "accepted edit overlapping sticks"),
             ("unknown-fields", "!object.keySet().equals(expected)", "false",
              "accepted unknown top field"),
+            ("drag-clamp", "clamp01((p[0] - left) / width)", "(p[0] - left) / width",
+             "at org.s2arm.android.TouchLayout.withButtonCenters"),
+            ("hit-slop", "px >= f.x - slop && px < f.x + f.width + slop", "px >= f.x && px < f.x + f.width",
+             "slop grows A frame"),
         ]
         for name, old, new, expected in mutations:
             if code.count(old) != 1:

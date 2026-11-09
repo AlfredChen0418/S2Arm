@@ -168,6 +168,39 @@ public final class TouchLayoutTest {
             invalidEdit(() -> original.copyAs("x", "bad" + control), "format character in edited name");
         invalidEdit(() -> original.copyAs("x", "\ud800"), "unpaired surrogate");
         invalidEdit(() -> original.copyAs("x", "x".repeat(65)), "name > 64 UTF-16 units");
+        // Editor save, same numbers as iOS runtime/tests/t_vpad_custom.m: safe rect (47, 0, 750x369).
+        java.util.Map<String, double[]> centres = new java.util.HashMap<>();
+        centres.put("A", new double[] {422, 184.5});
+        centres.put("B", new double[] {10, 500});
+        TouchLayout mine = original.withButtonCenters(centres, 47, 0, 750, 369, "mine", "我的布局");
+        near(mine.button("A").x, 0.5, "drag centre x = (422 - 47) / 750");
+        near(mine.button("A").y, 0.5, "drag centre y = 184.5 / 369");
+        near(mine.button("B").x, 0, "drag centre clamped left");
+        near(mine.button("B").y, 1, "drag centre clamped bottom");
+        near(mine.button("A").width, original.button("A").width, "drag keeps width");
+        near(mine.button("A").cornerRadius, original.button("A").cornerRadius, "drag keeps corner");
+        near(mine.button("X").x, original.button("X").x, "undragged button kept");
+        near(mine.stick("left").radius, original.stick("left").radius, "drag keeps sticks");
+        check(mine.identifier.equals("mine") && mine.name.equals("我的布局"), "drag saves user identity");
+        near(original.button("A").x, read(reference).button("A").x, "drag leaves original unchanged");
+        TouchLayout.Rect dragged = mine.frameForButton("A", 47, 0, 750, 369);
+        near(dragged.x + dragged.width / 2, 422, "saved centre projects back x");
+        near(dragged.y + dragged.height / 2, 184.5, "saved centre projects back y");
+        java.util.Map<String, double[]> unknown = new java.util.HashMap<>();
+        unknown.put("missing", new double[] {1, 1});
+        invalidEdit(() -> original.withButtonCenters(unknown, 47, 0, 750, 369, "mine", "x"), "drag unknown id");
+        java.util.Map<String, double[]> nan = new java.util.HashMap<>();
+        nan.put("A", new double[] {Double.NaN, 1});
+        invalidEdit(() -> original.withButtonCenters(nan, 47, 0, 750, 369, "mine", "x"), "drag NaN centre");
+        invalidEdit(() -> original.withButtonCenters(centres, 47, 0, 0, 369, "mine", "x"), "drag zero viewport");
+        invalidEdit(() -> original.withButtonCenters(centres, 47, 0, 750, 369, "default", "x"), "drag reserved identity");
+        // Hit test: inside the A frame, inside only with slop, and empty space.
+        check("A".equals(mine.buttonAt(422, 184.5, 47, 0, 750, 369, 0)), "hit A centre");
+        double edge = dragged.x + dragged.width + 5;
+        check(!"A".equals(mine.buttonAt(edge, 184.5, 47, 0, 750, 369, 0)), "outside A without slop");
+        check("A".equals(mine.buttonAt(edge, 184.5, 47, 0, 750, 369, 6)), "slop grows A frame");
+        invalidEdit(() -> mine.buttonAt(Double.NaN, 0, 47, 0, 750, 369, 0), "NaN hit point");
+        invalidEdit(() -> mine.buttonAt(0, 0, 47, 0, 750, 369, -1), "negative slop");
         // F01 tolerance applies only to cross-field boundaries, not scalar ranges.
         original.withButton("A", 0, 0, 0.1, 0.1, 0.05 + 0.5e-12);
         original.withStick("left", 0, 0, 0.5 + 0.5e-12, 1, 0.1);

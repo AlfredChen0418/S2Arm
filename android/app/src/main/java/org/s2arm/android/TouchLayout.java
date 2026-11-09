@@ -163,11 +163,49 @@ final class TouchLayout {
                 left, top, width, height);
     }
 
-    private static Rect project(double x, double y, double normalizedWidth, double normalizedHeight,
-                                double left, double top, double width, double height) {
+    /**
+     * Editor save (iOS layoutWithButtonCenters): dragged button centres in viewport pixels back to F01.
+     * Centres are clamped to [0, 1]; sizes, corners, sticks and buttons without a new centre are kept.
+     * Unlike iOS, an unknown id or a non-finite point is rejected instead of ignored.
+     */
+    TouchLayout withButtonCenters(Map<String, double[]> centres, double left, double top, double width, double height,
+                                  String id, String displayName) {
+        require(centres != null, "centres are required");
+        viewport(left, top, width, height);
+        for (String key : centres.keySet()) button(key);
+        List<Button> edited = new ArrayList<>(buttons.size());
+        for (Button b : buttons) {
+            double[] p = centres.get(b.id);
+            if (p == null) { edited.add(b); continue; }
+            require(p.length == 2 && Double.isFinite(p[0]) && Double.isFinite(p[1]), "invalid centre");
+            edited.add(new Button(b.id, clamp01((p[0] - left) / width), clamp01((p[1] - top) / height),
+                    b.width, b.height, b.cornerRadius));
+        }
+        return new TouchLayout(identifier, name, edited, sticks).copyAs(id, displayName);
+    }
+
+    /** Editor hit test (iOS buttonAt:safeRect:slop:): first button whose frame grown by slop contains the point. */
+    String buttonAt(double px, double py, double left, double top, double width, double height, double slop) {
+        require(Double.isFinite(px) && Double.isFinite(py) && Double.isFinite(slop) && slop >= 0, "invalid hit point");
+        for (Button b : buttons) {
+            Rect f = frameForButton(b.id, left, top, width, height);
+            if (px >= f.x - slop && px < f.x + f.width + slop && py >= f.y - slop && py < f.y + f.height + slop)
+                return b.id;
+        }
+        return null;
+    }
+
+    private static double clamp01(double value) { return Math.max(0, Math.min(1, value)); }
+
+    private static void viewport(double left, double top, double width, double height) {
         require(Double.isFinite(left) && Double.isFinite(top) && Double.isFinite(width)
                 && Double.isFinite(height) && width > 0 && height > 0
                 && Double.isFinite(left + width) && Double.isFinite(top + height), "invalid viewport");
+    }
+
+    private static Rect project(double x, double y, double normalizedWidth, double normalizedHeight,
+                                double left, double top, double width, double height) {
+        viewport(left, top, width, height);
         double unit = Math.min(width, height), w = normalizedWidth * unit, h = normalizedHeight * unit;
         return new Rect(Math.max(left, Math.min(left + x * width - w / 2, left + width - w)),
                 Math.max(top, Math.min(top + y * height - h / 2, top + height - h)), w, h);
