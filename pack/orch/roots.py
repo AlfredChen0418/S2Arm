@@ -149,7 +149,7 @@ def refs_same_volume(source, dest):
     roots = []
     for p in (source, Path(dest).parent):
         root = C.create_unicode_buffer(1024)
-        if not getpath(long_path(os.path.realpath(p)), root, len(root)):   # 先解开目录联接（同 tools/refs_clone.py：作业目录是指到别的卷的联接时，按字面路径判错卷）
+        if not getpath(long_path(getattr(os.path.realpath, 'long', os.path.realpath)(p)), root, len(root)):   # 先解开目录联接（入口在系统盘，目标可能在别的盘；作业目录是指到别的卷的联接时，按字面路径判错卷）
             raise C.WinError(C.get_last_error())
         roots.append(root.value)
     if os.path.normcase(roots[0]) != os.path.normcase(roots[1]):

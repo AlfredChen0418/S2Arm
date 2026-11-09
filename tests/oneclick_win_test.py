@@ -326,13 +326,6 @@ class Events(unittest.TestCase):   # ⑥ ⑦ ⑧ 机器读事件流与 --from-ex
         want = str((out / 'tmp').resolve())
         self.assertEqual((seen['env'], os.path.realpath(seen['py']), os.path.realpath(seen['child'])), (want, os.path.realpath(want), os.path.realpath(want)))
 
-    def test_deep_work_dir_uses_short_temp_on_same_drive(self):   # 深路径：TEMP 超 MAX_PATH 时 CreateProcess 在 BasepQueryAppCompat 里无限循环
-        deep = "R:\\" + "d" * 240 + "\\work"
-        short = oneclick_win.short_temp_dir(deep)
-        self.assertTrue(short.startswith("R:\\S2ArmTmp\\")); self.assertLessEqual(len(short), oneclick_win.TEMP_MAX)
-        self.assertEqual(short, oneclick_win.short_temp_dir(deep))
-        self.assertNotEqual(short, oneclick_win.short_temp_dir(deep + "2"))
-
     def test_keep_system_temp(self):   # 排查开关：S2A_KEEP_SYSTEM_TEMP=1 不改环境
         old = os.environ.get('TMP'); os.environ['S2A_KEEP_SYSTEM_TEMP'] = '1'
         try: self.assertIsNone(oneclick_win.work_temp(self.t / 'k')); self.assertEqual(os.environ.get('TMP'), old)

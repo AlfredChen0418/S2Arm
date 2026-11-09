@@ -50,22 +50,52 @@ class LongPathTest(unittest.TestCase):
         fake.scandir(short)
         self.assertEqual(seen[-1], short)
 
-    def test_short_root_mapping(self):
+    def test_short_entry_mapping(self):
         from pack.orch import shortroot as sr
-        long = "R:\\" + "d" * 200 + "\\work"
-        base = sr.short_base(long)
-        self.assertTrue(base.startswith("R:\\S2ArmTmp\\")); self.assertLess(len(base), 40)
-        self.assertEqual(base, sr.short_base(long + "\\"))                 # 同一路径同一短根（阶段键稳定）
-        self.assertNotEqual(base, sr.short_base(long + "2"))              # 不同工作目录不串
-        link = base + "\\w0"
+        long = "R:\\" + "d" * 200 + "\\lib"
+        link = "C:\\Users\\u\\AppData\\Local\\S2A\\j\\ab12"
         t = sr.parse_table(f"{long}\t{link}")
-        self.assertEqual(sr.to_short(long + "\\roots\\a.bin", t), link + "\\roots\\a.bin")
-        self.assertEqual(sr.to_short("\\\\?\\" + long + "\\x", t), link + "\\x")         # 带前缀的写法也认
-        self.assertEqual(sr.to_short(long.upper() + "\\x", t), link + "\\x")             # Windows 路径不分大小写
-        self.assertEqual(sr.to_short(long + "2\\x", t), long + "2\\x")                    # 前缀相同的别的目录不动
-        self.assertEqual(sr.to_short("C:\\other", t), "C:\\other")
-        self.assertEqual(sr.to_long(link + "\\roots", t), long + "\\roots")
+        self.assertEqual(sr.to_short(long + "\\work\\a.bin", t), link + "\\work\\a.bin")
+        self.assertEqual(sr.to_short("\\\\?\\" + long + "\\x", t), link + "\\x")
+        self.assertEqual(sr.to_short(long.upper() + "\\x", t), link + "\\x")
+        self.assertEqual(sr.to_short(long + "2\\x", t), long + "2\\x")
+        self.assertEqual(sr.to_long(link + "\\work", t), long + "\\work")
         self.assertEqual(sr.to_long("C:\\x", t), "C:\\x")
+
+    def test_short_codes_are_stable_four_chars_and_probe(self):
+        from pack.orch import shortroot as sr
+        a = list(sr.codes("R:\\lib"))
+        self.assertEqual(a[:3], list(sr.codes("r:\\LIB"))[:3])   # 同一目录每次相同（路径不分大小写）
+        self.assertTrue(all(len(c) == 4 for c in a)); self.assertEqual(len(set(a)), len(a))   # 被占用时顺延，不重复
+        self.assertNotEqual(a[0], next(sr.codes("R:\\lib2")))
+
+    def test_targets_use_common_parent_per_drive(self):
+        from pack.orch import shortroot as sr
+        self.assertEqual(sr.group_targets(["R:\\lib\\iPhone\\g\\work", "R:\\lib\\cache\\g\\extract"]), ["R:\\lib"])
+        self.assertEqual(sorted(sr.group_targets(["R:\\lib\\w", "D:\\x"])), ["D:\\x", "R:\\lib\\w"])
+
+    @unittest.skipUnless(os.name == "nt", "只在 Windows 上有目录联接")
+    def test_teardown_removes_only_the_junction(self):
+        import _winapi
+        from pack.orch import shortroot as sr
+        with tempfile.TemporaryDirectory() as t:
+            target = os.path.join(t, "target"); os.makedirs(os.path.join(target, "sub"))
+            Path(target, "sub", "keep.bin").write_bytes(b"x")
+            os.environ["LOCALAPPDATA"], old = t, os.environ.get("LOCALAPPDATA")
+            try:
+                got = sr.enter(target)
+                link = next(iter(got.values()))
+                self.assertTrue(os.path.isfile(os.path.join(link, "sub", "keep.bin")))
+                self.assertEqual(sr.show(link + "\\sub"), target + "\\sub")
+                sr.remove_entry(link)
+                self.assertFalse(os.path.lexists(link)); self.assertFalse(os.path.exists(link + ".pid"))
+                self.assertEqual(Path(target, "sub", "keep.bin").read_bytes(), b"x")      # 目标原样
+                root = sr.entry_dir(); stale = os.path.join(root, "zzzz"); _winapi.CreateJunction(target, stale); Path(stale + ".pid").write_text("1")
+                self.assertEqual(sr.sweep(root, alive=lambda pid: False), 1); self.assertFalse(os.path.lexists(stale)); self.assertTrue(os.path.isfile(os.path.join(target, "sub", "keep.bin")))
+                live = os.path.join(root, "yyyy"); _winapi.CreateJunction(target, live); Path(live + ".pid").write_text("1")
+                self.assertEqual(sr.sweep(root, alive=lambda pid: True), 0); self.assertTrue(os.path.lexists(live)); sr.remove_entry(live)
+            finally:
+                os.environ["LOCALAPPDATA"] = old or ""
 
     def test_redact_keeps_windows_path_length(self):
         out = redact.redact_text(r"[WinError 206] : 'C:\Users\example\a\b.txt'")

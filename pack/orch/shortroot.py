@@ -1,11 +1,12 @@
-"""Windows 短根：出包工作区用短路径，避开 MAX_PATH。
-<盘>:\\S2ArmTmp\\<工作目录摘要>\\ 下放 t（TMP / TEMP）和 w0、w1…（指向各工作区的目录联接）；oneclick_win 之后所有路径都走联接。
-摘要只看工作目录，同一款每次得到同一个短路径：阶段键里的路径不变，联接也一直有效（产物里记的路径不失效），不随进程结束删除。
-不同工作目录摘要不同，互不串；同一工作目录由作业锁保证同时只有一单。
-环境变量 S2A_SHORT_ROOTS（长路径<TAB>短路径，一行一对）给 winlong：os.path.realpath / Path.resolve 把联接展开成长路径后再映射回短路径，子进程同样生效。
-卷不是 NTFS、盘根建不了目录时返回 None，调用方照旧用长路径（打一行黄字，不静默）。"""
+"""Windows 短入口：出包工作区经短路径访问，避开 MAX_PATH。
+%LOCALAPPDATA%\\S2A\\j\\<4 位短号> 是一个 0 字节目录联接，指向玩家选的目录；临时文件、产物、缓存都实际落在玩家的目录里，盘根不留东西。
+每个任务开始建、结束拆（成功 / 失败都拆）；被强杀的残留靠旁边的 .pid 记录识别，下次 enter 或启动器空闲时 sweep。拆除只删联接本身，绝不进目标。
+短号由目标路径算出，同一目录每次相同（阶段键里的路径稳定）；已被另一个活着的任务占用就顺延，任务之间不串。
+环境变量 S2A_SHORT_ROOTS（长路径<TAB>短路径，一行一对）给 winlong 和子进程：realpath 展开联接后映射回短路径；给玩家看的路径用 to_long 换回。
+建不了联接（入口所在卷不是 NTFS 等）时返回 None，调用方照旧用长路径，并打一行说明原因。"""
 from __future__ import annotations
 
+import atexit
 import hashlib
 import ntpath
 import os
@@ -13,19 +14,37 @@ import sys
 
 from .winlong import parse_table, to_short   # noqa: F401  映射规则放 winlong：子进程的 sitecustomize 按文件路径加载它，不依赖 pack 包
 
-BASE = "S2ArmTmp"
 ENV = "S2A_SHORT_ROOTS"
-TEMP_ENV = "S2A_SHORT_TEMP"
+ALPHABET = "0123456789abcdefghijklmnopqrstuvwxyz"
 
 
-def short_base(path):
-    """工作目录 → 它的短根（只算路径，不碰盘）"""
-    full = ntpath.abspath(str(path))
-    return ntpath.join(ntpath.splitdrive(full)[0] + "\\", BASE, hashlib.sha256(ntpath.normcase(full).encode("utf-8", "surrogatepass")).hexdigest()[:16])
+def entry_dir(env=None):
+    base = (env if env is not None else os.environ).get("LOCALAPPDATA")
+    return ntpath.join(base, "S2A", "j") if base else None
+
+
+def codes(target):
+    """目标路径 → 候选短号序列：第一个由路径决定，被占用时顺延"""
+    n = int(hashlib.sha256(ntpath.normcase(target).encode("utf-8", "surrogatepass")).hexdigest()[:12], 16)
+    size = len(ALPHABET) ** 4
+    for i in range(64):
+        v, s = (n + i) % size, ""
+        for _ in range(4):
+            v, d = divmod(v, len(ALPHABET))
+            s = ALPHABET[d] + s
+        yield s
+
+
+def group_targets(paths):
+    """要访问的工作区 → 联接目标：同盘的取公共上级（通常是游戏库目录），一个入口够用"""
+    by_drive = {}
+    for p in paths:
+        by_drive.setdefault(ntpath.normcase(ntpath.splitdrive(p)[0]), []).append(p)
+    return [ntpath.commonpath(g) if len(g) > 1 else g[0] for g in by_drive.values()]
 
 
 def to_long(path, table):
-    """短路径 → 真实长路径（目录联接的目标要写长路径）"""
+    """短路径 → 玩家路径（界面、日志、产物里的联接目标都用它）"""
     text = str(path)
     low = ntpath.normcase(text)
     for _, long, short in table:
@@ -39,11 +58,34 @@ def table_now():
     return parse_table(os.environ.get(ENV, ""))
 
 
+def show(text):
+    """给玩家看的文字里，短入口一律换回玩家路径"""
+    out = str(text)
+    for _, long, short in table_now():
+        out = out.replace(short, long)
+    return out
+
+
 def _is_ntfs(path):
     import ctypes as C
     k = C.WinDLL("kernel32", use_last_error=True)
     fs = C.create_unicode_buffer(64)
     return bool(k.GetVolumeInformationW(ntpath.splitdrive(path)[0] + "\\", None, 0, None, None, None, fs, 64)) and fs.value.upper() == "NTFS"
+
+
+def _alive(pid):
+    import ctypes as C
+    k = C.WinDLL("kernel32", use_last_error=True)
+    k.OpenProcess.restype = C.c_void_p
+    k.CloseHandle.argtypes = [C.c_void_p]
+    k.GetExitCodeProcess.argtypes = [C.c_void_p, C.c_void_p]
+    h = k.OpenProcess(0x1000, False, pid)
+    if not h:
+        return False
+    code = C.c_ulong()
+    ok = k.GetExitCodeProcess(h, C.byref(code))
+    k.CloseHandle(h)
+    return bool(ok) and code.value == 259   # STILL_ACTIVE
 
 
 def _is_junction(path):
@@ -53,68 +95,91 @@ def _is_junction(path):
         return False
 
 
-def _link(link, target):
-    import _winapi
-    if os.path.lexists(link):
-        if _is_junction(link) and ntpath.normcase(_read_target(link)) == ntpath.normcase(target):
-            return
-        os.rmdir(link)   # 只删联接本身，不碰目标
-    _winapi.CreateJunction(target, link)
+def remove_entry(link):
+    """拆入口：只删联接本身（os.rmdir 对联接只删联接），绝不进目标；不是联接就不动"""
+    if _is_junction(link):
+        os.rmdir(link)
+    try:
+        os.remove(link + ".pid")
+    except OSError:
+        pass
 
 
-def _read_target(link):
-    target = os.readlink(link)
-    return target[4:] if target.startswith("\\\\?\\") else target
+def _owner(link):
+    try:
+        with open(link + ".pid", encoding="ascii") as f:
+            return int(f.read().strip())
+    except (OSError, ValueError):
+        return None
 
 
-def sweep(root):
-    """清掉目标已不在的残留：只 rmdir 联接本身，临时目录整个删"""
-    import shutil
+def sweep(root=None, alive=_alive):
+    """拆掉崩溃残留：记录的进程已不在的入口；没有 .pid 的联接也算残留。→ 拆了几个"""
+    root = root or entry_dir()
+    n = 0
     try:
         names = os.listdir(root)
-    except OSError:
-        return
+    except (OSError, TypeError):
+        return 0
     for name in names:
-        base = ntpath.join(root, name)
-        try:
-            links = [ntpath.join(base, n) for n in os.listdir(base) if _is_junction(ntpath.join(base, n))]
-        except OSError:
+        if name.endswith(".pid"):
             continue
-        if links and all(os.path.isdir(_read_target(l)) for l in links):
-            continue
-        for link in links:
-            os.rmdir(link)
-        shutil.rmtree(ntpath.join(base, "t"), ignore_errors=True)
-        try:
-            os.rmdir(base)
-        except OSError:
-            pass
+        link = ntpath.join(root, name)
+        pid = _owner(link)
+        if _is_junction(link) and (pid is None or not alive(pid)):
+            remove_entry(link)
+            n += 1
+    return n
 
 
-def enter(out, *others):
-    """给工作目录 out 和其它工作区建短根；→ {原路径: 短路径}，建不了 → None。
-    设 S2A_SHORT_ROOTS（子进程继承）与 S2A_SHORT_TEMP"""
-    full = ntpath.abspath(str(out))
-    os.makedirs(full, exist_ok=True)
-    base = short_base(full)
+def enter(*paths):
+    """给这些工作区建短入口；→ {原路径: 短路径}，建不了 → None（已打印原因）。设 S2A_SHORT_ROOTS，进程退出时拆"""
+    import _winapi
+    full = [ntpath.abspath(str(p)) for p in paths if p]
+    root = entry_dir()
+    if not root:
+        print("【黄】没有 LOCALAPPDATA，建不了短路径入口，仍用长路径", file=sys.stderr)
+        return None
+    made = []
     try:
-        if not _is_ntfs(full):
-            print("【黄】工作目录所在卷不是 NTFS，建不了目录联接，仍用长路径", file=sys.stderr)
+        if not _is_ntfs(root):
+            print("【黄】应用数据所在卷不是 NTFS，建不了目录联接，仍用长路径", file=sys.stderr)
             return None
-        root = ntpath.dirname(base)
         os.makedirs(root, exist_ok=True)
         sweep(root)
-        os.makedirs(ntpath.join(base, "t"), exist_ok=True)
-        mapping, rows = {}, []
-        for i, path in enumerate([full, *[ntpath.abspath(str(p)) for p in others if p]]):
-            link = ntpath.join(base, f"w{i}")
-            os.makedirs(path, exist_ok=True)
-            _link(link, path)
-            mapping[path] = link
-            rows.append(f"{path}\t{link}")
+        rows, mapping = [], {}
+        for p in full:
+            os.makedirs(p, exist_ok=True)
+        for target in group_targets(full):
+            for code in codes(target):
+                link = ntpath.join(root, code)
+                if os.path.lexists(link):
+                    continue   # 被另一个任务占用，顺延
+                with open(link + ".pid", "x", encoding="ascii") as f:
+                    f.write(str(os.getpid()))
+                made.append(link)
+                _winapi.CreateJunction(target, link)
+                rows.append(f"{target}\t{link}")
+                break
+            else:
+                raise OSError("短号用尽")
+        table = parse_table("\n".join(rows))
+        for p in full:
+            mapping[p] = to_short(p, table)
     except OSError as error:
-        print(f"【黄】建不了短路径工作区（{error}），仍用长路径", file=sys.stderr)
+        for link in made:
+            remove_entry(link)
+        print(f"【黄】建不了短路径入口（{error}），仍用长路径", file=sys.stderr)
         return None
     os.environ[ENV] = "\n".join(rows)
-    os.environ[TEMP_ENV] = ntpath.join(base, "t")
+    atexit.register(leave, made)
     return mapping
+
+
+def leave(links):
+    os.environ.pop(ENV, None)
+    for link in links:
+        try:
+            remove_entry(link)
+        except OSError:
+            pass

@@ -118,6 +118,7 @@ def _wrap_realpath():
         return to_short(result, parse_table(text))
 
     realpath.__doc__ = original.__doc__
+    realpath.long = original   # 判卷（ReFS 克隆）要真实路径：入口在系统盘，目标可能在别的盘
     ntpath.realpath = realpath
 
 
