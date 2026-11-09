@@ -328,7 +328,11 @@ static void sample_input(void) {
     for (NSString *name in config[@"mouse"]) if ([mouse containsObject:config[@"mouse"][name]]) action(name, &buttons, sticks);
     GCExtendedGamepad *pad = active_pad(GCController.controllers);
     if (pad) {
-        NSDictionary *pad_buttons = @{@"east": pad.buttonB, @"south": pad.buttonA, @"north": pad.buttonY, @"west": pad.buttonX,
+        // GameController 通常按物理方位上报（buttonA 在南侧）；Switch Pro 手柄在 macOS 上按键面字母上报（A 在东侧、X 在北侧）
+        NSString *pad_name = [NSString stringWithFormat:@"%@ %@", pad.controller.productCategory ?: @"", pad.controller.vendorName ?: @""].lowercaseString;
+        BOOL labelled = [pad_name containsString:@"switch pro"] || [pad_name containsString:@"pro controller"];
+        NSDictionary *pad_buttons = @{@"east": labelled ? pad.buttonA : pad.buttonB, @"south": labelled ? pad.buttonB : pad.buttonA,
+            @"north": labelled ? pad.buttonX : pad.buttonY, @"west": labelled ? pad.buttonY : pad.buttonX,
             @"leftShoulder": pad.leftShoulder, @"rightShoulder": pad.rightShoulder,
             @"leftTrigger": pad.leftTrigger, @"rightTrigger": pad.rightTrigger, @"menu": pad.buttonMenu,
             @"dpadLeft": pad.dpad.left, @"dpadRight": pad.dpad.right, @"dpadUp": pad.dpad.up, @"dpadDown": pad.dpad.down};
