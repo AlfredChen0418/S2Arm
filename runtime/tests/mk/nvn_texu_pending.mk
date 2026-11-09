@@ -16,7 +16,7 @@ $(NVN_TEXU_BINARY): graphics/nvn/tests/t_nvn_texu_pending.m $(NVN_TEXU_SOURCE) $
 .PHONY: native-test-nvn_texu_pending
 native-test-nvn_texu_pending: $(NVN_TEXU_BINARY)
 	@result=0; for backend in mtl3 mtl4; do \
-	  for scenario in default inline later cancel; do \
+	  for scenario in default inline later cancel all collision; do \
 	    if [ $$scenario = default ]; then NXGAL_BE=$$backend $(NVN_TEXU_BINARY) || result=1; \
 	    else NXGAL_BE=$$backend $(NVN_TEXU_BINARY) --$$scenario || result=1; fi; \
 	  done; done; exit $$result

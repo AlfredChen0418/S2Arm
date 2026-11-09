@@ -19,7 +19,7 @@ static unsigned checks, failures;
 #define CHECK(c, ...) do { checks++; int ok=!!(c); failures+=!ok; printf("%s ",ok?"PASS":"FAIL"); printf(__VA_ARGS__); putchar('\n'); fflush(stdout); } while (0)
 static void *api(const char *name) { void *p=h_nvnBootstrapLoader(name); REQUIRE(p); return p; }
 #define API(name) ((NVNT_##name)api(#name))
-enum { MEM=16<<20, CMD=1<<20, HANDLE_OFF=4<<20, OUT_OFF=5<<20, BLUE_OFF=6<<20, RED_OFF=7<<20, OTHER_OFF=8<<20, BLUE_ID=9, RED_ID=10 };
+enum { CMD=1<<20, HANDLE_OFF=4<<20, OUT_OFF=5<<20, BLUE_OFF=6<<20, RED_OFF=7<<20, OTHER_OFF=8<<20, BLUE_ID=9, RED_ID=10 };
 static NVNdevice device; static NVNqueue queue; static NVNmemoryPool pool;
 static uint8_t *memory; static uint64_t handle_addr; static float *output;
 static prog_t program;
@@ -46,14 +46,17 @@ static void texture(NVNtexture *t, int offset, unsigned id, const uint8_t color[
 int main(int argc, char **argv) { @autoreleasepool {
     int cancel=argc==2 && !strcmp(argv[1],"--cancel");
     int current=argc==2 && !strcmp(argv[1],"--inline");
-    int later=argc==2 && !strcmp(argv[1],"--later"); REQUIRE(argc==1 || cancel || current || later);
+    int later=argc==2 && !strcmp(argv[1],"--later");
+    int all=argc==2 && !strcmp(argv[1],"--all"), collision=argc==2 && !strcmp(argv[1],"--collision");
+    REQUIRE(argc==1 || cancel || current || later || all || collision);
+    size_t mem_size=collision ? 512u<<20 : all ? 32u<<20 : 16u<<20;
     setvbuf(stdout,NULL,_IOLBF,0); setenv("DM_PSO_ARCHIVE","0",1);
     struct sigaction sa={0}; sa.sa_sigaction=fault; sa.sa_flags=SA_SIGINFO; sigaction(SIGBUS,&sa,NULL); sigaction(SIGSEGV,&sa,NULL);
     NVNdeviceBuilder db; API(nvnDeviceBuilderSetDefaults)(&db); REQUIRE(API(nvnDeviceInitialize)(&device,&db));
     NVNqueueBuilder qb; API(nvnQueueBuilderSetDefaults)(&qb); API(nvnQueueBuilderSetDevice)(&qb,&device); REQUIRE(API(nvnQueueInitialize)(&queue,&qb));
-    REQUIRE(!posix_memalign((void **)&memory,65536,MEM)); memset(memory,0,MEM);
+    REQUIRE(!posix_memalign((void **)&memory,65536,mem_size)); memset(memory,0,mem_size);
     NVNmemoryPoolBuilder pb; API(nvnMemoryPoolBuilderSetDefaults)(&pb); API(nvnMemoryPoolBuilderSetDevice)(&pb,&device);
-    API(nvnMemoryPoolBuilderSetStorage)(&pb,memory,MEM); API(nvnMemoryPoolBuilderSetFlags)(&pb,NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
+    API(nvnMemoryPoolBuilderSetStorage)(&pb,memory,mem_size); API(nvnMemoryPoolBuilderSetFlags)(&pb,NVN_MEMORY_POOL_FLAGS_CPU_UNCACHED|NVN_MEMORY_POOL_FLAGS_GPU_CACHED);
     REQUIRE(API(nvnMemoryPoolInitialize)(&pool,&pb));
     uint64_t ga=API(nvnMemoryPoolGetBufferAddress)(&pool); handle_addr=nvn_ga2ca(ga+HANDLE_OFF); output=(float *)(memory+OUT_OFF);
     const op_hdr empty={OP_END,sizeof(op_hdr)}; nvn_be_exec((const uint8_t *)&empty); printf("BACKEND Metal%d\n",g_m3?3:4);
@@ -86,21 +89,32 @@ int main(int argc, char **argv) { @autoreleasepool {
     API(nvnQueueSubmitCommands)(&queue,1,&update); uint64_t a_fence=nvn_be_last_fence();
     REQUIRE(a_fence>0 && !nvn_be_wait(a_fence,0)); REQUIRE(cpu_handle()==BLUE_ID);
     id<MTLSharedEvent> later_gate=nil;
-    if (later) {
+    if (later || all || collision) {
         // C is a later submitted writer on a different, non-colliding GW page.
         // B's CPU handle decode needs A, not C. C's GPU wait remains closed
         // until B's encoding returns; a six-second fallback prevents deadlock
         // in a broken implementation that waits for the global latest fence.
-        REQUIRE(gw_slot(handle_addr>>12)!=gw_slot(nvn_ga2ca(ga+OTHER_OFF)>>12));
+        if(later) REQUIRE(gw_slot(handle_addr>>12)!=gw_slot(nvn_ga2ca(ga+OTHER_OFF)>>12));
         NVNcommandBuffer other; static uint8_t other_control[4096];
         REQUIRE(API(nvnCommandBufferInitialize)(&other,&device)); API(nvnCommandBufferAddControlMemory)(&other,other_control,sizeof other_control);
         API(nvnCommandBufferAddCommandMemory)(&other,&pool,CMD, CMD); API(nvnCommandBufferBeginRecording)(&other);
-        API(nvnCommandBufferUpdateUniformBuffer)(&other,ga+OTHER_OFF,256,0,4,&red_handle);
+        if(all) API(nvnCommandBufferClearBuffer)(&other,ga+OTHER_OFF,(16u<<20)+4096,0x5a5a5a5a);
+        else {
+            size_t off=OTHER_OFF;
+            if(collision) {
+                // Find a different real pool page mapped to the handle's GW slot.
+                // A public GPU update to it, after A, must create a live collision.
+                for(;off+4096<=mem_size;off+=4096) if(gw_slot(nvn_ga2ca(ga+off)>>12)==gw_slot(handle_addr>>12)) break;
+                REQUIRE(off+4096<=mem_size && (nvn_ga2ca(ga+off)>>12)!=(handle_addr>>12));
+            }
+            API(nvnCommandBufferUpdateUniformBuffer)(&other,ga+off,256,0,4,&red_handle);
+        }
         NVNcommandHandle c=API(nvnCommandBufferEndRecording)(&other);
-        later_gate=[g_dev newSharedEvent]; REQUIRE(later_gate);
-        nvn_be_queue_wait_event((__bridge void *)later_gate,1); API(nvnQueueSubmitCommands)(&queue,1,&c);
-        REQUIRE(nvn_be_last_fence()>a_fence && later_gate.signaledValue==0);
+        if(later) { later_gate=[g_dev newSharedEvent]; REQUIRE(later_gate); nvn_be_queue_wait_event((__bridge void *)later_gate,1); }
+        API(nvnQueueSubmitCommands)(&queue,1,&c);
+        REQUIRE(nvn_be_last_fence()>a_fence && (!later || later_gate.signaledValue==0));
     }
+    uint64_t before[6]; nvn_be_handle_wait_stats(before);
     consume_begin(); REQUIRE(gw_live(handle_addr,handle_addr+4)); REQUIRE(gate.signaledValue==0);
     if (current) mtl_sub_update(&red_handle,handle_addr,4);   // known B-local inline bytes need no A wait
     // An independent CPU timer releases the real GPU event. It must not fire
@@ -114,6 +128,13 @@ int main(int argc, char **argv) { @autoreleasepool {
     if (later) dispatch_after(dispatch_time(DISPATCH_TIME_NOW,6*NSEC_PER_SEC),dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{ later_gate.signaledValue=1; });
     REQUIRE(clock_gettime_nsec_np(CLOCK_UPTIME_RAW)-start<100000000ull && gate.signaledValue==0 && cpu_handle()==BLUE_ID);
     uint64_t b_fence=consume_end();
+    uint64_t after[6]; nvn_be_handle_wait_stats(after);
+    uint64_t expected_wait=current?0:1;
+    CHECK(after[0]-before[0]==expected_wait && after[2]-before[2]==(uint64_t)(all||collision) &&
+          after[3]-before[3]==(uint64_t)all && after[4]-before[4]==(uint64_t)collision && after[5]-before[5]==(uint64_t)cancel,
+        "wait counters: calls=%llu conservative=%llu all=%llu collision=%llu cancelled=%llu",after[0]-before[0],after[2]-before[2],after[3]-before[3],after[4]-before[4],after[5]-before[5]);
+    CHECK(current ? after[1]==before[1] : after[1]-before[1]>=100000000ull,
+        "wait elapsed %.3f ms (inline zero; blocked GPU / cancellation at least 100 ms)",(after[1]-before[1])/1e6);
     if (current) CHECK(gate.signaledValue==0,"B-local complete inline handle does not wait for A");
     if (later) { CHECK(later_gate.signaledValue==0,"handle decode waits for A, not later unrelated writer C"); later_gate.signaledValue=1; }
     REQUIRE(dispatch_semaphore_wait(released,dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC))==0);

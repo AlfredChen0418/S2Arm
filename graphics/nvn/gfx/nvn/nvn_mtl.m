@@ -1734,14 +1734,22 @@ static void gw_put(uint64_t lo, uint64_t hi, uint64_t fence, uint64_t done) {
 // Only committed writes enter this table (gw_commit). Page collisions / an
 // untracked large write conservatively contribute their fence, never the open
 // submission's future fence. Unrelated non-colliding pages do not delay a read.
-static uint64_t gw_pending_fence(uint64_t lo, uint64_t hi) {
+enum { GW_ALL = 1, GW_COLLISION = 2 };
+static uint64_t gw_pending_fence(uint64_t lo, uint64_t hi, unsigned *reason) {
+    if (reason) *reason = 0;
     if (hi <= lo) return 0;
     uint64_t done = g_done;   // read without the lock as elsewhere: a stale value only refuses more
-    uint64_t fence = g_gw_all;
-    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg); if ((g_gw[s].page == pg || g_gw[s].page == ~0ull) && g_gw[s].fence > fence) fence = g_gw[s].fence; }
+    uint64_t exact = 0, collision = 0;
+    for (uint64_t pg = lo >> 12; pg <= (hi - 1) >> 12; pg++) { unsigned s = gw_slot(pg);
+        if (g_gw[s].page == pg && g_gw[s].fence > exact) exact = g_gw[s].fence;
+        else if (g_gw[s].page == ~0ull && g_gw[s].fence > collision) collision = g_gw[s].fence; }
+    uint64_t broad = MAX(g_gw_all, collision), fence = MAX(exact, broad);
+    // A tie with an exact page would wait for the same fence anyway. Attribute
+    // only the extra dependency introduced by an imprecise writer record.
+    if (reason && fence > done && broad > exact) *reason = (g_gw_all == fence ? GW_ALL : 0) | (collision == fence ? GW_COLLISION : 0);
     return fence > done ? fence : 0;
 }
-static int gw_live(uint64_t lo, uint64_t hi) { return gw_pending_fence(lo, hi) != 0; }
+static int gw_live(uint64_t lo, uint64_t hi) { return gw_pending_fence(lo, hi, NULL) != 0; }
 // The submission's GPU writes go into the page table with its fence (nvn_be_sub_commit)
 static void gw_commit(uint64_t fence) {
     uint64_t done = g_done;
@@ -9182,9 +9190,18 @@ static uint64_t push_gpu(int c, int slot) {
 // Read on the CPU side at replay time (the memory at the same moment a real GPU would read it at execution); slot unbound / out of range / unreadable = 0 (empty slot: dummy texture / dummy sampler).
 // A location with a GPU-side write queued in this submit (pend_hits) is still read at its current value; the first case is reported red.
 // The same read serves storage buffer addresses kept in uniform memory (SBUFU: 8 bytes)
+// Count one CPU read dependency, not the number of 100 ms polling iterations.
+// Cumulative atomics let the present-side 300-frame report take window deltas.
+static _Atomic uint64_t g_handle_wait[6];   // calls, elapsed ns, conservative, all, collision, cancelled
+void nvn_be_handle_wait_stats(uint64_t s[6]) { for (int i = 0; i < 6; i++) s[i] = atomic_load_explicit(&g_handle_wait[i], memory_order_relaxed); }
 static int ubo_wait_submitted(uint64_t lo, uint64_t hi) {
-    uint64_t fence = gw_pending_fence(lo, hi);
+    unsigned reason = 0; uint64_t fence = gw_pending_fence(lo, hi, &reason);
     if (!fence) return 1;
+    uint64_t start = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);
+    atomic_fetch_add_explicit(&g_handle_wait[0], 1, memory_order_relaxed);
+    if (reason) atomic_fetch_add_explicit(&g_handle_wait[2], 1, memory_order_relaxed);
+    if (reason & GW_ALL) atomic_fetch_add_explicit(&g_handle_wait[3], 1, memory_order_relaxed);
+    if (reason & GW_COLLISION) atomic_fetch_add_explicit(&g_handle_wait[4], 1, memory_order_relaxed);
     // A CPU decode cannot be ordered by the next GPU encoder's barrier. Wait
     // only for the submitted writers of these pages; poll so shutdown / GPU
     // safe stop can interrupt without waiting for a never-completing fence.
@@ -9194,9 +9211,14 @@ static int ubo_wait_submitted(uint64_t lo, uint64_t hi) {
             g_handle_read_failed = 1; atomic_store(&g_last_commit_error, 1);
             if (!stopping) { MLOG("【红】 CPU uniform-handle read cancelled before writer fence %llu completed (range %#llx..%#llx); remaining shader work is skipped", (unsigned long long)fence, (unsigned long long)lo, (unsigned long long)hi);
                 s2a_direct_gpu_error("CPU uniform-handle read could not reach its submitted GPU writer"); }
+            atomic_fetch_add_explicit(&g_handle_wait[1], clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start, memory_order_relaxed);
+            atomic_fetch_add_explicit(&g_handle_wait[5], 1, memory_order_relaxed);
             return 0;
         }
-        if (nvn_be_wait(fence, 100000000ull) && !atomic_load(&g_last_commit_error)) return 1;
+        if (nvn_be_wait(fence, 100000000ull) && !atomic_load(&g_last_commit_error)) {
+            atomic_fetch_add_explicit(&g_handle_wait[1], clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - start, memory_order_relaxed);
+            return 1;
+        }
     }
 }
 static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
