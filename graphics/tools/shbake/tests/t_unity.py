@@ -181,6 +181,7 @@ for version in (17, 21):
 # 走未改动的生产 scan_unity：包内版本错误必须进传入 Counter，而不是只剩泛称。
 # 占位载荷不是GPU代码，rows应为空；对象/条目字节已在上面的真读取器测试核对。
 import importlib.util, pathlib, tempfile
+from unittest.mock import patch
 extract_path = pathlib.Path(__file__).resolve().parent.parent / 'nxsh_extract.py'
 spec = importlib.util.spec_from_file_location('t83_extract', extract_path)
 extract = importlib.util.module_from_spec(spec); spec.loader.exec_module(extract)
@@ -207,6 +208,29 @@ with tempfile.TemporaryDirectory(prefix='t83-scan-') as directory:
             check(not rows and not blobs and counter['Unity Shader'] == 1
                   and not counter['UnityFS 包内文件不是序列化文件'],
                   f'真实 scan_unity 读到 v{version} Shader；占位载荷不假称GPU代码')
+
+# 裸文件走生产发现入口，核对交给着色器扫描器的解压字节。
+with tempfile.TemporaryDirectory(prefix='unity-assets-') as directory:
+    path = pathlib.Path(directory, 'sharedassets0.assets')
+    for version, endian in ((17, '<'), (21, '>'), (22, '<')):
+        sample = bytearray(legacy_fixture(version, endian)[0])
+        if version == 22:
+            struct.pack_into('>I', sample, 4, 0)  # 扩展头的长度才有效
+        path.write_bytes(sample)
+        counter = collections.Counter()
+        with patch.object(extract, '_scan_blob') as scan:
+            extract.scan_unity(directory, [str(path)], counter)
+        got = [call.args[1] for call in scan.call_args_list]
+        check(got == [b'FIRST', b'next', b'DDS'] and counter['Unity Shader'] == 1,
+              f'裸 v{version} 向扫描器交付三个条目 → {got}')
+
+    for version, fmt, offset, delta in ((17, '>I', 4, -1), (17, '>I', 4, 1), (22, '>Q', 24, 1)):
+        sample = bytearray(legacy_fixture(version)[0])
+        struct.pack_into(fmt, sample, offset, len(sample) + delta)
+        path.write_bytes(sample)
+        with patch.object(U, 'shader_entries') as read:
+            extract.scan_unity(directory, [str(path)], collections.Counter())
+        check(not read.called, f'裸 v{version} 声明长度偏差 {delta:+d}，在解析前拒绝')
 
 
 # T84：原创合成载荷，手算节点[0,9)、[9,20)；无游戏资源。

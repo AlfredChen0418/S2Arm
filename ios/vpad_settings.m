@@ -1,5 +1,6 @@
 #import "vpad_settings.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
+#import "s2a_l10n.h"
 #include <math.h>
 
 @interface S2AVPadSettings () <UIDocumentPickerDelegate>
@@ -16,13 +17,13 @@
                       changed:(void (^)(void))changed closed:(void (^)(void))closed {
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
     _store = store; _current = layout; _changed = [changed copy]; _closed = [closed copy];
-    self.title = @"触屏布局";
+    self.title = S2AL(@"vpad.layouts.title");
     return self;
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
     if (!self.embeddedInSettings) {
-        self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"完成" style:UIBarButtonItemStyleDone target:self action:@selector(close)];
+        self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:S2AL(@"common.done") style:UIBarButtonItemStyleDone target:self action:@selector(close)];
         self.navigationItem.rightBarButtonItem.accessibilityIdentifier = @"vpad.layouts.done";
     }
     self.navigationController.modalInPresentation = YES;
@@ -43,8 +44,8 @@
 - (void)reload { _layouts = [_store layouts]; [self.tableView reloadData]; }
 - (void)close { [self dismissViewControllerAnimated:YES completion:^{ if (self->_closed) self->_closed(); }]; }
 - (void)showError:(NSError *)error {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"布局操作失败" message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"知道了" style:UIAlertActionStyleCancel handler:nil]];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:S2AL(@"vpad.layouts.error") message:error.localizedDescription preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"common.gotIt") style:UIAlertActionStyleCancel handler:nil]];
     UIViewController *presented = self.presentedViewController;
     if (presented) [presented dismissViewControllerAnimated:YES completion:^{ [self presentViewController:alert animated:YES completion:nil]; }];
     else [self presentViewController:alert animated:YES completion:nil];
@@ -60,76 +61,76 @@
     return _layouts[row - 2].identifier;
 }
 - (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
-    return section == 0 ? @"选择布局" : section == 1 ? @"管理布局" : section == 2 ? @"按键显示与触感" : section == 3 ? @"摇杆手感" : @"未加载的文件";
+    return section == 0 ? S2AL(@"vpad.layouts.section.choose") : section == 1 ? S2AL(@"vpad.layouts.section.manage") : section == 2 ? S2AL(@"vpad.layouts.section.display") : section == 3 ? S2AL(@"vpad.layouts.section.stick") : S2AL(@"vpad.layouts.section.broken");
 }
 - (NSString *)tableView:(UITableView *)tableView titleForFooterInSection:(NSInteger)section {
-    return section == 0 ? @"切换立即保存并生效" :
-        section == 1 ? nil : section == 2 ? @"停止操作 3 秒后保留的按键透明度。0% 时停手后完全看不见，手指按下仍有效、按键随即重新显示；默认 25%。触感反馈在按键新按下、每根摇杆每次按住期间首次到边时轻震一次；不改变游戏本身的震动。" :
-        section == 3 ? @"左右摇杆共用。死区过滤中心微动；外圈饱和越小，越早推满；响应指数大于 1 时中心更细，小于 1 时更灵敏。松手保存，下次推杆生效；默认 8% / 100% / 1.00。" :
-        @"错误文件保留原样；修正后重新导入或从“文件”中的本 App / VPadLayouts 管理。";
+    return section == 0 ? S2AL(@"vpad.layouts.footer.choose") :
+        section == 1 ? nil : section == 2 ? S2AL(@"vpad.layouts.footer.display") :
+        section == 3 ? S2AL(@"vpad.layouts.footer.stick") :
+        S2AL(@"vpad.layouts.footer.broken");
 }
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)indexPath {
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     if (indexPath.section == 0) {
         NSString *identifier = [self identifierAtRow:indexPath.row];
         S2AVPadLayout *layout = indexPath.row >= 2 ? _layouts[indexPath.row - 2] : nil;
-        cell.textLabel.text = layout ? layout.name : indexPath.row == 0 ? @"按键布局" : @"仅触屏操作";
+        cell.textLabel.text = layout ? layout.displayName : indexPath.row == 0 ? S2AL(@"vpad.layout.buttons") : S2AL(@"vpad.layout.touch");
         cell.detailTextLabel.text = layout ? layout.identifier : indexPath.row == 0 ?
-            @"显示虚拟按键" : @"游戏自己的触屏操作用这项；虚拟按键会关掉，四指长按 1.5 秒可切回";   // 审计 P1-5：原文「推荐连接手柄时使用」把该选的场景说反了
+            S2AL(@"vpad.layouts.buttons.note") : S2AL(@"vpad.layouts.touch.note");   // 审计 P1-5：原文「推荐连接手柄时使用」把该选的场景说反了
         cell.accessoryType = [_store.selectedIdentifier isEqualToString:identifier] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
         cell.accessibilityIdentifier = [@"vpad.layout." stringByAppendingString:identifier];
     } else if (indexPath.section == 1) {
-        cell.textLabel.text = @[@"编辑按键（位置、大小、透明度、配色）", @"导入布局", @"另存当前布局", @"导出当前布局", @"恢复按键布局"][indexPath.row];
+        cell.textLabel.text = @[S2AL(@"vpad.layouts.edit"), S2AL(@"vpad.layouts.import"), S2AL(@"vpad.layouts.saveAs"), S2AL(@"vpad.layouts.export"), S2AL(@"vpad.layouts.reset")][indexPath.row];
         cell.accessibilityIdentifier = @[@"vpad.layouts.edit", @"vpad.layouts.import", @"vpad.layouts.save", @"vpad.layouts.export", @"vpad.layouts.reset"][indexPath.row];
         cell.textLabel.textColor = self.view.tintColor;
     } else if (indexPath.section == 2 && indexPath.row == 3) {
-        cell.textLabel.text = @"游戏震动"; cell.detailTextLabel.text = @"手机马达和手柄共用，全部游戏生效"; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.textLabel.text = S2AL(@"vpad.rumble"); cell.detailTextLabel.text = S2AL(@"vpad.layouts.rumble.note"); cell.selectionStyle = UITableViewCellSelectionStyleNone;
         id on = [NSUserDefaults.standardUserDefaults objectForKey:@"S2ARumbleOn"];
-        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = on ? [on boolValue] : YES; toggle.accessibilityIdentifier = @"vpad.rumble.on"; toggle.accessibilityLabel = @"游戏震动";
+        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = on ? [on boolValue] : YES; toggle.accessibilityIdentifier = @"vpad.rumble.on"; toggle.accessibilityLabel = S2AL(@"vpad.rumble");
         [toggle addTarget:self action:@selector(rumbleSwitch:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
     } else if (indexPath.section == 2 && indexPath.row == 4) {
         id level = [NSUserDefaults.standardUserDefaults objectForKey:@"S2ARumbleLevel"]; NSInteger lv = level ? [level integerValue] : 2;
-        cell.textLabel.text = @"震动强度"; cell.detailTextLabel.text = @[@"弱", @"较弱", @"标准", @"较强", @"强"][MAX(0, MIN(4, lv))]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.textLabel.text = S2AL(@"vpad.rumble.strength"); cell.detailTextLabel.text = @[S2AL(@"vpad.rumble.level.0"), S2AL(@"vpad.rumble.level.1"), S2AL(@"vpad.rumble.level.2"), S2AL(@"vpad.rumble.level.3"), S2AL(@"vpad.rumble.level.4")][MAX(0, MIN(4, lv))]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 150, 44)]; slider.minimumValue = 0; slider.maximumValue = 4; slider.value = lv; slider.continuous = NO;
-        slider.accessibilityIdentifier = @"vpad.rumble.level"; slider.accessibilityLabel = @"震动强度"; [slider addTarget:self action:@selector(rumbleLevel:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = slider;
+        slider.accessibilityIdentifier = @"vpad.rumble.level"; slider.accessibilityLabel = S2AL(@"vpad.rumble.strength"); [slider addTarget:self action:@selector(rumbleLevel:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = slider;
     } else if (indexPath.section == 2 && indexPath.row == 2) {
-        cell.textLabel.text = @"按住锁定 ZL / ZR"; cell.detailTextLabel.text = @"按住 2 秒锁定，再点一下解锁；只对这款游戏生效";
+        cell.textLabel.text = S2AL(@"vpad.holdLock"); cell.detailTextLabel.text = S2AL(@"vpad.layouts.holdLock.note");
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.holdLockEnabled;
-        toggle.accessibilityIdentifier = @"vpad.holdLock.enabled"; toggle.accessibilityLabel = @"按住锁定 ZL / ZR";
+        toggle.accessibilityIdentifier = @"vpad.holdLock.enabled"; toggle.accessibilityLabel = S2AL(@"vpad.holdLock");
         [toggle addTarget:self action:@selector(holdLockChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = toggle;
     } else if (indexPath.section == 2 && indexPath.row == 1) {
-        cell.textLabel.text = @"触感反馈"; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.textLabel.text = S2AL(@"vpad.haptics"); cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.hapticFeedbackEnabled;
-        toggle.accessibilityIdentifier = @"vpad.haptics.enabled"; toggle.accessibilityLabel = @"触感反馈";
+        toggle.accessibilityIdentifier = @"vpad.haptics.enabled"; toggle.accessibilityLabel = S2AL(@"vpad.haptics");
         [toggle addTarget:self action:@selector(hapticsChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = toggle;
     } else if (indexPath.section == 2) {
-        cell.textLabel.text = @"闲置透明度";
+        cell.textLabel.text = S2AL(@"vpad.idleOpacity");
         cell.detailTextLabel.text = [NSString stringWithFormat:@"%.0f%%", _store.idleKeyOpacity * 100];
         cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 150, 44)];
         slider.minimumValue = 0; slider.maximumValue = 1; slider.value = _store.idleKeyOpacity;
         slider.continuous = NO;   // 手指松开再原子保存一次，不在拖动时反复写盘。
         slider.accessibilityIdentifier = @"vpad.visibility.idleOpacity";
-        slider.accessibilityLabel = @"闲置按键透明度";
+        slider.accessibilityLabel = S2AL(@"vpad.idleOpacity.a11y");
         slider.accessibilityValue = cell.detailTextLabel.text;
         [slider addTarget:self action:@selector(opacityChanged:) forControlEvents:UIControlEventValueChanged];
         cell.accessoryView = slider;
     } else if (indexPath.section == 3 && indexPath.row == 3) {
-        cell.textLabel.text = @"固定摇杆"; cell.detailTextLabel.text = @"摇杆常驻屏幕，位置在「编辑按键」里拖；关掉是手指落点当中心。只对这款游戏生效"; cell.selectionStyle = UITableViewCellSelectionStyleNone;
-        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.stickFixed; toggle.accessibilityIdentifier = @"vpad.stick.fixed"; toggle.accessibilityLabel = @"固定摇杆";
+        cell.textLabel.text = S2AL(@"vpad.stick.fixed"); cell.detailTextLabel.text = S2AL(@"vpad.layouts.stickFixed.note"); cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        UISwitch *toggle = [[UISwitch alloc] init]; toggle.on = _store.stickFixed; toggle.accessibilityIdentifier = @"vpad.stick.fixed"; toggle.accessibilityLabel = S2AL(@"vpad.stick.fixed");
         [toggle addTarget:self action:@selector(stickModeSwitch:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = toggle;
     } else if (indexPath.section == 3 && indexPath.row == 4) {
-        cell.textLabel.text = @"灵敏度"; cell.detailTextLabel.text = [NSString stringWithFormat:@"%.1f 倍", _store.stickSensitivity]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+        cell.textLabel.text = S2AL(@"vpad.stick.sensitivity"); cell.detailTextLabel.text = [NSString stringWithFormat:S2AL(@"vpad.stick.sensValue"), _store.stickSensitivity]; cell.selectionStyle = UITableViewCellSelectionStyleNone;
         UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 150, 44)]; slider.minimumValue = 0.5; slider.maximumValue = 2; slider.value = _store.stickSensitivity; slider.continuous = NO;
-        slider.accessibilityIdentifier = @"vpad.stick.sensitivity"; slider.accessibilityLabel = @"灵敏度"; [slider addTarget:self action:@selector(stickSensitivityChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = slider;
+        slider.accessibilityIdentifier = @"vpad.stick.sensitivity"; slider.accessibilityLabel = S2AL(@"vpad.stick.sensitivity"); [slider addTarget:self action:@selector(stickSensitivityChanged:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = slider;
     } else if (indexPath.section == 3) {
         NSInteger row = indexPath.row;
         CGFloat values[] = {_store.stickDeadzone, _store.stickSaturation, _store.stickExponent};
         float mins[] = {0, .5, .5}, maxs[] = {.4, 1, 3};
-        cell.textLabel.text = @[@"径向死区", @"外圈饱和", @"响应指数"][row];
+        cell.textLabel.text = @[S2AL(@"vpad.stick.deadzone"), S2AL(@"vpad.stick.saturation"), S2AL(@"vpad.stick.exponent")][row];
         cell.detailTextLabel.text = row == 2 ? [NSString stringWithFormat:@"%.2f", values[row]] : [NSString stringWithFormat:@"%.0f%%", values[row] * 100];
         UISlider *slider = [[UISlider alloc] initWithFrame:CGRectMake(0, 0, 150, 44)];
         slider.minimumValue = mins[row]; slider.maximumValue = maxs[row]; slider.value = values[row]; slider.tag = row; slider.continuous = NO;
@@ -212,18 +213,18 @@
     [self.navigationController dismissViewControllerAnimated:YES completion:^{ s2a_vpad_set_settings_open(NO); if (edit) edit(); }];
 }
 - (void)confirmReset {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"恢复按键布局？" message:@"已保存的自定义布局会保留。" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"恢复按键布局" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:S2AL(@"vpad.layouts.reset.title") message:S2AL(@"vpad.layouts.reset.message") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"common.cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"vpad.layouts.reset") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         [self chooseLayout:S2AVPadLayoutDefaultIdentifier];   // 恢复后留在本页（同上）
     }]];
     [self presentViewController:alert animated:YES completion:nil];
 }
 - (void)saveCurrent {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"另存当前布局" message:@"为当前布局命名，保存为一个新方案。" preferredStyle:UIAlertControllerStyleAlert];
-    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"布局名称"; field.text = [self->_current.name stringByAppendingString:@" 副本"]; field.accessibilityIdentifier = @"vpad.layouts.name"; }];
-    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [alert addAction:[UIAlertAction actionWithTitle:@"保存布局" style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:S2AL(@"vpad.layouts.saveAs") message:S2AL(@"vpad.layouts.saveAs.message") preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = S2AL(@"vpad.layouts.name"); field.text = [NSString stringWithFormat:S2AL(@"vpad.layouts.copyName"), self->_current.displayName]; field.accessibilityIdentifier = @"vpad.layouts.name"; }];
+    [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"common.cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:S2AL(@"vpad.layouts.save") style:UIAlertActionStyleDefault handler:^(UIAlertAction *action) {
         NSMutableDictionary *doc = [self->_current.document mutableCopy]; doc[@"id"] = NSUUID.UUID.UUIDString.lowercaseString;
         doc[@"name"] = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
         NSError *error; NSData *data = [NSJSONSerialization dataWithJSONObject:doc options:0 error:&error];
@@ -265,7 +266,7 @@
     NSData *data;
     if ([attributes[NSFileType] isEqualToString:NSFileTypeRegular] && [attributes[NSFileSize] unsignedLongLongValue] <= 65536)
         data = [NSData dataWithContentsOfURL:url options:0 error:&error];
-    else if (attributes) error = [NSError errorWithDomain:@"S2Arm.VPadLayout" code:1 userInfo:@{NSLocalizedDescriptionKey: @"F01.file：请选择 64 KiB 以内的普通 JSON 文件"}];
+    else if (attributes) error = [NSError errorWithDomain:@"S2Arm.VPadLayout" code:1 userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.file", S2AL(@"vpad.layout.err.pickFile")]}];
     if (scoped) [url stopAccessingSecurityScopedResource];
     S2AVPadLayout *layout = data ? [S2AVPadLayout readData:data error:&error] : nil;
     if (!layout || ![_store saveLayout:layout error:&error]) { [self showError:error]; return; }

@@ -882,6 +882,25 @@ static int g_rc_skip;   // a render-enable block evaluated false is active
 // forgotten, the conditional depth clears ran 3 more times before the lit materials' EQUAL depth test, and the frame came out white (half the frames while walking).
 // Now only timestamps are kept per submission, the query addresses apart, and both tables grow (upstream reference implementation (MIT), the same fix for Splatoon Raiders)
 static uint64_t *g_rc_pend; static uint32_t g_rc_npend, g_rc_pcap;   // timestamp reports replayed in this submission: their counter is 0, though memory does not show it yet
+// Submitted timestamp reports are still pending until their completion handler
+// writes memory and publishes g_done. A later submission must see their known 0,
+// not the old CPU counter. Only the submit thread owns this table.
+typedef struct { uint64_t addr, fence; } rc_submitted;
+static rc_submitted *g_rc_submitted; static uint32_t g_rc_nsubmitted, g_rc_scap;
+static uint64_t rc_done(void) { pthread_mutex_lock(&g_mu); uint64_t done = g_done; pthread_mutex_unlock(&g_mu); return done; }
+static void rc_retire(void) {
+    if (!g_rc_nsubmitted) return;
+    uint64_t done = rc_done(); uint32_t n = 0;
+    for (uint32_t i = 0; i < g_rc_nsubmitted; i++) if (g_rc_submitted[i].fence > done) g_rc_submitted[n++] = g_rc_submitted[i];
+    g_rc_nsubmitted = n;
+}
+static void rc_commit(uint64_t fence) {
+    rc_retire();
+    uint32_t need = g_rc_nsubmitted + g_rc_npend;
+    if (need > g_rc_scap) { uint32_t cap = g_rc_scap ? g_rc_scap : 256; while (cap < need) cap *= 2;
+        rc_submitted *p = realloc(g_rc_submitted, (size_t)cap * sizeof *p); if (!p) MDIE("no memory for submitted timestamp reports"); g_rc_submitted = p; g_rc_scap = cap; }
+    for (uint32_t i = 0; i < g_rc_npend; i++) g_rc_submitted[g_rc_nsubmitted++] = (rc_submitted){g_rc_pend[i], fence};
+}
 static uint64_t *g_rc_occ; static uint32_t g_rc_ocap, g_rc_on;   // addresses ever written by a non-timestamp report (open addressing, a power of two): conditions on them keep drawing
 static int rc_occ_has(uint64_t a) { if (!g_rc_ocap) return 0; for (uint32_t i = (uint32_t)(a >> 4) & (g_rc_ocap - 1);; i = (i + 1) & (g_rc_ocap - 1)) { if (g_rc_occ[i] == a) return 1; if (!g_rc_occ[i]) return 0; } }
 static void rc_occ_add(uint64_t a) {
@@ -901,6 +920,10 @@ static void rc_note(uint64_t a, int kind) {
 static int rc_value(uint64_t a, uint64_t *v) {   // 0 = unknown at encode time
     if (rc_occ_has(a)) return 0;
     for (uint32_t i = g_rc_npend; i-- > 0;) if (g_rc_pend[i] == a) { *v = 0; return 1; }
+    for (uint32_t i = g_rc_nsubmitted; i-- > 0;) if (g_rc_submitted[i].addr == a) {
+        if (g_rc_submitted[i].fence > rc_done()) { *v = 0; return 1; }
+        break;   // completed: subsequent CPU writes are authoritative again
+    }
     *v = *(const volatile uint64_t *)a; return 1;
 }
 // ---------- Occlusion queries (NVN_COUNTER_TYPE_SAMPLES_PASSED) ----------
@@ -1129,7 +1152,7 @@ static uint64_t g_arena_gen = 1;
 static void ts_sub_begin(void);   // segment boundary timestamps (ts_on, before sub_cut)
 static void sub_cut_begin(void);   // the segment draw count starts with the submission (before sub_cut)
 void nvn_be_sub_begin(void) {
-    mtl_init(); g_sub_serial++; g_pkg_epoch++; wd_sub_begin(); g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; g_rc_npend = 0; g_rc_skip = 0;
+    mtl_init(); g_sub_serial++; g_pkg_epoch++; wd_sub_begin(); g_seg = 0; seg_clk_put(g_sclk); g_sclk = NULL; rc_retire(); g_rc_npend = 0; g_rc_skip = 0;
     defer_drain();
     defer_reset();
     void treg_sweep_gone(void); treg_sweep_gone();
@@ -2198,6 +2221,7 @@ uint64_t nvn_be_sub_commit(void) {
     ghost_finish_submission();   // before the fence is taken: what it drops is released behind this submission
     alias_dead_views();   // likewise for the texture-ID views of textures dropped as overwritten
     uint64_t fence = ++g_fence;
+    rc_commit(fence);
     gw_commit(fence);
     if (g_vis_ring_i >= 0) g_vis_ring[g_vis_ring_i].fence = fence;
     // CPU-visible effects after completion: copy the op table into the callback
@@ -2322,7 +2346,7 @@ void nvn_be_drain(void) { if (mtl_gpu_halted()) { MLOG("GPU 安全停中：后�
 
 // ================= Render replay =================
 #include "../../host/front.h"
-static int g_red_once[178];   // RED_ONCE keys 0..177 (177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
+static int g_red_once[179];   // RED_ONCE keys 0..178 (178: a slot read on-chip by the first draw of a pass was not opened loaded; 177: a compute dispatch's binding ended the shared encoder again on the retry; 175 / 176: a block-compressed texture's GPU-written bytes not taken: no host texture of the uncompressed writer / no staging buffer, bcal_sync; 174: a converted vertex attribute stream address in no memory pool, vconv_bind; 172 / 173: a pool table for handles traced to no slot could not be allocated / grown, pool_tab_new / pool_tab_put_n; 171: a first-invocation store skipped, dispatch; 170: an sRGB / linear view not made again on its upgraded parent, tex_upgrade; 169: unused since 11-07 (a not-loaded color attachment written: g_noload_wrong, first 8 lines); 167 / 168: a storage buffer address the pools do not hold, slot / handle in a uniform buffer; 166: a texture turning packaged whose old host texture has another shape, its GPU-written texels not carried over, carry_gpu) (162: a vertex buffer address the pools do not hold, bind_vbufs) (160 / 161 / 163–165: tensor-core network stand-in, nvn_tensor.inc; 147–159 left for the NVN2 task / mesh branch) (143–146: NVN2 DLSS → MetalFX, nvn_dlss.inc) (139–142: folded linear textures: tex_linear, se_want, se_bind, copies / clears into one) (137 / 138: a GL texture an NVN texture is built from has no usable storage / no matching NVN format) (136: a draw's binding ended its pass twice) (134 / 135: alpha test / multisampling off the fragment shader cannot take); same-pass feedback snapshot too large 127, native image atomics use 128/129, same-pass feedback view narrowing 133
 // The key must be a constant inside the table: a key past the end wrote into the statics next to it (11-05: nvn_tensor.inc used 160 / 161 with 147 slots)
 #define RED_ONCE(k, ...) do { _Static_assert((k) >= 0 && (k) < (int)(sizeof g_red_once / sizeof g_red_once[0]), "RED_ONCE key outside g_red_once"); if (!g_red_once[k]++) MLOG("【红】 " __VA_ARGS__); } while (0)
 // NVN vertex streams 0–15 → Metal vertex buffer slots: 0–13 go to 16–29 (30 is the constant fallback buffer), 14 and 15 to 14 and 15. Metal has only the 31 slots 0–30; translated shaders use only buffer(0) (the argument buffer),
@@ -3494,7 +3518,9 @@ static void gpw_mark(const tex_t *t, unsigned level, unsigned layer0, unsigned n
 }
 static void gpw_mark_view(const tex_t *t, const view_t *v, int hv, int all_layers) {   // an attachment / image through its view: its base level, its first layer (all_layers: every layer it has)
     unsigned lv = hv && v->set_levels ? v->base_level : 0, l0 = hv && v->set_layers ? v->min_layer : 0, n = all_layers ? (hv && v->set_layers && v->nlayers ? v->nlayers : tex_layers(t) - MIN(l0, tex_layers(t))) : 1;
-    gpw_mark(t, lv, l0, n, 0, 0, 0, 0);
+    // Render / image writes must also protect an existing NvPkg's GPU pages from a later partial CPU update.
+    // The global stale-byte ledger alone is only consulted when storage first becomes packaged (carry_gpu).
+    pkg_gpu_wrote(t, lv, l0, n, 0, 0, 0, 0);
 }
 static void gpw_forget(uint64_t serial) {   // the texture is gone: its bytes stay as they are (a later texture over that memory checks the GOBs, not the serial)
     bcal_forget(serial);
@@ -4048,8 +4074,9 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
                         if (nh[k] != pk->ph[k]) changed = 1; else bits[k >> 6] &= ~(1ull << (k & 63));   // bits now: pages whose bytes changed
                     }
                     if (!changed) { pk->stamp = st; pk->seen = nvn_dirty_now(); clean = 1; g_pkg_same++; }
-                    else if (gpu && ncap >= pk->nph && nvn_dirty_page_gens(pk->span, t->mem, t->L.size, gens, pk->nph) == np) {
+                    else if (gpu && pk->tex.width >= t->d.width && pk->tex.height >= t->d.height && ncap >= pk->nph && nvn_dirty_page_gens(pk->span, t->mem, t->L.size, gens, pk->nph) == np) {
                         // The GPU wrote the texture since this upload: a whole re-upload from guest memory would undo it. Pages the CPU wrote after the GPU go up as their rectangles; the rest stay as the GPU made them
+                        // Rectangles use game coordinates. A reduced storage needs the whole upload below, which rebuilds it at game size before the next pass scales it again.
                         rect_list L = {0}; int up = 0;
                         for (long k = 0; k < np; k++) if (bits[k >> 6] >> (k & 63) & 1) {
                             if (gens[k] > pk->pgpu[k]) { const uint8_t *lo; size_t m; page_span(t, (size_t)k, &lo, &m); tex_bytes_rects(t, (uint64_t)(lo - t->mem), (uint64_t)(lo - t->mem) + m, rect_add, &L); up = 1; }
@@ -4540,6 +4567,8 @@ static void lp_finish(void);
 // Basis for equivalence: NVN's Barrier between two passes requires the latter to see all writes of the former. Within one Metal render encoder, later draws' reads and writes of the attachment itself (blend, depth / stencil test)
 // are ordered with earlier draws in submission order; but 'sampling' the attachment texture is not covered (reading and writing the same attachment within one pass is undefined). So continuation happens only when later draws do not sample these attachments:
 // if during continuation a draw needs to sample them, or a clear arrives, the pass is ended before it, returning to the separate semantics. Copies / dispatches end the render encoder anyway
+static uint8_t g_fb_want_load;   // 开遍前定了 ⑤ 的颜色槽（fb_prepare，遍还没开、槽内容就是内存）：开遍时必须载入（不走「不载入」/「整屏覆盖跳过载入」），瓦片里才是这一笔之前的内容
+static uint8_t g_fb_loaded;   // 开着的遍里按「载入」打开的颜色槽（rp_begin_ex 定）：本遍没写过时瓦片里就是内存内容
 static uint8_t g_fb_dirty[8];   // per color slot: the open pass has content in it that memory does not hold yet (opened with a clear / don't-care load, or a draw wrote it); see fb_prepare
 static int g_enc_mode;          // How the current encoder was opened (rp_begin_ex argument: 0 all attachments 1 only for clears 2 depth omitted)
 static int g_rt_range_active, g_rt_range_pending;
@@ -4880,7 +4909,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
     //   (11-06 The Legend of Zelda: Skyward Sword HD: full clear to 0 → SetRenderTargets → scissored clear → video quad, the whole screen black). lc_land sets g_nlc to 0 first
     if (g_nlc) lc_land();
     memset(g_zskip_cand_ok, 0, sizeof g_zskip_cand_ok);
-    g_enc_mode = clear_only; g_pass_swrite = 0; memset(g_fb_dirty, 0, sizeof g_fb_dirty);
+    g_enc_mode = clear_only; g_pass_swrite = 0; memset(g_fb_dirty, 0, sizeof g_fb_dirty); g_fb_loaded = 0;
     if (!R.has_rt) { RED_ONCE(3, "no render target set before the draw"); return nil; }
     for (int i = 0; i < R.rt.n; i++) rt_seen_mark(R.rt.color[i]);   // S2Arm first-use skip: which targets are drawn every frame, and which start fresh in this pass (first_skip_ok)
     rt_seen_mark(R.rt.depth);
@@ -4914,7 +4943,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
         if (!pd.colorAttachments[i].texture) continue;
         any = 1;
         pd.colorAttachments[i].loadAction = R.clear_c[i] ? MTLLoadActionClear : MTLLoadActionLoad;
-        if (!R.clear_c[i] && (g_noload_mask >> i & 1) && !bcrt_is(pd.colorAttachments[i].texture)) {   // proven unwritten to the pass end: no load (see g_noload_mask)
+        if (!R.clear_c[i] && (g_noload_mask >> i & 1) && !(g_fb_want_load >> i & 1) && !bcrt_is(pd.colorAttachments[i].texture)) {   // proven unwritten to the pass end: no load (see g_noload_mask)
             pd.colorAttachments[i].loadAction = MTLLoadActionDontCare; g_noload_n++; g_noload_bytes += att_bytes(pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
             if (!(g_noload_n & (g_noload_n - 1))) MLOG("color attachments not loaded (proven unwritten to the pass end): %llu so far, %.1f MB", (unsigned long long)g_noload_n, g_noload_bytes / 1048576.0);
             PD("Q %llu c%d not loaded: proven unwritten to the pass end", g_stat_pass + 1, i); }
@@ -4922,7 +4951,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
         pd.colorAttachments[i].clearColor = R.cc[i];
         if (R.clear_c[i]) PD("C %llu c%d cleared to %g,%g,%g,%g", g_stat_pass + 1, i, R.cc[i].red, R.cc[i].green, R.cc[i].blue, R.cc[i].alpha);
         if (bcrt_is(pd.colorAttachments[i].texture)) { if (pd.colorAttachments[i].loadAction != MTLLoadActionLoad) rt_fresh_mark(R.rt.color[i]); pd.colorAttachments[i].storeAction = MTLStoreActionStore; if (i < 8) g_fb_dirty[i] = pd.colorAttachments[i].loadAction != MTLLoadActionLoad; continue; }   // a shadow (bcrt_attach): loaded and stored as is, outside the bookkeeping below
-        int cov = tbdr_on() && !R.clear_c[i] && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);
+        int cov = tbdr_on() && !R.clear_c[i] && !(g_fb_want_load >> i & 1) && (g_fd_dw || g_fd_di) && fz_load_covers(i, pd.colorAttachments[i].texture, pd.colorAttachments[i].level);   // 开遍的这一笔要片上读它（g_fb_want_load）：不能跳过载入
         if (!R.clear_c[i] && (g_fd_dw || g_fd_di) && !cov) PD("Q %llu c%d load cannot be skipped why=%d", g_stat_pass + 1, i, g_fd_why);
         if (cov) {
             static int probe = -1; if (probe < 0) { probe = getenv("DM_NVN_LOADPROBE") ? atoi(getenv("DM_NVN_LOADPROBE")) : 0; if (probe) MLOG("DM_NVN_LOADPROBE: attachments whose load can be skipped are cleared to a sentinel color and read back to check"); }
@@ -4939,6 +4968,7 @@ static id<MTL4RenderCommandEncoder> rp_begin_ex_(int clear_only) {
         if (g_xv_n) { xv_ent *xe = xv_find(R.rt.color[i]->serial, (uint32_t)pd.colorAttachments[i].level, (uint32_t)pd.colorAttachments[i].slice);
             if (xe && (xe->state == XV_INVALID || xe->state == XV_PROBE)) { if (pd.colorAttachments[i].loadAction == MTLLoadActionLoad) { xv_ent copy = *xe; xv_violation(&copy, "old content loaded as an attachment"); } else xv_good(xe); } }
         pd.colorAttachments[i].storeAction = MTLStoreActionStore;
+        if (i < 8 && pd.colorAttachments[i].loadAction == MTLLoadActionLoad) g_fb_loaded |= (uint8_t)(1u << i);
         if (i < 8) g_fb_dirty[i] = pd.colorAttachments[i].loadAction != MTLLoadActionLoad && !(g_noload_mask >> i & 1);   // same-pass feedback sampling: a cleared / don't-care slot differs from memory from the start (a not-loaded one does not: nothing writes it, memory is it)
     }
     // clear_only: 0 attach all 1 only for clears 2 neither depth nor stencil attached 3 stencil only 4 depth only (3 / 4: the pass_ds_need lookahead proves the whole pass uses only that one)
@@ -11604,16 +11634,14 @@ void ms_after(void) {
 // levels 0-1 while drawing level 1; on the iPhone the moon's glow flared for one frame now and then and magenta squares showed — the third game of this kind): every draw, all games.
 // A hit is handled by the cheapest step that gives the Switch's result (the content from before this draw), stepping up only when needed:
 //   ① the view holds levels below the one being drawn: narrow the view to them (no copy, the pass stays open)
-//   ② nothing in the open pass has changed the slot since it was loaded (g_fb_dirty: a clear / don't-care load or a draw writing it sets it): read memory as it is. This holds
-//      for a draw that writes the slot it samples as well - the Switch reads the tile before that draw's own writes land, so memory is exactly what it would read
-//      (until 10-27 every such draw went to ④: Breath of the Wild copied a 1024x576 attachment and ended its render pass 462 times a frame, 16.3 -> 22.1 ms)
-//   ③ the pass changed it: end the pass before this draw (the slot lands in memory, the next pass loads it); no copy. For a self-writing draw, this is as correct as ④ but far cheaper
-//      (Breath of the Wild frame time 20.4 -> 16.4 ms when self-write went from ④ to ③); for a non-self-writing draw, this was always the path
-//   ④ this draw writes the slot it samples, the pass changed it, and DM_NVN_FB_SELFREAD=0: copy the whole sampled view into a same-shaped snapshot and sample that
-//      (the old cost: Breath of the Wild 16.6 -> 36.6 ms when every self-write was copied; now only used with the =0 override or a listed shader)
+//   ② this draw does not write the sampled slot, and the open pass has not changed it: read memory as it is
+//   ③ this draw does not write the sampled slot, but the pass changed it: end the pass before sampling, so the slot lands in memory; no copy
+//   ⑤ a proven same-pixel read can use the on-chip variant, keeping the pass open (fb_tile_try below)
+//   ④ this draw writes the slot it samples and cannot use ⑤: copy the whole sampled view into a same-shaped snapshot and sample that.
+//      Ending the preceding pass alone does not isolate the read: this draw would still sample and write the same resource in its new pass (#296).
 // A view only counts as feedback when it holds the level AND the layer being drawn; one that does not is skipped silently (the slot is attached, not sampled)
 // Shaders listed in the game profile's feedback_snap (key prefixes, space-separated) or DM_NVN_FB_SNAP=all / <keys,...> go straight to ④ (after ①); DM_NVN_FB_SNAP=0 turns the check off.
-// DM_NVN_FB_SELFREAD=0 makes a self-writing draw with dirty=1 go to ④ (copy) instead of ③ (end pass); the default (=1) ends the pass (no copy), which is as correct and far cheaper.
+// DM_NVN_FB_SELFREAD=1 restores the old unisolated self-read for diagnosis; the default (=0) uses ④ when ⑤ cannot handle the read.
 // fb_report logs the hits of each step every 300 frames
 static char g_fb_keys[16][20]; static int g_fb_nk = -1, g_fb_all, g_fb_off, g_fb_selfread = -1;
 static int fb_want(const char *key) {   // 1 = copy on every hit (listed); 0 = automatic (copy only when needed, see above)
@@ -11622,8 +11650,8 @@ static int fb_want(const char *key) {   // 1 = copy on every hit (listed); 0 = a
         if (!strcmp(src, "all")) g_fb_all = 1;
         else if (strcmp(src, "0")) for (const char *q = src; *q && g_fb_nk < 16;) { size_t n = strcspn(q, ", "); if (n) { if (n > 16) n = 16; memcpy(g_fb_keys[g_fb_nk], q, n); g_fb_keys[g_fb_nk++][n] = 0; } q += n; q += strspn(q, ", "); }
         if (g_fb_all || g_fb_nk) MLOG("same-pass feedback sampling snapshot: %s%s", g_fb_all ? "all fragment shaders" : src, e && *e ? " (DM_NVN_FB_SNAP)" : " (profile key feedback_snap)"); }
-    if (g_fb_selfread < 0) { const char *e = getenv("DM_NVN_FB_SELFREAD"); g_fb_selfread = !(e && !strcmp(e, "0"));
-        if (!g_fb_selfread) MLOG("same-pass feedback sampling: a draw that writes the slot it samples with dirty=1 copies it instead of ending the pass (DM_NVN_FB_SELFREAD=0)"); }
+    if (g_fb_selfread < 0) { const char *e = getenv("DM_NVN_FB_SELFREAD"); g_fb_selfread = e && !strcmp(e, "1");
+        if (g_fb_selfread) MLOG("same-pass feedback sampling: unisolated self-read enabled for diagnosis (DM_NVN_FB_SELFREAD=1)"); }
     if (g_fb_all) return 1;
     for (int i = 0; i < g_fb_nk; i++) if (!strncmp(key, g_fb_keys[i], strlen(g_fb_keys[i]))) return 1;
     return 0;
@@ -11667,10 +11695,10 @@ static id<MTLTexture> fb_snap_shape(MTLTextureType tt, MTLPixelFormat pf, NSUInt
 // ⑤ 遍内自采样改片上读取（10-30 帧率能耗线；DM_NVN_FB_TILE=0 关）：第 ③ 步结束遍之前先试——这一笔采样本遍已改过的附件 k，且只在本像素读它：
 //   就用片元着色器的可读瓦片版（_bf，FX_i = k）直接读瓦片里的颜色，遍不结束。瓦片里正是「这一笔之前」的内容（同 Switch：先前的笔已写进，本笔的写还没落），
 //   和第 ③ 步结束遍后重新载入读到的一样，却省了整片写回 + 读入（塞尔达每帧 250 处切遍、附件读写约 10 GB）。
-//   证明不成立（槽混用、坐标不是投影本像素、视图不是附件本身、没有 _bf、特化失败……）一律回到第 ③ 步，画面不会比原来差。
+//   证明不成立（槽混用、坐标不是投影本像素、视图不是附件本身、没有 _bf、特化失败……）回到 ③（本笔不写采样槽）或 ④（自写槽快照）。
 //   已知差别：同一笔里重叠的片元，后者读到前者刚写的值（Switch 两者都读本笔之前）；DM_NVN_FB_TILE_CHECK 双画比对量它
-static uint64_t g_fb_l5, g_fb_l5_unpush;   // ⑤ 的次数；其中外推参数非零、这一笔不外推的次数（fb_report）
-// DM_NVN_FB_TILE_CHECK=1（诊断，同局双画逐字节比对；每帧最多 DM_NVN_FB_TILE_CHECK 次，=1 时每帧 8 次）：命中 ⑤ 的笔先按老路（③：结束遍、从内存采样）画、
+static uint64_t g_fb_l5, g_fb_l5_unpush, g_fb_l5ld;   // ⑤ 的次数；其中外推参数非零、这一笔不外推的次数（fb_report）
+// DM_NVN_FB_TILE_CHECK=1（诊断，同局双画逐字节比对；每帧最多 DM_NVN_FB_TILE_CHECK 次，=1 时每帧 8 次）：命中 ⑤ 的笔先按常规路径（③ / ④）画、
 //   结果拷出；附件恢复成这一笔之前的底，再按 ⑤（读瓦片）画同一笔；两份逐字节比。同一帧、同一笔、同一组输入，不依赖两局能否复现。只比单命中的笔
 static struct { int pending, forcing, fx[32], n; uint8_t fbmask, lmap[8]; __strong id<MTLFunction> fn; __strong id<MTLTexture> att[8], s0[8]; uint64_t ser[8], frame, quota; } g_fbc;
 static _Atomic uint64_t g_fbc_same, g_fbc_diff;
@@ -11703,9 +11731,9 @@ static int swz_ident_for(MTLPixelFormat f, MTLTextureSwizzleChannels s) {
     for (int i = 0; i < 4; i++) if (c[i] != id[i] && !(i >= n && c[i] == (i == 3 ? MTLTextureSwizzleOne : MTLTextureSwizzleZero))) return 0;
     return 1;
 }
-static int fb_tile_try(NvProg *pr, NvShader *fs, int k, int reg, id<MTLTexture> tv) {
+static int fb_tile_try(NvProg *pr, NvShader *fs, int k, int reg, id<MTLTexture> tv, int pre) {   // pre：遍还没开（开遍前定，调用方让这一槽开遍时载入）
     NvShader *vs = pr->sh[0];
-    if (!fb_tile_on() || !g_enc || !vs || !fs->rf.nfo || k < 0 || k >= 8) return 0;
+    if (!fb_tile_on() || (pre ? g_enc != nil : !g_enc) || !vs || !fs->rf.nfo || k < 0 || k >= 8) return 0;
     if (fs->rf.fc_mixed[reg >> 6] >> (reg & 63) & 1) return 0;   // 同一张纹理还有别的读法（如读邻像素）：只能结束遍
     int fx[32]; memcpy(fx, g_fbt.on ? g_fbt.fx : (int[32]){[0 ... 31] = -1}, sizeof fx); int any = 0;
     for (int c = 0; c < fs->rf.nfc; c++) if (fs->rf.fc_reg[c] == reg) {
@@ -11713,7 +11741,13 @@ static int fb_tile_try(NvProg *pr, NvShader *fs, int k, int reg, id<MTLTexture> 
         fx[c] = k; any = 1; }
     if (!any) return 0;
     uint64_t s_; int lv, sl; rt_sub(&R.rt, k, &s_, &lv, &sl);
-    if (lv || sl || !R.rt.color[k] || MAX(R.rt.color[k]->d.width, 1u) != g_pass.cw || MAX(R.rt.color[k]->d.height, 1u) != g_pass.ch) return 0;
+    if (lv || sl || !R.rt.color[k]) return 0;
+    if (pre) {   // 遍的画布还没定：要求本遍每个附件游戏尺寸都与它相同（画布 = 它），且不放宽（放宽会改画布）
+        uint32_t w0 = MAX(R.rt.color[k]->d.width, 1u), h0 = MAX(R.rt.color[k]->d.height, 1u);
+        if (g_wd > 0) return 0;
+        for (int i = 0; i < R.rt.n && i < 8; i++) if (R.rt.color[i] && (MAX(R.rt.color[i]->d.width, 1u) != w0 || MAX(R.rt.color[i]->d.height, 1u) != h0)) return 0;
+        if (R.rt.depth && (MAX(R.rt.depth->d.width, 1u) != w0 || MAX(R.rt.depth->d.height, 1u) != h0)) return 0;
+    } else if (MAX(R.rt.color[k]->d.width, 1u) != g_pass.cw || MAX(R.rt.color[k]->d.height, 1u) != g_pass.ch) return 0;
     {   // 采样的视图必须就是附件本身（同 fz_p2_draw：起始级 / 层 0、单级、格式同附件实际格式、通道顺序恒等、单采样）
         uint32_t apf_ = tv.parentTexture ? (uint32_t)tv.parentTexture.pixelFormat : (uint32_t)tv.pixelFormat; uint8_t swz_[4];
         if (R.rt.has_cview[k] && R.rt.cview[k].set_format && !(nvn_fmt_to_mtl(R.rt.cview[k].format, &apf_, swz_) && apf_)) return 0;
@@ -11724,6 +11758,7 @@ static int fb_tile_try(NvProg *pr, NvShader *fs, int k, int reg, id<MTLTexture> 
     for (int c = 0; c < 8; c++) if (fs->rf.color_mask >> c & 1) lmap[c] = (uint8_t)c;   // 输出不搬位置：第 c 个颜色写附件 c
     id<MTLFunction> fn = bf_fn(fs, fx, fbmask, lmap);
     if (!fn) return 0;
+    if (pre && fbc_limit()) return 0;   // 双画检查要开着的遍：遍未开的这一笔照 ④
     if (fbc_limit() && !g_fbc.forcing) {   // 双画检查：这一笔先按老路（③）画，⑤ 留到 draw_top 里第二遍
         uint64_t fr = atomic_load(&g_cur_frame); if (fr != g_fbc.frame) { g_fbc.frame = fr; g_fbc.quota = 0; }
         if (g_fbc.pending || g_fbt.on || g_fbc.quota >= (uint64_t)fbc_limit()) { g_fbc.pending = 0; return 0; }   // 多命中 / 超额：不比，照老路
@@ -11772,15 +11807,16 @@ static void fb_note_draw(NvProg *pr) {
 static void fb_report(uint64_t frame) {   // every 300 frames: hits per layer and what the copies cost
     static uint64_t h0, a0, b0, c0, d0, y0;
     if (g_fb_hits == h0) return;
-    static uint64_t e0;
-    MLOG("same-pass feedback sampling up to frame %llu: %llu draws sampled their own pass's attachment: ① narrowed view %llu, ② read memory as it was %llu, ③ pass ended first %llu, ④ snapshot %llu (%.1f MB copied), ⑤ read on-chip, pass kept %llu (widen push dropped on %llu of them)",
+    static uint64_t e0, f0;
+    MLOG("same-pass feedback sampling up to frame %llu: %llu draws sampled their own pass's attachment: ① narrowed view %llu, ② read memory as it was %llu, ③ pass ended first %llu, ④ snapshot %llu (%.1f MB copied), ⑤ read on-chip, pass kept %llu (of them before the pass drew the slot, read as loaded %llu; widen push dropped on %llu)",
          (unsigned long long)frame, (unsigned long long)(g_fb_hits - h0), (unsigned long long)(g_fb_l1 - a0), (unsigned long long)(g_fb_l2 - b0), (unsigned long long)(g_fb_l3 - c0),
-         (unsigned long long)(g_fb_count - d0), (g_fb_bytes - y0) / 1048576.0, (unsigned long long)(g_fb_l5 - e0), (unsigned long long)g_fb_l5_unpush);
-    h0 = g_fb_hits; a0 = g_fb_l1; b0 = g_fb_l2; c0 = g_fb_l3; d0 = g_fb_count; y0 = g_fb_bytes; e0 = g_fb_l5;
+         (unsigned long long)(g_fb_count - d0), (g_fb_bytes - y0) / 1048576.0, (unsigned long long)(g_fb_l5 - e0), (unsigned long long)(g_fb_l5ld - f0), (unsigned long long)g_fb_l5_unpush);
+    h0 = g_fb_hits; a0 = g_fb_l1; b0 = g_fb_l2; c0 = g_fb_l3; d0 = g_fb_count; y0 = g_fb_bytes; e0 = g_fb_l5; f0 = g_fb_l5ld;
 }
 // Called before the draw opens its render pass: if a snapshot is needed, end the current render pass, copy the snapshot and register the substitution (used by this draw's argument encoding)
 static void fb_prepare(NvProg *pr) {
-    g_draw_seq++; g_fb_n = 0; g_fbt.on = 0; g_fbt.fn = nil;
+    g_draw_seq++; g_fb_n = 0; g_fbt.on = 0; g_fbt.fn = nil; g_fb_want_load = 0;
+    if (!g_enc) memset(g_fb_dirty, 0, sizeof g_fb_dirty);   // no pass open: the last one ended and its writes are in memory (g_fb_dirty is only reset when a pass opens; a stale 1 sent the first self-sampling draw of the next pass to ④)
     if (g_fbc.forcing) { g_fbt.on = 1; memcpy(g_fbt.fx, g_fbc.fx, sizeof g_fbt.fx); g_fbt.fbmask = g_fbc.fbmask; memcpy(g_fbt.lmap, g_fbc.lmap, 8); g_fbt.fn = g_fbc.fn; return; }   // 双画检查的第二遍：强制 ⑤
     if (g_fb_rebind) { args_dirty_all(); g_fb_rebind = 0; }   // the previous draw had a substituted binding: re-encode with the original bindings this time
     if (!pr || !pr->sh[1] || !R.rt.n || g_fz.active || g_defer_replaying) return;
@@ -11853,19 +11889,23 @@ static void fb_prepare(NvProg *pr) {
             if (!settled) { int pend = g_nlc || R.clear_d || R.clear_s; for (int c = 0; c < 8; c++) pend |= R.clear_c[c];
                 settled = 1; if (pend) { lc_land(); rp_flush(); memset(g_fb_dirty, 0, sizeof g_fb_dirty); } }
             int self_write = listed || ((fs->rf.color_mask >> k & 1) && ((S.chmask.mask >> (4 * k)) & 0xf));
-            // ② nothing in the open pass has changed the slot since it was loaded: memory holds exactly the content from before this draw, so it is read as it is.
-            //   That holds for a draw that writes the slot it samples as well - the Switch reads the tile before its own writes land, which is what was loaded.
-            //   (Until 10-27 this only applied when the draw did not write: Breath of the Wild then copied a 1024x576 attachment and ended its render pass 462 times
-            //   a frame, 16.3 -> 22.1 ms. A listed shader keeps its copy.)
+            // ② unchanged memory is safe to sample only if this draw does not also write that slot (the diagnostic override restores the old self-read).
             if (!g_fb_dirty[k] && !listed && (g_fb_selfread || !self_write)) { g_fb_l2++; continue; }
-            // ③ the pass changed the slot (dirty=1) and this draw samples it: end the pass, let the changed content land in memory, and let this draw open the next one with a load.
-            //   For a draw that writes the slot it samples (self_write=true), this is as correct as ④ (both make the shader read the content before its own writes: the tile content that
-            //   a prior draw in the open pass wrote, now in memory after the pass ends), but ③ has no copy cost — Breath of the Wild frame time 20.4 -> 16.4 ms when ④ became ③ here
-            if (!listed && (!self_write || g_fb_selfread)) {   // g_fb_selfread=1 (default): a self-writing draw ends the pass when dirty; g_fb_selfread=0: it goes to ④ (the 10-27 behaviour); a listed shader keeps its copy
-                if (g_enc && fb_tile_try(pr, fs, k, b->reg, t)) { PD("N %llu same-pass feedback sampling: attachment %d ser=%llu was drawn in this pass; this draw reads it on-chip (slot %d), the pass stays open", g_stat_pass, k, (unsigned long long)ser, b->reg); continue; }   // ⑤
+            // ⑤ read the tile instead of sampling the attachment, whenever the tile holds exactly the content from before this draw:
+            //   - the open pass drew it (dirty): the tile has those draws' writes, memory does not;
+            //   - the open pass loaded it and has not drawn it yet: the tile is memory;
+            //   - the pass is not open yet (the first draw of the pass): it is opened with this slot loaded (g_fb_want_load; no don't-care load, no covered-load skip), the tile is memory.
+            //   The last two used to go to ④ (#307 Breath of the Wild: the first self-sampling draw of each pass copied a 1600x900 attachment, ~8 copies / ~50 MB a frame; iPhone
+            //   energy per frame +5-26% when hot). Reading the tile costs one load instead of a copy, a snapshot and its sampling, and the pass is not split
+            if (!listed && g_fb_dirty[k] && g_enc && fb_tile_try(pr, fs, k, b->reg, t, 0)) { PD("N %llu same-pass feedback sampling: attachment %d ser=%llu was drawn in this pass; this draw reads it on-chip (slot %d), the pass stays open", g_stat_pass, k, (unsigned long long)ser, b->reg); continue; }
+            if (!listed && !g_fb_dirty[k] && g_enc && (g_fb_loaded >> k & 1) && fb_tile_try(pr, fs, k, b->reg, t, 0)) { g_fb_l5ld++; PD("N %llu same-pass feedback sampling: attachment %d ser=%llu was loaded and not yet drawn in this pass; this draw reads it on-chip (slot %d)", g_stat_pass, k, (unsigned long long)ser, b->reg); continue; }
+            //   (not with a deferred replay pending: it runs other draws' fb_prepare after the pass opens; not inside a pass merge)
+            if (!listed && !g_fb_dirty[k] && !g_enc && !g_defer_replaying && !g_defer_natq && !g_fz.active && fb_tile_try(pr, fs, k, b->reg, t, 1)) { g_fb_want_load |= (uint8_t)(1u << k); g_fb_l5ld++; PD("N %llu same-pass feedback sampling: attachment %d ser=%llu, pass not open yet: opened with it loaded, this draw reads it on-chip (slot %d)", g_stat_pass + 1, k, (unsigned long long)ser, b->reg); continue; }
+            // ③ ending the pass makes prior writes visible, but does not isolate a self-writing draw in the next pass.
+            if (!listed && (!self_write || g_fb_selfread)) {
                 if (g_enc) { rp_end(); PD("N %llu same-pass feedback sampling: attachment %d ser=%llu was drawn in this pass%s; the pass ends before this draw samples it", g_stat_pass, k, (unsigned long long)ser, self_write ? " (self-write)" : ""); }
                 memset(g_fb_dirty, 0, sizeof g_fb_dirty); g_fb_l3++; continue; }
-            // ④ this draw writes the slot it samples and the pass already changed it: copy the whole sampled view (every level and layer of it) into a snapshot of the same
+            // ④ this draw writes the slot it samples: copy the whole sampled view (every level and layer of it) into a snapshot of the same
             //   shape and sample that. Any 2D / 2D array view works, including one the shader declares as a cube / cube array and one that holds several mip levels
             //   (Breath of the Wild 9a08f70c2775ebe7: a 4-level 2D array sampled while drawing layer 6 of it): the levels the pass does not write are copied unchanged,
             //   so a LOD read means the same in the snapshot. Non-root views (a view of a view), multisample and 3D are reported once and left as they are
@@ -12974,8 +13014,8 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     int defer_q_draw = !g_enc && !g_defer_replaying && g_defer_natq > 0;   // The draw that opens Q's render pass: after the render pass is opened as usual through hoist_try / fuse_try, replay P first and then draw this one
     if (!g_enc && tbdr_on() && !g_geo_program) hoist_try();   // First hoist and execute the pure-clear render passes sandwiched between this render pass and its continuation (before rp_begin_ex, not occupying this render pass)
     // The deferral decision comes after hoist_try: hoisted pure-clear render passes are skipped in the lookahead, and only then can P's same-target continuation segment be recognized
-    if (!g_enc && tbdr_on() && !g_geo_program && !defer_has_in_p() && !g_defer_replaying && !g_fz.active && !g_fz_checking && g_exec_next) { defer_try(dw, di); if (g_defer_cur->active && g_defer_cur->in_p) return; }
-    if (!g_enc && tbdr_on() && !g_fz_checking && !g_geo_program) fuse_try();   // Readable tile render pass merge is on by default; when the structure / same-pixel proof does not hold it still falls back to a normal render pass, and it is not re-entered during the CHECK redraw
+    if (!g_enc && tbdr_on() && !g_geo_program && !g_fb_want_load && !defer_has_in_p() && !g_defer_replaying && !g_fz.active && !g_fz_checking && g_exec_next) { defer_try(dw, di); if (g_defer_cur->active && g_defer_cur->in_p) return; }
+    if (!g_enc && tbdr_on() && !g_fz_checking && !g_geo_program && !g_fb_want_load) fuse_try();   // Readable tile render pass merge is on by default; when the structure / same-pixel proof does not hold it still falls back to a normal render pass, and it is not re-entered during the CHECK redraw
     int need = g_enc || !tbdr_on() ? 3 : pass_ds_need(), mode = defer_q_draw ? 0 : need == 0 ? 2 : need == 2 ? 3 : need == 1 ? 4 : 0;   // 2 attach neither, 3 attach stencil only, 4 attach depth only
     int skip_d = mode != 0;
     if (!g_enc) { g_fd_dw = dw; g_fd_di = di; }
@@ -12987,6 +13027,7 @@ static void draw(const p_draw *dw, const p_draw_idx *di) {
     g_rp_layered = 0;
     g_fd_dw = NULL; g_fd_di = NULL;
     if (!en) { BAD_ERR(); PD("Z %llu draw skipped: the render pass did not begin vs=%.16s fs=%.16s", g_stat_pass, pr && pr->sh[0] ? pr->sh[0]->key : "-", pr && pr->sh[1] ? pr->sh[1]->key : "-"); return; }   // Z lines: why a draw was dropped at these early returns
+    if (g_fb_want_load & ~g_fb_loaded) RED_ONCE(178, "same-pass feedback sampling: a slot this draw reads on-chip was not opened loaded (want %#x, loaded %#x)", g_fb_want_load, g_fb_loaded);
     if (defer_q_draw) defer_replay();
     if (skip_d) { g_stat_ds_omit++; if (mode == 3) g_stat_s_only++; else if (mode == 4) g_stat_d_only++; }
     // The pipeline depends only on (program, render pass targets, blend / color / write mask / multisample state, vertex layout): if these did not change, reuse the previous one

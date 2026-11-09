@@ -203,8 +203,10 @@ class FakeW:
         self.calls.append(ns)
         if self.fail: raise self.Fail("plumesign 退 1", 1, self.fail)
         return self.bid
-    def push_pack(self, udid, bid, pack, devpush=None, full=False, say=None, docs=None, ctx=None, apply_after=False):
-        """新接口（WinPhone.push 调）→ (文件数, 字节数)"""
+    def push_pack(self, udid, bid, pack, devpush=None, full=False, say=None, docs=None, ctx=None, apply_after=False, progress=None):
+        """新接口（WinPhone.push 调）→ (文件数, 字节数)；progress 记下来供核对（#266 / #308：推送进度回调）"""
+        self.progress = progress
+        if progress: progress(0, 100, 0, 1); progress(100, 100, 1, 1)
         if getattr(self, "needs_player", None):
             e = self.Fail(self.needs_player, 0, "manual_unpack_required"); e.transferred = (787, 23_000_000_000); raise e
         return sum(1 for f in Path(pack).rglob("*") if f.is_file()), sum(f.stat().st_size for f in Path(pack).rglob("*") if f.is_file())
@@ -219,7 +221,9 @@ class WinInstall(unittest.TestCase):
         self.t = Path(tempfile.mkdtemp()); self.addCleanup(lambda: __import__("shutil").rmtree(self.t, ignore_errors=True))
         (self.t / "lib").mkdir(); (self.t / "logs").mkdir()
         self.gid = "0100000000000047"
-        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=lambda *a, **k: None,
+        self.progress_events = []   # 作业计数事件 (done, total, unit)
+        emit = lambda *a, **k: self.progress_events.append((k.get("done"), k.get("total"), k.get("unit"))) if k.get("unit") else None
+        self.c = types.SimpleNamespace(r={"gameId": self.gid}, library=self.t / "lib", private=self.t, logs=self.t / "logs", task="k", engine=self.t, emit=emit,
                                        begin=lambda *a, **k: None, last_log=None)
         ios_fixture(self.c, self.gid)   # 出好的 iPhone 版：image/ios/kit + image/ios/pack
 
@@ -289,7 +293,10 @@ class WinInstall(unittest.TestCase):
             with zipfile.ZipFile(buf, "w") as z: z.writestr("Payload/S2Arm.app/Info.plist", plistlib.dumps({"CFBundleIdentifier": "s2arm.t.0100.ABCDE12345"}))
             out.write_bytes(buf.getvalue())
             return subprocess.CompletedProcess(cmd, 0, "Installation progress: 100%\nInstallation complete!\n", "")
-        def fake_push(udid, bid, pack, devpush=None, full=False, say=None, docs=None, ctx=None, apply_after=False): seen["push"] = (udid, bid, Path(pack).name, devpush, full); return (0, 0)
+        def fake_push(udid, bid, pack, devpush=None, full=False, say=None, docs=None, ctx=None, apply_after=False, progress=None):
+            seen["push"] = (udid, bid, Path(pack).name, devpush, full)
+            progress(4 << 30, 8 << 30, 4, 8)   # Windows 推送进度回调 → 作业字节计数（#266 / #308）
+            return (0, 0)
         with patch.object(W, "plumesign_path", return_value="C:/Impactor/plumesign.exe"), \
              patch.object(W, "mux_devices", return_value=[("U1", "Network", 9), ("U1", "USB", 7)]), \
              patch.object(W.subprocess, "run", fake_run), patch.object(W, "push_pack", fake_push):
@@ -300,6 +307,7 @@ class WinInstall(unittest.TestCase):
         self.assertIn("signed.ipa", cmd[-1])   # 签名输出文件名含 signed.ipa
         self.assertEqual(seen["push"][1:3], ("s2arm.t.0100.ABCDE12345", "pack"))   # 包名和资源包目录（这款的 image/ios/pack）
         self.assertEqual((res["bundleId"], res["device"]), ("s2arm.t.0100.ABCDE12345", "U1"))
+        self.assertEqual([(e[0], e[1], e[2]) for e in self.progress_events if e[2] == "B"], [(4 << 30, 8 << 30, "B")])
 
     def test_bundled_impactor_zero_jump(self):
         # 11-07 维护者：Impactor 随启动器下发、玩家零跳转。期望手写：

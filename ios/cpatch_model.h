@@ -5,7 +5,6 @@
 #import <Foundation/Foundation.h>
 
 extern NSString *const S2ACPatchDefaultsKey;   // @"S2ACommunityPatches"
-extern NSString *const S2ACPatchNotice;        // 页头固定说明
 
 @interface S2ACPatchItem : NSObject
 @property (nonatomic, copy) NSString *ident;     // 编号，如 widescreen:0123456789abcdef

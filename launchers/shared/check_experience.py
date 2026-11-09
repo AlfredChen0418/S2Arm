@@ -82,15 +82,25 @@ def load_recovery() -> dict:
     return dict(module.RECOVERY)
 
 
+IOS_STRINGS = {lang: ROOT / "ios" / "l10n" / f"{lang}.lproj" / "S2ArmHost.strings" for lang in ("zh-Hans", "en")}
+
+
+def ios_strings(lang: str) -> dict:
+    """iOS 宿主字符串表（ios/l10n/<语言>.lproj/S2ArmHost.strings，#316）：键 → 值"""
+    text = IOS_STRINGS[lang].read_text(encoding="utf-8")
+    return {k: v.replace('\\"', '"') for k, v in re.findall(r'^"([^"]+)"\s*=\s*"((?:[^"\\]|\\.)*)";', text, re.M)}
+
+
 def ios_pack_labels(src: str) -> dict:
-    """从 s2a_ios_publish_bundle_info 里按分支结构取两句，不做字面匹配。"""
+    """从 s2a_ios_publish_bundle_info 里按分支结构取两句的本地化键（S2AL，#316），再到中英两张字符串表取值，不做字面匹配。"""
     body = re.search(r"void\s+s2a_ios_publish_bundle_info\s*\([^)]*\)\s*\{(.*?)\n\}", src, re.S)
     assert body is not None, "ios/settings.m 里找不到 s2a_ios_publish_bundle_info"
     fn = body.group(1)
-    direct = re.search(r'isEqual:@"direct"\]\)\s*text\s*=\s*@"([^"]*)"', fn)
-    unknown = re.search(r'\belse\s+text\s*=\s*@"([^"]*)"', fn)
+    direct = re.search(r'isEqual:@"direct"\]\)\s*text\s*=\s*S2AL\(@"([^"]+)"\)', fn)
+    unknown = re.search(r'\belse\s+text\s*=\s*S2AL\(@"([^"]+)"\)', fn)
     assert direct and unknown, "settings.m 出包画面模式的分支结构变了，自检要跟着改"
-    return {"direct": direct.group(1), "unknown": unknown.group(1)}
+    tables = {lang: ios_strings(lang) for lang in IOS_STRINGS}
+    return {lid: {lang: tables[lang].get(m.group(1)) for lang in tables} for lid, m in (("direct", direct), ("unknown", unknown))}
 
 
 def main() -> int:
@@ -228,8 +238,10 @@ def main() -> int:
        f"pack_graphics_mode.values 与 PackMode.swift 的取值不一致：{sorted(swift_values)}")
     ok(set(ios_labels) == set(pack["labels"]), "pack_graphics_mode.labels 的键应是 direct / unknown")
     for lid, label in pack["labels"].items():
-        ok(ios_labels.get(lid) == label["zh-Hans"],
-           f"pack_graphics_mode.{lid} 与 settings.m 不一致\n  settings.m: {ios_labels.get(lid)}\n  规格:       {label['zh-Hans']}")
+        for lang in ("zh-Hans", "en"):   # iOS 取自字符串表（#316）：中英两种都要和规格逐字一致
+            got = (ios_labels.get(lid) or {}).get(lang)
+            ok(got == label[lang],
+               f"pack_graphics_mode.{lid}（{lang}）与 iOS 字符串表不一致\n  S2ArmHost.strings: {got}\n  规格:              {label[lang]}")
 
     # ---------- 横幅文案：C 头文件逐字 ----------
     header = HEADER.read_text(encoding="utf-8")

@@ -1352,6 +1352,7 @@
   "s2arm.export.basis": "按本机最近 %d 次记录",
   "s2arm.export.basisReuse": "其余步骤复用缓存",
   "s2arm.export.block.busy": "正在做别的任务，做完再出包。",
+  "s2arm.export.block.alreadyQueued": "这款已在出包或排队，出完再点。",
   "s2arm.export.block.environment": "这台 Mac 还缺出包要用的组件。",
   "s2arm.export.block.keys": "还没放入 prod.keys（解密游戏用的密钥），放入后才能出包。",
   "s2arm.export.block.noPlatform": "先勾选要出包的平台。",

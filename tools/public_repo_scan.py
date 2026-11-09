@@ -84,6 +84,8 @@ def content_hits(line, path, rules):
     for row in rules['content_rules']:
         if 'context_compiled' in row and not row['context_compiled'].search(line):
             continue
+        if row.get('messages_only'):   # 只扫提交信息的规则（内部线名：文件存量待 v0.2.0 后一次清完再打开）
+            continue
         if 'paths' in row and not matches(path, row['paths']):   # 只管指定文件的规则（如 README 不写 LibHac / hactool；上游代码里照常有）
             continue
         for match in row['compiled'].finditer(line):

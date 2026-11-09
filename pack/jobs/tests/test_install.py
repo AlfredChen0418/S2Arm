@@ -192,7 +192,10 @@ class FlowTests(unittest.TestCase):
                 self._real_ipa(Path(args[7]))
             if args[1].endswith("dev_sign.py"): seen["bid"] = plistlib.loads((Path(args[2]) / "Info.plist").read_bytes())["CFBundleIdentifier"]
             if args[2].endswith("tools/push_pack.py"):
-                seen["env"] = env; on_line(f"[12:00:00] 资源包：推 {pushed} 个文件 3 MB，分 1 批 + 索引 + 清单（1 秒）")
+                seen["env"] = env; seen["progress_flag"] = "--progress-lines" in args
+                if seen["progress_flag"]:   # 推包工具每推完一批打的机器读行（tools/push_pack.py --progress-lines）
+                    for d, k in ((0, 0), (1 << 20, 1), (3 << 20, 2)): on_line(f"S2A_PUSH_PROGRESS {d} {3 << 20} {k} 2")
+                on_line(f"[12:00:00] 资源包：推 {pushed} 个文件 3 MB，分 1 批 + 索引 + 清单（1 秒）")
                 if "--apply" in args and not (pushed == 0 and state["applied"] == "cafe01"):
                     launches.append({"S2A_PACK_APPLY_ONLY": "1"})
                     on_line("[12:00:05] 机上解包 13/17")
@@ -214,12 +217,14 @@ class FlowTests(unittest.TestCase):
                 src = a[a.index("--source") + 1]
                 Path(a[a.index("--destination") + 1]).write_text(state["unpack"] if src.endswith("unpack.log") else state["applied"] + "\n", encoding="utf-8"); return 0, {}, ""
             return 0, {}, ""
-        import diag, ipa as packer
+        import core, diag, itertools, ipa as packer
+        tick = itertools.count(1000.0, 1.0)   # 作业层进度节流按单调时钟 0.2 秒：替身里各行紧挨着打，让每次取时钟走 1 秒（真实推送每批几十秒、解包每包十几秒）
         with um.patch.object(install, "xcode_teams", return_value=[dict(id="TEAM1", name="我", free=True)]), \
              um.patch.object(install, "phone", return_value=dict(id="C891", name="测试设备2")), um.patch.object(install, "udid_of", return_value="00000000-0000000000000002"), \
              um.patch.object(install, "usb_mbps", return_value=mbps), \
              um.patch.object(packer, "current_shell_id", return_value="SHELL1"), um.patch.object(packer, "container_shell", return_value=shell), \
-             um.patch.object(self.c, "run", run), um.patch.object(diag, "devicectl", devicectl), um.patch.object(install.time, "sleep"):
+             um.patch.object(self.c, "run", run), um.patch.object(diag, "devicectl", devicectl), um.patch.object(install.time, "sleep"), \
+             um.patch.object(core.time, "monotonic", lambda: next(tick)):
             r = install.install(self.c)
         return r, runs, seen, launches
 
@@ -232,6 +237,18 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(launches), 1)
         ev = [json.loads(l) for l in self.c.events.read_text(encoding="utf-8").splitlines() if l.strip()]   # 推包工具的「机上解包 k/n」→ 作业进度事件（启动器显示）
         self.assertTrue(any(e["type"] == "progress" and e["message"] == "机上解包 13/17" and (e["done"], e["total"], e.get("unit")) == (13, 17, "包") for e in ev), ev[-3:])
+
+    def test_push_batches_become_byte_progress_then_unpack_counts(self):   # #266：推送阶段按批发字节计数（分母 = 本次待传 3 MB），之后机上解包另起「包」计数
+        gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)
+        r, runs, seen, launches = self._install(gid, pushed=2, applied_before="", unpack_ok=True)
+        self.assertTrue(seen["progress_flag"])
+        ev = [json.loads(l) for l in self.c.events.read_text(encoding="utf-8").splitlines() if l.strip()]
+        push = [(e["done"], e["total"], e.get("unit")) for e in ev if e.get("message") == install.PUSHING and e["type"] == "progress"]
+        self.assertEqual(push[-1], (3 << 20, 3 << 20, "B")); self.assertTrue(all(t == 3 << 20 and u == "B" for _, t, u in push))
+        last_push = max(i for i, e in enumerate(ev) if e.get("message") == install.PUSHING)
+        unpack = next(i for i, e in enumerate(ev) if e.get("message") == "机上解包 13/17")
+        self.assertLess(last_push, unpack)                     # 传完之后才进解包
+        self.assertEqual((ev[unpack]["done"], ev[unpack]["total"], ev[unpack]["unit"]), (13, 17, "包"))   # 解包计数另起，不沿用传输 100%
 
     def test_cant_open_app_is_warning_not_failure(self):   # #192：资源传完、电脑拉不起 App → 装机完成 + 黄字；推了多少照实报（替身：2 个文件 3 MB）
         gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)

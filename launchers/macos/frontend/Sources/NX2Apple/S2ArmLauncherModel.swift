@@ -48,6 +48,8 @@ struct ExportIncomplete: Error {}
 /// 出包页底栏「为什么还不能出包」。
 enum ExportBlocker: Equatable {
     case noPlatform, game(String), keys, checking, environment, busy
+    /// 这款已在出包或排队（同一款再点一次 / 控制口重发）：原先静默当成功、什么也不做，控制口回 ok 却没建任务
+    case alreadyQueued
 }
 
 /// 正在跑 / 刚结束的一个作业（一局、出包、准备运行、装到 iPhone、导入、一键处理环境、换游戏库）。同一时刻只有一个（同旧启动器「执行位」互斥）。
@@ -71,6 +73,8 @@ struct JobSession: Equatable {
     var export: ExportRun?
     /// 出包前的磁盘预算（作业层 space 事件，check_pack_space）；没有为 nil。
     var space: PackSpace?
+    /// 正在跑的那个作业层任务号（最近一个事件的 taskId；出包一个平台一个任务）。控制口 GET /state 的 executionTask 报它（原先恒为空，s2armctl next 判不出「本游戏正在运行」）
+    var taskID: String?
 }
 
 /// 排队的一次出包。
@@ -148,6 +152,10 @@ public final class S2ArmLauncherModel: ObservableObject {
     @Published private(set) var keysRejected = false
     /// 刚装好的那款（装机弹窗显示完成页）。
     @Published var installDone: String?
+    /// 最近一次手机作业（装到 iPhone / 从手机删 / 装回上一版）的结局，玩家还没回去看：顶部胶囊「已装好 · 查看结果」靠它（#308：关掉装机弹窗后找不回结果）。
+    /// 新的手机作业开始、或打开这款的装机弹窗时清掉。
+    @Published var phoneResult: (gameID: String, name: String, ok: Bool)?
+    static let phoneKinds: Set<JobSession.Kind> = [.install, .installRemove, .installRestore]
     /// 连着的手机、可选机型（出包页用）；玩家选的机型（productType）。
     @Published private(set) var connectedDevices: [[String: Any]] = []
     @Published private(set) var targetModels: [[String: Any]] = []
@@ -419,7 +427,8 @@ public final class S2ArmLauncherModel: ObservableObject {
         exportFor = nil
         welcomeGameID = nil
         if busy {   // 正在出别的：排队，出完接着出（11-08 维护者：出好一个接着出下一个）
-            if session?.gameID != game.id, !exportQueue.contains(where: { $0.game.id == game.id }) { exportQueue.append(item) }
+            if session?.gameID == game.id || exportQueue.contains(where: { $0.game.id == game.id }) { return .alreadyQueued }
+            exportQueue.append(item)
             return nil
         }
         sessionHidden = false
@@ -803,6 +812,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func start(_ fresh: JobSession, _ body: @escaping @MainActor (EventSink) async throws -> String?) {
         session = fresh
+        if Self.phoneKinds.contains(fresh.kind) { phoneResult = nil }
         let sink = EventSink { [weak self] event in self?.ingest(event) }
         work = Task { [weak self] in
             do {
@@ -822,6 +832,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     private func ingest(_ event: EngineEvent) {
         guard var session = session, !isFinished(session) else { return }
+        if let id = event.fields["taskId"] as? String, !id.isEmpty, session.taskID != id { session.taskID = id; self.session = session }
         if event.ev == "heartbeat" { return }
         if event.ev == "space", let space = PackSpace(event.fields["space"]) { session.space = space; self.session = session; return }
         if let stage = event.stage, !stage.isEmpty { session.stage = stage }
@@ -858,6 +869,7 @@ public final class S2ArmLauncherModel: ObservableObject {
             inlineFailure = (state == .failed || state == .interrupted) ? (session.kind, session.message) : nil
         }
         if state == .completed && session.kind == .install { installDone = session.gameID }
+        if Self.phoneKinds.contains(session.kind), let id = session.gameID { phoneResult = (id, session.name, state == .completed) }
         // 一局结束：开了 iCloud 存档就上传这局的进度（失败写在出包页错误行上，本地存档不动）
         if session.kind == .play, let id = session.gameID, cloudFolder != nil {
             cloudSyncing = true

@@ -9,6 +9,7 @@ IADD3: A' + B' + C'; ISCADD: (A' << shift) + B'; ISCADD32I: (A << shift) + imm32
 .PO (both negate bits, the decoder's AvgMode.PlusOne) adds one with neither source negated, as ruled in #1339
 (nvdisasm prints IADD.PO without negation marks; Mesa NAK sm50.rs encodes 'both negated' as iadd.po):
 IADD.PO = A + B + 1, ISCADD.PO = (A << shift) + B + 1; a '-' together with .PO is outside the modelled domain;
+IADD.PO.CC splits the full unsigned sum into CF and the low word; IADD.X adds the previous CF.
 IMNMX.<U32|S32>.<MIN|MAX>: the smaller / larger of A and B compared unsigned or signed.
 Immediates of the 20-bit forms are signed 20-bit; c[0][offset] reads the framework's zero-filled C0.
 MOV32I sets a register. It imports no encoder, translator, SPIR-V or produced result.
@@ -31,6 +32,7 @@ def execute(instructions, initial):
         raise ValueError("reference domain is exactly 64 uint32 words")
     memory = list(initial)
     registers = {255: 0}
+    carry = None
 
     def number(token):
         if token == "RZ":
@@ -85,6 +87,13 @@ def execute(instructions, initial):
             memory[word(a[1], a[2])] = read(a[0])
         elif op == "MOV32I" and len(a) == 2:
             write(a[0], int(a[1], 0))
+        elif op == "IADD.PO.CC" and len(a) == 3:
+            carry, low = divmod(read(a[1]) + read(a[2]) + 1, 1 << 32)
+            write(a[0], low)
+        elif op == "IADD.X" and len(a) == 3:
+            if carry is None:
+                raise ValueError("IADD.X requires a preceding carry producer: " + line)
+            write(a[0], read(a[1]) + read(a[2]) + carry)
         elif m[0] == "IADD" and set(m[1:]) <= {"PO"} and len(a) == 3:
             (x, nx), (y, ny) = source(a[1], True), source(a[2])
             if nx + ny + ("PO" in m) > 1:

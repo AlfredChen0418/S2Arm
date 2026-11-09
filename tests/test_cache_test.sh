@@ -6,7 +6,7 @@
 #   ① 第一次：三支各跑 1 次、绿；② 第二次：三支都不跑（计数不变），行「🟢 单测 foo_test（缓存命中）0 秒：输入与工具链没变，沿用上次的绿」
 #   ③ 改 tools/foo.sh 一个字节：只 foo 再跑；④ 改不相干的 tools/other.sh：都命中；⑤ 改 data/x.txt（门禁输入声明）：只 bar 再跑
 #   ⑥ 工具链指纹变（tools/toolchain.env 改一行）：三支都再跑；⑦ red_test 红了不记：连跑两次都真跑、门禁红；转绿后跑一次、再下一次命中
-#   ⑧ GATE_TEST_CACHE=0：都真跑；⑨ GATE_HOST=gate-host（S2A_REMOTE=local 本机模拟）：远端那份同样用缓存（远端假家目录下），第二次［gate-host］命中不跑；⑨b 带 GATE_TEST_CACHE=0 远端也关
+#   ⑧ GATE_TEST_CACHE=0：都真跑；⑨ GATE_HOST=gate-host（S2A_REMOTE=local 本机模拟）：远端那份同样用缓存（远端假家目录下），第二次［gate-host］命中不跑；⑨b 带 GATE_TEST_CACHE=0 远端也关；⑨c 远端同步阶段黄字进门禁日志与末行
 # 反证：S2A_GATE_SH=<旧版 gate.sh> 跑本单测应红（旧版没有缓存：② 计数涨）
 set -u; H=$(cd "$(dirname "$0")/.." && pwd); T=$(cd "$(mktemp -d)" && pwd -P); bad=0; GS=${S2A_GATE_SH:-$H/tools/gate.sh}
 ck() { if eval "$2"; then echo "通 $1"; else echo "不通 $1"; bad=1; fi; }
@@ -77,6 +77,7 @@ if [ -d "$W" ]; then git -C "$W" checkout -q --detach "$SHA"; git -C "$W" clean 
 else git -C "$GU" worktree add -q --detach "$W" "$SHA"; fi
 mkdir -p "$RR/home"
 for v in "${ENVS[@]}"; do [ -n "${!v+x}" ] && export "$v=${!v}"; done
+[ -n "${S2A_STUB_WARN:-}" ] && echo "【黄】remote：门禁同步缺包 ${S2A_STUB_WARN}" >&2
 ( cd "$W" && unset S2A_RUN_ROOT && HOME="$RR/home" bash -c "${CMD[*]}" ); rc=$?
 for pp in "${PULL[@]}"; do
   src=${pp%%=*}; dst=${pp#*=}
@@ -91,6 +92,9 @@ ck "⑨ GATE_HOST=gate-host：第一次远端照跑、第二次［gate-host］�
 ck "⑨ 远端缓存落在远端假家目录（$(ls $T/rr/home/.s2arm/run/s2arm/cache/testres 2> /dev/null | grep -c .) 个键）" '[ "$(ls $T/rr/home/.s2arm/run/s2arm/cache/testres 2> /dev/null | grep -c .)" -ge 3 ]'
 r=$(GATE_HOST=gate-host GATE_TEST_CACHE=0 g o9c); c9=$(cnt)
 ck "⑨b GATE_HOST=gate-host + GATE_TEST_CACHE=0：开关带到远端、都真跑（计数 ${c9}，rc=${r}）" '[ $r = 0 ] && [ "$c9" = "6 6 8" ] && ! grep -q 缓存命中 $T/o9c'
+# ⑨c 远端同步阶段的黄字（remote.sh 缺包）：原样进门禁日志，末行在「应跑 N 步」后点一句、仍是绿
+r=$(GATE_HOST=gate-host S2A_STUB_WARN=pkg.x/1.0 g o9d)
+ck "⑨c 远端同步黄字：门禁日志有原行、末行点「同步缺 1 项」且仍绿（rc=${r}）" '[ $r = 0 ] && grep -q "^【黄】remote：门禁同步缺包 pkg.x/1.0" $T/o9d && tail -1 $T/o9d | grep -q "^门禁 绿：.*应跑 [0-9]* 步；⚠ gate-host 同步缺 1 项" && ! tail -1 $T/o9c | grep -q 同步缺'
 # ⑩ 读声明的单测（覆盖面含 tools/gate_route.py）：别的钩子文件头的路由声明改了 → 键变（要重跑）；普通单测键不变
 #   （10-30：换链支改 core-link/gate.sh 的路由，gate_route_matrix_test 在干净 main 上命中缓存给了假绿）
 mkdir -p hk; printf '#!/bin/bash\n# 门禁路由：a/\necho 钩子\n' > hk/gate.sh

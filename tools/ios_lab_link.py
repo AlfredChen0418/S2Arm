@@ -40,7 +40,7 @@ def parse(spec, srcroot):
             continue
         if not item or section not in ("sources", "dependencies", "HEADER_SEARCH_PATHS"):
             continue
-        value = item.group(1).strip().strip('"')
+        value = re.sub(r"\s+#.*$", "", item.group(1)).strip().strip('"')   # 行尾注释不算值
         if section == "sources":
             out["sources"].append(value)
         elif section == "dependencies":
@@ -80,6 +80,8 @@ def main(argv):
     flags = ["-fobjc-arc", "-fmodules", *[f"-D{d}" for d in p["defines"]], *[f"-I{i}" for i in p["includes"]]]
     objs = []
     for src in p["sources"]:
+        if Path(src).suffix not in (".c", ".m", ".mm", ".cpp"):   # 资源（如 ios/l10n 字符串表，#316）只进包、不编
+            continue
         obj = out / (src.replace("/", "_") + ".o")
         r = subprocess.run(cc + flags + ["-c", str(ROOT / src), "-o", str(obj)], capture_output=True, text=True)
         if r.returncode:

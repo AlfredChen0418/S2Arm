@@ -8,15 +8,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>手机当手柄（没有连外接手柄时）</string>
+            <string>Phone as Controller (When No Controller Is Connected)</string>
             <key>FooterText</key>
-            <string>陀螺仪：倾斜手机当作 Switch 掌机的体感（如斯普拉遁的倾斜瞄准），只在游戏需要体感时开传感器。震动：游戏的手柄震动改由手机马达输出。连上外接手柄后自动改用手柄。</string>
+            <string>Gyro: tilt the phone for Switch handheld motion controls (such as tilt aiming in Splatoon); the sensor only runs when the game needs motion. Rumble: game rumble plays through the phone’s motor. A connected controller takes over automatically.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>手机陀螺仪</string>
+            <string>Phone Gyro</string>
             <key>Key</key>
             <string>S2APhoneGyro</string>
             <key>DefaultValue</key>
@@ -26,7 +26,7 @@
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>手机震动</string>
+            <string>Phone Haptics</string>
             <key>Key</key>
             <string>S2APhoneHaptics</string>
             <key>DefaultValue</key>
@@ -36,15 +36,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>Switch 模式（改完要重开游戏）</string>
+            <string>Switch Mode (Restart the Game to Apply)</string>
             <key>FooterText</key>
-            <string>主机模式对应 Switch 连接底座时的模式，关闭时使用掌机模式。实际分辨率和画质由游戏决定；与兼容 / 高性能运行模式分别设置。下次启动生效。</string>
+            <string>Docked mode is how the Switch runs in its dock; when off, Handheld mode is used. The actual resolution and quality are up to the game; this is set separately from the compatible / high-performance run mode. Takes effect on next launch.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>主机模式</string>
+            <string>Docked Mode</string>
             <key>Key</key>
             <string>S2ADockedMode</string>
             <key>DefaultValue</key>
@@ -54,21 +54,21 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>画面（改完要重开游戏）</string>
+            <string>Graphics (Restart the Game to Apply)</string>
             <key>FooterText</key>
-            <string>相对于游戏当前渲染尺寸缩放，保留现有宽屏。降低倍率可减轻图形负载；提高倍率可改善清晰度，也会增加耗电和内存占用。部分纹理仍按游戏原始尺寸处理。</string>
+            <string>Scales relative to the game’s current render size and keeps widescreen. A lower scale reduces graphics load; a higher scale improves sharpness but uses more power and memory. Some textures are still processed at the game’s original size.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSMultiValueSpecifier</string>
             <key>Title</key>
-            <string>渲染分辨率倍率</string>
+            <string>Render Resolution Scale</string>
             <key>Key</key>
             <string>S2AResolutionScale</string>
             <key>DefaultValue</key>
             <string>1</string>
             <key>Titles</key>
-            <array><string>0.5×</string><string>0.75×</string><string>1×（原生）</string><string>1.5×</string><string>2×</string></array>
+            <array><string>0.5×</string><string>0.75×</string><string>1× (Native)</string><string>1.5×</string><string>2×</string></array>
             <key>Values</key>
             <array><string>0.5</string><string>0.75</string><string>1</string><string>1.5</string><string>2</string></array>
         </dict>
@@ -76,19 +76,19 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>FooterText</key>
-            <string>对最终游戏画面减少锯齿，也可能使文字和细节变柔和。关闭后仍保留游戏自带的抗锯齿。</string>
+            <string>Reduces jagged edges in the final game picture; may also soften text and detail. Off still keeps the game’s own anti-aliasing.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSMultiValueSpecifier</string>
             <key>Title</key>
-            <string>抗锯齿</string>
+            <string>Anti-Aliasing</string>
             <key>Key</key>
             <string>S2AAntiAliasing</string>
             <key>DefaultValue</key>
             <string>None</string>
             <key>Titles</key>
-            <array><string>关闭</string><string>SMAA 中</string><string>SMAA 高</string></array>
+            <array><string>Off</string><string>SMAA Medium</string><string>SMAA High</string></array>
             <key>Values</key>
             <array><string>None</string><string>SmaaMedium</string><string>SmaaHigh</string></array>
         </dict>
@@ -96,19 +96,19 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>FooterText</key>
-            <string>用于将游戏画面缩放到屏幕，不改变内部渲染分辨率。</string>
+            <string>Used to scale the game picture to the screen; doesn’t change the internal render resolution.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSMultiValueSpecifier</string>
             <key>Title</key>
-            <string>画面缩放滤镜</string>
+            <string>Scaling Filter</string>
             <key>Key</key>
             <string>S2AScalingFilter</string>
             <key>DefaultValue</key>
             <string>Bilinear</string>
             <key>Titles</key>
-            <array><string>双线性（平滑）</string><string>最近邻（像素清晰）</string></array>
+            <array><string>Bilinear (Smooth)</string><string>Nearest Neighbor (Crisp Pixels)</string></array>
             <key>Values</key>
             <array><string>Bilinear</string><string>Nearest</string></array>
         </dict>
@@ -116,19 +116,19 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>FooterText</key>
-            <string>设置游戏画面的帧率上限，不会解除游戏自身的帧率锁。实际帧率还取决于游戏表现和屏幕刷新率。</string>
+            <string>Sets a frame rate cap for the game picture; doesn’t unlock the game’s own frame rate limit. The actual frame rate also depends on the game and the screen’s refresh rate.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSMultiValueSpecifier</string>
             <key>Title</key>
-            <string>帧率上限</string>
+            <string>Frame Rate Limit</string>
             <key>Key</key>
             <string>S2AFrameRateLimit</string>
             <key>DefaultValue</key>
             <string>0</string>
             <key>Titles</key>
-            <array><string>30 帧/秒</string><string>60 帧/秒</string><string>120 帧/秒</string><string>不限</string></array>
+            <array><string>30 FPS</string><string>60 FPS</string><string>120 FPS</string><string>Unlimited</string></array>
             <key>Values</key>
             <array><string>30</string><string>60</string><string>120</string><string>0</string></array>
         </dict>
@@ -136,15 +136,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>手柄</string>
+            <string>Controller</string>
             <key>FooterText</key>
-            <string>开启后可在游戏中连接 Switch 2 Pro 手柄，使用按键、双频震动和体感。连接时需长按手柄顶部 SYNC 键。此设置仅对当前 App 生效。</string>
+            <string>When on, you can connect a Switch 2 Pro Controller in game and use its buttons, HD rumble and motion controls. Hold the SYNC button on top of the controller to connect. This setting applies only to this app.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>启用 Switch 2 Pro 手柄适配</string>
+            <string>Enable Switch 2 Pro Controller Support</string>
             <key>Key</key>
             <string>S2ANS2ProAdapterEnabled</string>
             <key>DefaultValue</key>
@@ -154,15 +154,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>存档</string>
+            <string>Saves</string>
             <key>FooterText</key>
-            <string>先在游戏内保存，再关闭并重新打开 App。存档管理会在游戏启动前打开，可导出备份或导入 Mac 的 .s2asave 文件。恢复前会保留原存档。开始游戏后开关自动关闭。</string>
+            <string>Save in the game first, then close and reopen the app. Save management opens before the game starts, where you can export a backup or import a .s2asave file from a Mac. Your current save is kept before restoring. The switch turns off once the game starts.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>下次打开时管理存档</string>
+            <string>Manage Saves on Next Open</string>
             <key>Key</key>
             <string>S2ASaveManageOnOpen</string>
             <key>DefaultValue</key>
@@ -172,15 +172,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>诊断</string>
+            <string>Diagnostics</string>
             <key>FooterText</key>
-            <string>打开这个开关后切回游戏，S2Arm 会把最近几次运行的日志打成诊断包，弹出分享面板（隔空投送、存到文件、微信）。诊断包不含存档、密钥和游戏文件。导出后开关会自动关上。游戏中四指同时长按屏幕 1.5 秒也能导出。</string>
+            <string>Turn this on and switch back to the game: S2Arm packs the logs from the last few runs into a diagnostics bundle and opens the share sheet (AirDrop, Save to Files, WeChat). The bundle contains no saves, keys or game files. The switch turns off after export. You can also export in game by holding four fingers on the screen for 1.5 seconds.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>打开 App 时导出诊断包</string>
+            <string>Export Diagnostics When the App Opens</string>
             <key>Key</key>
             <string>S2ADiagExportOnOpen</string>
             <key>DefaultValue</key>
@@ -190,15 +190,15 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>开发</string>
+            <string>Development</string>
             <key>FooterText</key>
-            <string>S2Arm 诊断浮层显示目标帧率、慢帧比例、图形路径、首遇编译、音频和包号。Metal HUD 显示帧率、GPU 时间和帧间隔曲线，仅供手动观察；开启时截图、存帧、自动玩家和满屏判据不可用。设置在下次启动 App 时生效。Metal HUD 用于自行构建并安装到开发设备的 App。</string>
+            <string>The S2Arm diagnostics overlay shows the target frame rate, slow-frame ratio, graphics path, first-use compilation, audio and build ID. Metal HUD shows the frame rate, GPU time and a frame-interval graph, for manual viewing only; while it’s on, screenshots, frame capture, autoplay and full-screen checks are unavailable. Takes effect the next time the app starts. Metal HUD is for apps you build and install on a development device yourself.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSToggleSwitchSpecifier</string>
             <key>Title</key>
-            <string>S2Arm 诊断浮层</string>
+            <string>S2Arm Diagnostics Overlay</string>
             <key>Key</key>
             <string>S2ADevHUD</string>
             <key>DefaultValue</key>
@@ -218,49 +218,81 @@
             <key>Type</key>
             <string>PSGroupSpecifier</string>
             <key>Title</key>
-            <string>关于本包（只读）</string>
+            <string>About This Build (Read-Only)</string>
             <key>FooterText</key>
-            <string>出包时就定下来了，改不了：画面模式、直连库是哪一版、什么时候出的包。</string>
+            <string>Fixed when the package was built and can’t be changed: graphics mode, direct library version and build time.</string>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSTitleValueSpecifier</string>
             <key>Title</key>
-            <string>画面模式</string>
+            <string>Graphics Mode</string>
             <key>Key</key>
             <string>S2AGraphicsModeText</string>
             <key>DefaultValue</key>
-            <string>未知（打开一次游戏后显示）</string>
+            <string>unknown</string>
+            <key>Values</key>
+            <array>
+                <string>unknown</string>
+            </array>
+            <key>Titles</key>
+            <array>
+                <string>Unknown (shown after opening a game once)</string>
+            </array>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSTitleValueSpecifier</string>
             <key>Title</key>
-            <string>直连库版本</string>
+            <string>Direct Library Version</string>
             <key>Key</key>
             <string>S2ADirectLibVersionText</string>
             <key>DefaultValue</key>
-            <string>未知（打开一次游戏后显示）</string>
+            <string>unknown</string>
+            <key>Values</key>
+            <array>
+                <string>unknown</string>
+            </array>
+            <key>Titles</key>
+            <array>
+                <string>Unknown (shown after opening a game once)</string>
+            </array>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSTitleValueSpecifier</string>
             <key>Title</key>
-            <string>出包时间（UTC）</string>
+            <string>Build Time (UTC)</string>
             <key>Key</key>
             <string>S2APackTimeText</string>
             <key>DefaultValue</key>
-            <string>未知（打开一次游戏后显示）</string>
+            <string>unknown</string>
+            <key>Values</key>
+            <array>
+                <string>unknown</string>
+            </array>
+            <key>Titles</key>
+            <array>
+                <string>Unknown (shown after opening a game once)</string>
+            </array>
         </dict>
         <dict>
             <key>Type</key>
             <string>PSTitleValueSpecifier</string>
             <key>Title</key>
-            <string>包号</string>
+            <string>Build ID</string>
             <key>Key</key>
             <string>S2ABuildIDText</string>
             <key>DefaultValue</key>
-            <string>未知（打开一次游戏后显示）</string>
+            <string>unknown</string>
+            <key>Values</key>
+            <array>
+                <string>unknown</string>
+            </array>
+            <key>Titles</key>
+            <array>
+                <string>Unknown (shown after opening a game once)</string>
+            </array>
         </dict>
     </array>
 </dict>

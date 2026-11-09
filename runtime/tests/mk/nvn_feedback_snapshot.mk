@@ -14,6 +14,9 @@ $(NVN_FEEDBACK_BINARY): graphics/nvn/tests/t_nvn_feedback_snapshot.m $(NVN_FEEDB
 	  -framework ImageIO -framework UniformTypeIdentifiers -lc++
 .PHONY: native-test-nvn_feedback_snapshot
 native-test-nvn_feedback_snapshot: $(NVN_FEEDBACK_BINARY)
-	$(NVN_FEEDBACK_BINARY)
+	NXGAL_BE=mtl4 $(NVN_FEEDBACK_BINARY)
+	NXGAL_BE=mtl4 $(NVN_FEEDBACK_BINARY) --snap-all
+	NXGAL_BE=mtl3 $(NVN_FEEDBACK_BINARY)
+	NXGAL_BE=mtl3 $(NVN_FEEDBACK_BINARY) --snap-all
 TEST_TARGETS += native-test-nvn_feedback_snapshot
 endif

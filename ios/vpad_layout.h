@@ -14,6 +14,8 @@ CGFloat S2AVPadKeyOpacity(CGFloat idle, BOOL active);
 @property(nonatomic, readonly, copy) NSDictionary *document;
 @property(nonatomic, readonly, copy) NSString *identifier;
 @property(nonatomic, readonly, copy) NSString *name;
+// 显示用名字（#316）：默认布局与「我的布局」的 name 是建档时按当时语言写进文件的，显示按当前语言取；其余是玩家自己起的名字，原样
+@property(nonatomic, readonly, copy) NSString *displayName;
 @property(nonatomic, readonly, copy) NSArray<NSDictionary *> *buttons;
 @property(nonatomic, readonly, copy) NSArray<NSDictionary *> *sticks;
 + (nullable instancetype)readData:(NSData *)data error:(NSError **)error;

@@ -41,7 +41,12 @@ struct InstallView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(loc.backend(job.stage.isEmpty ? job.message : job.stage)).font(.manrope(16, .bold)).lineLimit(1)
                     InlineProgress(session: job)
-                    Text(text("install.keychain")).font(.manrope(13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    // 钥匙串授权只在申请描述文件 / 签名这两步（pack/jobs/install.py sign_and_install 第 3、4 步）会弹；推资源包时还挂着它会让玩家以为在等授权（#266）
+                    if job.kind == .install, [3, 4].contains(job.progress.index ?? 0) {
+                        Text(text("install.keychain")).font(.manrope(13)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    // 装机在后台照跑：关掉弹层回游戏库，顶部胶囊「正在装到 iPhone · 查看进度」能回来（#308，Mac 与 Windows 同一套）
+                    HStack { Spacer(); Button(text("install.background")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.background") }
                 }
                 .padding(.horizontal, 30).frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
@@ -153,6 +158,7 @@ struct InstallView: View {
                 try? await Task.sleep(nanoseconds: Self.pollSeconds * 1_000_000_000)
             }
         }
+        .onAppear { if model.phoneResult?.gameID == gameID { model.phoneResult = nil } }   // 回来看过结果，顶部胶囊收起
         .frame(width: 600, height: 520)
         .background(LauncherPalette.background)
         .font(.manrope(13))

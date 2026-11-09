@@ -34,7 +34,8 @@ class ScanTests(unittest.TestCase):
         self.mod = module()
 
     def git(self, *args):
-        return subprocess.run(['git', '-C', str(self.root), *args], check=True,
+        # stdin 接空（11-09：hash-object --stdin 原先读继承来的标准输入，调用方给的是不关的管道时整份单测挂到超时 124）
+        return subprocess.run(['git', '-C', str(self.root), *args], check=True, stdin=subprocess.DEVNULL,
                               capture_output=True, text=True).stdout.strip()
 
     def commit(self, files):

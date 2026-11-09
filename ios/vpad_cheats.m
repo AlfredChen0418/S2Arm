@@ -4,6 +4,7 @@
 #import "vpad_cheats.h"
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include "s2a_docs.h"
+#import "s2a_l10n.h"
 
 // 弱链接[lab]：s2a_main_build_id（runtime/src/loader.c 主程序构建号；输入工作台不链原生核，取不到就不显示版本号提示）
 const char *s2a_main_build_id(void) __attribute__((weak_import));
@@ -42,6 +43,14 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
 @implementation S2ACheatFile
 @end
 
+// status.txt 的状态值是与服务层 Cheats.cs 约定的串（比对照原样用中文），显示时换成当前语言；认不出的原样显示
+static NSString *cheat_status_text(NSString *st) {
+    NSDictionary *t = @{@"生效中": S2AL(@"cheats.status.active"), @"地址未就绪": S2AL(@"cheats.status.addressNotReady"), @"执行出错": S2AL(@"cheats.status.execError"),
+        @"改代码，不支持": S2AL(@"cheats.status.modifiesCode"), @"格式不对": S2AL(@"cheats.status.badFormat"), @"版本不符": S2AL(@"cheats.status.versionMismatch"),
+        @"关": S2AL(@"cheats.status.off"), @"游戏未装载": S2AL(@"cheats.status.gameNotLoaded"), @"指令有误": S2AL(@"cheats.status.badInstruction")};
+    return st ? t[st] ?: st : nil;
+}
+
 @interface S2ACheatsPanel : UITableViewController <UIDocumentPickerDelegate>
 @property (nonatomic, copy) void (^closed)(void);
 @end
@@ -50,12 +59,12 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
 }
 - (instancetype)init {
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
-    self.title = @"金手指"; return self;
+    self.title = S2AL(@"cheats.title"); return self;
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
     self.navigationItem.leftBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemDone target:self action:@selector(done)];
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"导入 txt" style:UIBarButtonItemStylePlain target:self action:@selector(import)];
+    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:S2AL(@"cheats.import") style:UIBarButtonItemStylePlain target:self action:@selector(import)];
     self.navigationItem.rightBarButtonItem.accessibilityIdentifier = @"cheats.import";
     [self reload];
 }
@@ -95,11 +104,11 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
     [NSFileManager.defaultManager createDirectoryAtURL:dir withIntermediateDirectories:YES attributes:nil error:nil];
     NSString *body = [[[_on allObjects] sortedArrayUsingSelector:@selector(compare:)] componentsJoinedByString:@"\n"];
     if ([[body stringByAppendingString:@"\n"] writeToURL:[dir URLByAppendingPathComponent:@"enabled.txt"] atomically:YES encoding:NSUTF8StringEncoding error:&e]) return YES;
-    [self alert:@"开关没保存" message:e.localizedDescription]; return NO;
+    [self alert:S2AL(@"cheats.error.toggleNotSaved") message:e.localizedDescription]; return NO;
 }
 - (void)alert:(NSString *)title message:(NSString *)msg {
     UIAlertController *a = [UIAlertController alertControllerWithTitle:title message:msg preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]]; [self presentViewController:a animated:YES completion:nil];
+    [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.ok") style:UIAlertActionStyleDefault handler:nil]]; [self presentViewController:a animated:YES completion:nil];
 }
 
 - (void)import {
@@ -115,10 +124,10 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
         if (![name.pathExtension.lowercaseString isEqual:@"txt"]) name = [name stringByAppendingPathExtension:@"txt"];
         if (!text || !s2a_cheats_parse(text).count || [name isEqual:@"enabled.txt"] || [name isEqual:@"status.txt"]) { [bad addObject:u.lastPathComponent]; continue; }
         NSURL *dst = [dir URLByAppendingPathComponent:name]; NSError *e;
-        if (![text writeToURL:dst atomically:YES encoding:NSUTF8StringEncoding error:&e]) [bad addObject:[NSString stringWithFormat:@"%@（%@）", u.lastPathComponent, e.localizedDescription]];
+        if (![text writeToURL:dst atomically:YES encoding:NSUTF8StringEncoding error:&e]) [bad addObject:[NSString stringWithFormat:S2AL(@"cheats.import.badItem"), u.lastPathComponent, e.localizedDescription]];
     }
     [self reload];
-    if (bad.count) [self alert:@"有文件没导入" message:[NSString stringWithFormat:@"%@\n\n不是 Atmosphere 格式的金手指文本（要有 [条目名] 和指令行）。", [bad componentsJoinedByString:@"\n"]]];
+    if (bad.count) [self alert:S2AL(@"cheats.import.failed") message:[NSString stringWithFormat:S2AL(@"cheats.import.failed.message"), [bad componentsJoinedByString:@"\n"]]];
 }
 
 - (NSInteger)numberOfSectionsInTableView:(UITableView *)t { (void)t; return 1 + (NSInteger)_files.count; }
@@ -129,32 +138,29 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s {
     (void)t; if (s == 0) return nil;
     S2ACheatFile *f = _files[s - 1]; NSString *st = _status[[f.file stringByAppendingString:@"/*"]];
-    if (f.bad) return [f.file stringByAppendingString:@" · 格式不对"];
-    for (NSString *n in f.names) if ([_status[[NSString stringWithFormat:@"%@/%@", f.file, n]] isEqual:@"版本不符"]) st = @"版本不符，不会生效";
-    return st ? [NSString stringWithFormat:@"%@ · %@", f.file, st] : f.file;
+    if (f.bad) return [NSString stringWithFormat:@"%@ · %@", f.file, S2AL(@"cheats.status.badFormat")];
+    for (NSString *n in f.names) if ([_status[[NSString stringWithFormat:@"%@/%@", f.file, n]] isEqual:@"版本不符"]) st = S2AL(@"cheats.status.versionMismatch.file");
+    return st ? [NSString stringWithFormat:@"%@ · %@", f.file, cheat_status_text(st)] : f.file;
 }
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     (void)t; if (s != 0) return nil;
     const char *b = s2a_main_build_id ? s2a_main_build_id() : NULL;
     NSString *bid = b && strlen(b) >= 16 ? [@(b) substringToIndex:16].uppercaseString : nil;
-    NSMutableString *m = [NSMutableString stringWithString:@"导入 Atmosphere 格式的金手指（txt）。每条缺省关，打开后约 1 秒生效，不用重启。\n\n"
-                          "能用：改游戏里的数值，比如锁血、金钱、道具数量、体力，打开后数值一直保持。\n"
-                          "不能用：直接改游戏代码的条目。系统不允许改写游戏代码，这类条目会自动停用并标「改代码，不支持」，不影响游戏运行。\n\n"
-                          "金手指可能让存档出问题，请先备份存档。"];
-    if (bid) [m appendFormat:@"\n\n本游戏版本号（构建号前 16 位）：%@。金手指文件名通常就是它，名字对不上的文件不会生效。", bid];
-    if (!_files.count) [m appendString:@"\n\n还没有金手指文件，点右上角「导入 txt」。"];
+    NSMutableString *m = [NSMutableString stringWithString:S2AL(@"cheats.footer")];
+    if (bid) [m appendFormat:@"\n\n%@", [NSString stringWithFormat:S2AL(@"cheats.footer.buildId"), bid]];
+    if (!_files.count) [m appendFormat:@"\n\n%@", S2AL(@"cheats.footer.empty")];
     return m;
 }
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
     (void)t; S2ACheatFile *f = _files[ip.section - 1];
     UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleSubtitle reuseIdentifier:nil];
     if (ip.row >= (NSInteger)(f.bad ? 0 : f.names.count)) {
-        cell.textLabel.text = @"删除这份文件"; cell.textLabel.textColor = UIColor.systemRedColor; return cell;
+        cell.textLabel.text = S2AL(@"cheats.deleteFile"); cell.textLabel.textColor = UIColor.systemRedColor; return cell;
     }
     NSString *name = f.names[ip.row], *key = [NSString stringWithFormat:@"%@/%@", f.file, name];
-    cell.textLabel.text = name; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    cell.textLabel.text = [name isEqual:@"未命名"] ? S2AL(@"cheats.unnamed") : name; cell.selectionStyle = UITableViewCellSelectionStyleNone;   // 「未命名」是与 Cheats.cs 共用的条目名标识（开关键里照原样用），只换显示
     BOOL on = [_on containsObject:key]; NSString *st = _status[key];
-    cell.detailTextLabel.text = on ? (st && ![st isEqual:@"关"] ? st : @"等待生效…") : nil;
+    cell.detailTextLabel.text = on ? (st && ![st isEqual:@"关"] ? cheat_status_text(st) : S2AL(@"cheats.status.pending")) : nil;
     cell.detailTextLabel.textColor = [st isEqual:@"生效中"] ? UIColor.systemGreenColor : UIColor.secondaryLabelColor;
     UISwitch *sw = [UISwitch new]; sw.on = on; sw.accessibilityIdentifier = key;
     [sw addTarget:self action:@selector(toggled:) forControlEvents:UIControlEventValueChanged]; cell.accessoryView = sw;
@@ -170,11 +176,11 @@ static NSURL *cheats_dir(void) {   // 文档根唯一取法（s2a_docs.h），�
     [t deselectRowAtIndexPath:ip animated:YES];
     S2ACheatFile *f = _files[ip.section - 1];
     if (ip.row < (NSInteger)(f.bad ? 0 : f.names.count)) return;
-    UIAlertController *a = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:@"删除「%@」？", f.file] message:@"这份文件里开着的条目会一起停用。" preferredStyle:UIAlertControllerStyleAlert];
-    [a addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-    [a addAction:[UIAlertAction actionWithTitle:@"删除" style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) { (void)x;
+    UIAlertController *a = [UIAlertController alertControllerWithTitle:[NSString stringWithFormat:S2AL(@"cheats.delete.title"), f.file] message:S2AL(@"cheats.delete.message") preferredStyle:UIAlertControllerStyleAlert];
+    [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.cancel") style:UIAlertActionStyleCancel handler:nil]];
+    [a addAction:[UIAlertAction actionWithTitle:S2AL(@"common.delete") style:UIAlertActionStyleDestructive handler:^(UIAlertAction *x) { (void)x;
         NSError *e;
-        if (![NSFileManager.defaultManager removeItemAtURL:[cheats_dir() URLByAppendingPathComponent:f.file] error:&e]) { [self alert:@"没删掉" message:e.localizedDescription]; return; }
+        if (![NSFileManager.defaultManager removeItemAtURL:[cheats_dir() URLByAppendingPathComponent:f.file] error:&e]) { [self alert:S2AL(@"cheats.error.deleteFailed") message:e.localizedDescription]; return; }
         NSString *prefix = [f.file stringByAppendingString:@"/"];
         for (NSString *k in [_on allObjects]) if ([k hasPrefix:prefix]) [_on removeObject:k];
         [self writeEnabled]; [self reload];

@@ -201,6 +201,13 @@ class BundleTests(unittest.TestCase):
         if out is not None:   # 苹果自己的解析器读得出同一个值
             self.assertIn('泰拉瑞亚 S2Arm', out.stdout)
 
+    def test_localized_names_merge_into_template_lproj(self):
+        """#316：模板壳自带宿主界面字符串表 <语言>.lproj/S2ArmHost.strings（runtime/build.mk ios），本地化显示名要并进同一个 .lproj，不因目录已在而失败、也不丢原表"""
+        (self.app / 'zh-Hans.lproj').mkdir(); (self.app / 'zh-Hans.lproj/S2ArmHost.strings').write_text('"common.ok" = "好";\n', encoding='utf-8')
+        self.assemble(display_name='Terraria S2Arm', localized_names={'zh-Hans': '泰拉瑞亚 S2Arm'})
+        self.assertEqual((self.out / 'zh-Hans.lproj/S2ArmHost.strings').read_text(encoding='utf-8'), '"common.ok" = "好";\n')
+        self.assertEqual((self.out / 'zh-Hans.lproj/InfoPlist.strings').read_text(encoding='utf-8'), '"CFBundleDisplayName" = "泰拉瑞亚 S2Arm";\n')
+
     def test_existing_destination_is_not_overwritten(self):
         self.out.mkdir(parents=True)
         with self.assertRaises(ValueError):

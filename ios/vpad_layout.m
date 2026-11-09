@@ -1,4 +1,5 @@
 #import "vpad_layout.h"
+#import "s2a_l10n.h"
 #include <math.h>
 
 NSString *const S2AVPadLayoutDefaultIdentifier = @"default";
@@ -17,7 +18,7 @@ static const double geometryTolerance = 1e-12;
 
 static NSError *layout_error(NSString *code, NSString *message) {
     return [NSError errorWithDomain:@"S2Arm.VPadLayout" code:1
-                          userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:@"%@：%@", code, message]}];
+                          userInfo:@{NSLocalizedDescriptionKey: [NSString stringWithFormat:S2AL(@"vpad.layout.error"), code, message]}];
 }
 static BOOL fail(NSError **error, NSString *code, NSString *message) {
     if (error) *error = layout_error(code, message);
@@ -51,7 +52,7 @@ static CGRect normalized_rect(NSDictionary *value) {
 
 @implementation S2AVPadLayout
 + (instancetype)readData:(NSData *)data error:(NSError **)error {
-    if (data.length > 65536) { fail(error, @"F01.size", @"布局文件不能超过 64 KiB"); return nil; }
+    if (data.length > 65536) { fail(error, @"F01.size", S2AL(@"vpad.layout.err.size")); return nil; }
     id doc = [NSJSONSerialization JSONObjectWithData:data options:0 error:error];
     if (!doc) return nil;
     if (!fields(doc, @[@"schemaVersion", @"id", @"name", @"buttons", @"sticks"]) ||
@@ -59,13 +60,13 @@ static CGRect normalized_rect(NSDictionary *value) {
         ![doc[@"name"] isKindOfClass:NSString.class] || ![doc[@"name"] length] || [doc[@"name"] length] > 64 ||
         [doc[@"name"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location != NSNotFound ||
         ![doc[@"buttons"] isKindOfClass:NSArray.class] || ![doc[@"sticks"] isKindOfClass:NSArray.class]) {
-        fail(error, @"F01.schema", @"布局版本或顶层字段无效（需要 schemaVersion 1）"); return nil;
+        fail(error, @"F01.schema", S2AL(@"vpad.layout.err.schema")); return nil;
     }
     NSArray *required = @[@"A", @"B", @"X", @"Y", @"L", @"R", @"ZL", @"ZR", @"PLUS", @"MINUS", @"LEFT", @"UP", @"RIGHT", @"DOWN"];
     NSSet *allowed = [NSSet setWithArray:[required arrayByAddingObjectsFromArray:@[@"LS", @"RS"]]];
     NSMutableSet *seen = [NSMutableSet set];
     NSArray *buttons = doc[@"buttons"];
-    if (buttons.count < 14 || buttons.count > 16) { fail(error, @"F01.buttons", @"需要完整的 14 个按键，可额外提供 LS/RS"); return nil; }
+    if (buttons.count < 14 || buttons.count > 16) { fail(error, @"F01.buttons", S2AL(@"vpad.layout.err.buttonCount")); return nil; }
     for (id b in buttons) {
         if (!fields(b, @[@"id", @"x", @"y", @"width", @"height", @"cornerRadius"]) ||
             ![b[@"id"] isKindOfClass:NSString.class] || ![allowed containsObject:b[@"id"]] || [seen containsObject:b[@"id"]] ||
@@ -73,25 +74,25 @@ static CGRect normalized_rect(NSDictionary *value) {
             !number(b[@"width"], 0.04, 0.4) || !number(b[@"height"], 0.04, 0.4) ||
             !number(b[@"cornerRadius"], 0, 0.2) ||
             [b[@"cornerRadius"] doubleValue] > MIN([b[@"width"] doubleValue], [b[@"height"] doubleValue]) / 2 + geometryTolerance) {
-            fail(error, @"F01.buttons", @"按键字段、范围或编号无效，不允许重复编号"); return nil;
+            fail(error, @"F01.buttons", S2AL(@"vpad.layout.err.buttonFields")); return nil;
         }
         [seen addObject:b[@"id"]];
     }
-    if (![[NSSet setWithArray:required] isSubsetOfSet:seen]) { fail(error, @"F01.buttons", @"缺少必需按键"); return nil; }
+    if (![[NSSet setWithArray:required] isSubsetOfSet:seen]) { fail(error, @"F01.buttons", S2AL(@"vpad.layout.err.buttonMissing")); return nil; }
     NSArray *sticks = doc[@"sticks"];
-    if (sticks.count != 2) { fail(error, @"F01.sticks", @"需要 left 与 right 两个浮动摇杆"); return nil; }
+    if (sticks.count != 2) { fail(error, @"F01.sticks", S2AL(@"vpad.layout.err.stickCount")); return nil; }
     [seen removeAllObjects];
     for (id s in sticks) {
         if (!fields(s, @[@"id", @"activation", @"radius"]) ||
             ![s[@"id"] isKindOfClass:NSString.class] || ![@[@"left", @"right"] containsObject:s[@"id"]] ||
             [seen containsObject:s[@"id"]] || !rect_ok(s[@"activation"]) || !number(s[@"radius"], 0.04, 0.3)) {
-            fail(error, @"F01.sticks", @"摇杆字段、区域或半径无效"); return nil;
+            fail(error, @"F01.sticks", S2AL(@"vpad.layout.err.stickFields")); return nil;
         }
         [seen addObject:s[@"id"]];
     }
     CGRect overlap = CGRectIntersection(normalized_rect(sticks[0][@"activation"]), normalized_rect(sticks[1][@"activation"]));
     if (!CGRectIsNull(overlap) && overlap.size.width > geometryTolerance && overlap.size.height > geometryTolerance) {
-        fail(error, @"F01.sticks", @"左右摇杆激活区域不能重叠"); return nil;
+        fail(error, @"F01.sticks", S2AL(@"vpad.layout.err.stickOverlap")); return nil;
     }
     S2AVPadLayout *layout = [self new];
     layout->_document = [doc copy]; layout->_identifier = [doc[@"id"] copy]; layout->_name = [doc[@"name"] copy];
@@ -100,6 +101,11 @@ static CGRect normalized_rect(NSDictionary *value) {
 }
 + (BOOL)isBuiltinIdentifier:(NSString *)identifier {
     return [identifier isEqualToString:S2AVPadLayoutDefaultIdentifier] || [identifier isEqualToString:S2AVPadLayoutTouchIdentifier];
+}
+- (NSString *)displayName {
+    if ([_identifier isEqualToString:S2AVPadLayoutDefaultIdentifier]) return S2AL(@"vpad.layout.default");
+    if ([_identifier isEqualToString:S2AVPadLayoutMineIdentifier]) return S2AL(@"vpad.layout.mine");
+    return _name;
 }
 + (instancetype)defaultForSafeRect:(CGRect)rect {
     CGFloat w = MAX(rect.size.width, 1), h = MAX(rect.size.height, 1), unit = MIN(w, h);
@@ -120,7 +126,7 @@ static CGRect normalized_rect(NSDictionary *value) {
         [buttons addObject:@{@"id": s[0], @"x": @(MAX(0, MIN(1, [s[1] doubleValue] / w))), @"y": @(MAX(0, MIN(1, [s[2] doubleValue] / h))),
             @"width": @(bw / unit), @"height": @(bh / unit), @"cornerRadius": @(cr / unit)}];
     }
-    NSDictionary *doc = @{@"schemaVersion": @1, @"id": S2AVPadLayoutDefaultIdentifier, @"name": @"默认布局", @"buttons": buttons,
+    NSDictionary *doc = @{@"schemaVersion": @1, @"id": S2AVPadLayoutDefaultIdentifier, @"name": S2AL(@"vpad.layout.default"), @"buttons": buttons,
         @"sticks": @[@{@"id": @"left", @"activation": @{@"x": @0, @"y": @0, @"width": @0.5, @"height": @1}, @"radius": @(60 / unit)},
                      @{@"id": @"right", @"activation": @{@"x": @0.5, @"y": @0, @"width": @0.5, @"height": @1}, @"radius": @(60 / unit)}]};
     // UIKit calls this only for landscape viewports. Do not parse our own trusted defaults on every resize.
@@ -248,10 +254,10 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     _directory = [directory copy]; _settingsDirectory = [settingsDirectory copy]; _selectedIdentifier = S2AVPadLayoutDefaultIdentifier; _diagnostics = @[];
     _hapticFeedbackEnabled = YES;
     if (read_enabled([_settingsDirectory URLByAppendingPathComponent:@".haptics.json"], &_hapticFeedbackEnabled) < 0)
-        _hapticProblem = @"F01.haptics：触感反馈设置损坏，暂用默认开启；原记录保留至重新设置成功";
+        _hapticProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.haptics", S2AL(@"vpad.layout.problem.haptics")];
     _holdLockEnabled = YES;
     if (read_enabled([_directory URLByAppendingPathComponent:@".hold_lock.json"], &_holdLockEnabled) < 0)
-        _holdLockProblem = @"F01.holdLock：按住锁定设置损坏，暂用默认开启；原记录保留至重新设置成功";
+        _holdLockProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.holdLock", S2AL(@"vpad.layout.problem.holdLock")];
     [self loadKeyStyles]; [self loadStickMode];
     _idleKeyOpacity = 0.25;
     NSURL *visibility = [_settingsDirectory URLByAppendingPathComponent:@".visibility.json"];
@@ -263,7 +269,7 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
         id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         if (fields(value, @[@"schemaVersion", @"idleKeyOpacity"]) && number(value[@"schemaVersion"], 1, 1) && number(value[@"idleKeyOpacity"], 0, 1))
             _idleKeyOpacity = [value[@"idleKeyOpacity"] doubleValue];
-        else _visibilityProblem = @"F01.visibility：闲置透明度设置损坏，暂用 25%；重新调整可修复，原记录保留";
+        else _visibilityProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.visibility", S2AL(@"vpad.layout.problem.visibility")];
     }
     NSURL *url = [_directory URLByAppendingPathComponent:@".selection.json"];
     if ([NSFileManager.defaultManager fileExistsAtPath:url.path]) {
@@ -275,7 +281,7 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
         id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:&error] : nil;
         if (fields(value, @[@"schemaVersion", @"id"]) && number(value[@"schemaVersion"], 1, 1) && identifier_ok(value[@"id"]))
             _selectedIdentifier = [value[@"id"] copy];
-        else _selectionProblem = @"F01.selection：布局选择记录损坏，暂用默认布局；可重新选择修复，原记录保留至选择成功";
+        else _selectionProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.selection", S2AL(@"vpad.layout.problem.selection")];
     }
     _stickDeadzone = .08; _stickSaturation = _stickExponent = 1;
     NSURL *stickURL = [_settingsDirectory URLByAppendingPathComponent:@".stick.json"];
@@ -289,7 +295,7 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
             number(value[@"schemaVersion"], 1, 1) && number(value[@"deadzone"], 0, .4) &&
             number(value[@"saturation"], .5, 1) && number(value[@"exponent"], .5, 3)) {
             _stickDeadzone = [value[@"deadzone"] doubleValue]; _stickSaturation = [value[@"saturation"] doubleValue]; _stickExponent = [value[@"exponent"] doubleValue];
-        } else _stickProblem = @"F01.stick：摇杆手感记录无效，暂用默认值；原记录保留至重新设置成功";
+        } else _stickProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.stick", S2AL(@"vpad.layout.problem.stick")];
     }
     _manualChosen = [NSFileManager.defaultManager fileExistsAtPath:[_directory URLByAppendingPathComponent:@".manual"].path];
     return self;
@@ -302,12 +308,12 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     NSDictionary *attributes = [NSFileManager.defaultManager attributesOfItemAtPath:url.path error:error];
     if (!attributes) return nil;
     if (![attributes[NSFileType] isEqualToString:NSFileTypeRegular] || [attributes[NSFileSize] unsignedLongLongValue] > 65536) {
-        fail(error, @"F01.file", @"布局必须是 64 KiB 以内的普通 JSON 文件"); return nil;
+        fail(error, @"F01.file", S2AL(@"vpad.layout.err.file")); return nil;
     }
     NSData *data = [NSData dataWithContentsOfURL:url options:0 error:error];
     S2AVPadLayout *layout = data ? [S2AVPadLayout readData:data error:error] : nil;
     if (layout && ![layout.identifier isEqualToString:identifier]) {
-        fail(error, @"F01.identity", @"文件名必须与布局 id 一致"); return nil;
+        fail(error, @"F01.identity", S2AL(@"vpad.layout.err.fileName")); return nil;
     }
     return layout;
 }
@@ -325,13 +331,13 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     for (NSURL *url in [urls sortedArrayUsingComparator:^NSComparisonResult(NSURL *a, NSURL *b) { return [a.lastPathComponent compare:b.lastPathComponent]; }]) {
         if (![url.pathExtension.lowercaseString isEqualToString:@"json"]) continue;
         NSString *identifier = url.lastPathComponent.stringByDeletingPathExtension;
-        if (!identifier_ok(identifier) || [S2AVPadLayout isBuiltinIdentifier:identifier]) { [problems addObject:@"F01.identity：布局文件名无效或使用保留 id（default / touch）"]; continue; }
+        if (!identifier_ok(identifier) || [S2AVPadLayout isBuiltinIdentifier:identifier]) { [problems addObject:[NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.identity", S2AL(@"vpad.layout.problem.reservedName")]]; continue; }
         error = nil; S2AVPadLayout *layout = [self readIdentifier:identifier error:&error];
-        if (layout) [result addObject:layout]; else [problems addObject:[NSString stringWithFormat:@"%@：%@", url.lastPathComponent, error.localizedDescription]];
+        if (layout) [result addObject:layout]; else [problems addObject:[NSString stringWithFormat:S2AL(@"vpad.layout.error"), url.lastPathComponent, error.localizedDescription]];
     }
     if (![S2AVPadLayout isBuiltinIdentifier:_selectedIdentifier] &&
         ![[result valueForKey:@"identifier"] containsObject:_selectedIdentifier])
-        [problems addObject:@"F01.selection：选定布局缺失或无效，当前暂用默认布局；请选择有效方案或恢复默认"];
+        [problems addObject:[NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.selection", S2AL(@"vpad.layout.problem.selectionMissing")]];
     _diagnostics = [problems copy]; return result;
 }
 - (S2AVPadLayout *)selectedLayout:(NSError **)error {
@@ -346,7 +352,7 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     return [NSFileManager.defaultManager createDirectoryAtURL:_settingsDirectory withIntermediateDirectories:YES attributes:nil error:error];
 }
 - (BOOL)replaceLayout:(S2AVPadLayout *)layout error:(NSError **)error {
-    if ([S2AVPadLayout isBuiltinIdentifier:layout.identifier]) return fail(error, @"F01.identity", @"default / touch 是内置方案，请另存为新方案");
+    if ([S2AVPadLayout isBuiltinIdentifier:layout.identifier]) return fail(error, @"F01.identity", S2AL(@"vpad.layout.err.builtin"));
     NSData *data = [layout JSONData:error];
     if (!data || ![S2AVPadLayout readData:data error:error] || ![self prepareDirectory:error]) return NO;
     return [data writeToURL:[self urlForIdentifier:layout.identifier] options:NSDataWritingAtomic error:error];   // 原子替换：看得见的文件总是完整的
@@ -370,10 +376,10 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
     if (!data) return;
     id doc = data.length <= 4096 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     if (!fields(doc, @[@"schemaVersion", @"fixed", @"sensitivity", @"left", @"right"]) || !number(doc[@"schemaVersion"], 1, 1) || !number(doc[@"sensitivity"], 0.5, 2) || ![doc[@"fixed"] isKindOfClass:NSNumber.class]) {
-        _stickModeProblem = @"F01.stickMode：摇杆模式设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+        _stickModeProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.stickMode", S2AL(@"vpad.layout.problem.stickMode")]; return; }
     NSArray *names = @[@"left", @"right"];
     for (int i = 0; i < 2; i++) { NSArray *p = doc[names[i]];
-        if (![p isKindOfClass:NSArray.class] || p.count != 2 || !number(p[0], 0, 1) || !number(p[1], 0, 1)) { _stickModeProblem = @"F01.stickMode：摇杆模式设置损坏，暂用默认；原记录保留至重新设置成功"; return; } }
+        if (![p isKindOfClass:NSArray.class] || p.count != 2 || !number(p[0], 0, 1) || !number(p[1], 0, 1)) { _stickModeProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.stickMode", S2AL(@"vpad.layout.problem.stickMode")]; return; } }
     _stickFixed = [doc[@"fixed"] boolValue]; _stickSensitivity = [doc[@"sensitivity"] doubleValue];
     for (int i = 0; i < 2; i++) { NSArray *p = doc[names[i]]; _stickCenters[i] = CGPointMake([p[0] doubleValue], [p[1] doubleValue]); }
 }
@@ -386,11 +392,11 @@ static int read_enabled(NSURL *file, BOOL *enabled) {
 }
 - (CGPoint)stickCenter:(int)side { return _stickCenters[side ? 1 : 0]; }
 - (BOOL)setStickFixed:(BOOL)fixed sensitivity:(CGFloat)sensitivity error:(NSError **)error {
-    if (!isfinite(sensitivity) || sensitivity < 0.5 || sensitivity > 2) return fail(error, @"F01.stickMode", @"灵敏度须为 0.5–2");
+    if (!isfinite(sensitivity) || sensitivity < 0.5 || sensitivity > 2) return fail(error, @"F01.stickMode", S2AL(@"vpad.layout.err.sensitivity"));
     _stickFixed = fixed; _stickSensitivity = sensitivity; return [self saveStickMode:error];
 }
 - (BOOL)setStickCenter:(CGPoint)center side:(int)side error:(NSError **)error {
-    if (!isfinite(center.x) || !isfinite(center.y) || center.x < 0 || center.x > 1 || center.y < 0 || center.y > 1) return fail(error, @"F01.stickMode", @"摇杆位置超出屏幕");
+    if (!isfinite(center.x) || !isfinite(center.y) || center.x < 0 || center.x > 1 || center.y < 0 || center.y > 1) return fail(error, @"F01.stickMode", S2AL(@"vpad.layout.err.stickOffscreen"));
     _stickCenters[side ? 1 : 0] = center; return [self saveStickMode:error];
 }
 static BOOL key_style_valid(S2AVPadKeyStyle s) {
@@ -403,11 +409,11 @@ static BOOL key_style_valid(S2AVPadKeyStyle s) {
     id doc = data.length && data.length <= 65536 ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
     if (!doc) return;
     if (!fields(doc, @[@"schemaVersion", @"theme", @"keys", @"globalScale", @"globalOpacity"]) || !number(doc[@"schemaVersion"], 1, 1) || !number(doc[@"theme"], 0, kS2AVPadKeyThemeCount - 1) || !number(doc[@"globalScale"], 0.6, 1.6) || !number(doc[@"globalOpacity"], 0.2, 1) || ![doc[@"keys"] isKindOfClass:NSDictionary.class]) {
-        _keyStyleProblem = @"F01.keyStyle：按键外观设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+        _keyStyleProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.keyStyle", S2AL(@"vpad.layout.problem.keyStyle")]; return; }
     for (NSString *key in doc[@"keys"]) {
         NSDictionary *v = doc[@"keys"][key];
         if (!fields(v, @[@"scale", @"opacity", @"hidden"]) || !number(v[@"scale"], 0.6, 1.6) || !number(v[@"opacity"], 0.2, 1) || ![v[@"hidden"] isKindOfClass:NSNumber.class]) {
-            _keyStyles = [NSMutableDictionary dictionary]; _keyStyleProblem = @"F01.keyStyle：按键外观设置损坏，暂用默认；原记录保留至重新设置成功"; return; }
+            _keyStyles = [NSMutableDictionary dictionary]; _keyStyleProblem = [NSString stringWithFormat:S2AL(@"vpad.layout.error"), @"F01.keyStyle", S2AL(@"vpad.layout.problem.keyStyle")]; return; }
         _keyStyles[key] = v;
     }
     _keyTheme = [doc[@"theme"] integerValue]; _globalScale = [doc[@"globalScale"] doubleValue]; _globalOpacity = [doc[@"globalOpacity"] doubleValue];
@@ -423,17 +429,17 @@ static BOOL key_style_valid(S2AVPadKeyStyle s) {
     return v ? (S2AVPadKeyStyle){[v[@"scale"] doubleValue], [v[@"opacity"] doubleValue], [v[@"hidden"] boolValue]} : (S2AVPadKeyStyle){1, 1, NO};
 }
 - (BOOL)setKeyStyle:(S2AVPadKeyStyle)style forKey:(NSString *)identifier persist:(BOOL)persist error:(NSError **)error {
-    if (!key_style_valid(style)) return fail(error, @"F01.keyStyle", @"大小须为 0.6–1.6，不透明度须为 0.2–1");
+    if (!key_style_valid(style)) return fail(error, @"F01.keyStyle", S2AL(@"vpad.layout.err.keyStyle"));
     _keyStyles[identifier] = @{@"scale": @(style.scale), @"opacity": @(style.opacity), @"hidden": @(style.hidden)};
     return persist ? [self saveKeyStyles:error] : YES;
 }
 - (BOOL)setKeyTheme:(NSInteger)theme error:(NSError **)error {
-    if (theme < 0 || theme >= kS2AVPadKeyThemeCount) return fail(error, @"F01.keyStyle", @"没有这个配色");
+    if (theme < 0 || theme >= kS2AVPadKeyThemeCount) return fail(error, @"F01.keyStyle", S2AL(@"vpad.layout.err.theme"));
     _keyTheme = theme; return [self saveKeyStyles:error];
 }
 - (BOOL)setGlobalScale:(CGFloat)scale opacity:(CGFloat)opacity persist:(BOOL)persist error:(NSError **)error {
     S2AVPadKeyStyle check = {scale, opacity, NO};
-    if (!key_style_valid(check)) return fail(error, @"F01.keyStyle", @"大小须为 0.6–1.6，不透明度须为 0.2–1");
+    if (!key_style_valid(check)) return fail(error, @"F01.keyStyle", S2AL(@"vpad.layout.err.keyStyle"));
     _globalScale = scale; _globalOpacity = opacity; return persist ? [self saveKeyStyles:error] : YES;
 }
 - (BOOL)resetKeyStyles:(NSError **)error { _keyStyles = [NSMutableDictionary dictionary]; _keyTheme = 0; _globalScale = _globalOpacity = 1; return [self saveKeyStyles:error]; }
@@ -447,7 +453,7 @@ static BOOL key_style_valid(S2AVPadKeyStyle s) {
     _keyTheme = [snapshot[@"theme"] integerValue]; _globalScale = [snapshot[@"globalScale"] doubleValue]; _globalOpacity = [snapshot[@"globalOpacity"] doubleValue]; _keyStyles = [snapshot[@"keys"] mutableCopy]; return [self saveKeyStyles:error];
 }
 - (BOOL)setStickDeadzone:(CGFloat)deadzone saturation:(CGFloat)saturation exponent:(CGFloat)exponent error:(NSError **)error {
-    if (!stick_values(deadzone, saturation, exponent)) return fail(error, @"F01.stick", @"死区须为 0–0.4，外圈饱和须为 0.5–1，响应指数须为 0.5–3");
+    if (!stick_values(deadzone, saturation, exponent)) return fail(error, @"F01.stick", S2AL(@"vpad.layout.err.stickValues"));
     if (![self prepareSettingsDirectory:error]) return NO;
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"deadzone": @(deadzone), @"saturation": @(saturation), @"exponent": @(exponent)} options:0 error:error];
     if (!data || ![data writeToURL:[_settingsDirectory URLByAppendingPathComponent:@".stick.json"] options:NSDataWritingAtomic error:error]) return NO;
@@ -455,18 +461,18 @@ static BOOL key_style_valid(S2AVPadKeyStyle s) {
     return YES;
 }
 - (BOOL)setIdleKeyOpacity:(CGFloat)opacity error:(NSError **)error {
-    if (!number(@(opacity), 0, 1)) return fail(error, @"F01.visibility", @"闲置透明度必须在 0 到 1 之间");
+    if (!number(@(opacity), 0, 1)) return fail(error, @"F01.visibility", S2AL(@"vpad.layout.err.idleOpacity"));
     if (![self prepareSettingsDirectory:error]) return NO;
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"idleKeyOpacity": @(opacity)} options:0 error:error];
     if (!data || ![data writeToURL:[_settingsDirectory URLByAppendingPathComponent:@".visibility.json"] options:NSDataWritingAtomic error:error]) return NO;
     _idleKeyOpacity = opacity; _visibilityProblem = nil; return YES;
 }
 - (BOOL)saveLayout:(S2AVPadLayout *)layout error:(NSError **)error {
-    if ([S2AVPadLayout isBuiltinIdentifier:layout.identifier]) return fail(error, @"F01.identity", @"default / touch 是内置方案，请另存为新方案");
+    if ([S2AVPadLayout isBuiltinIdentifier:layout.identifier]) return fail(error, @"F01.identity", S2AL(@"vpad.layout.err.builtin"));
     NSData *data = [layout JSONData:error];
     if (!data || ![S2AVPadLayout readData:data error:error] || ![self prepareDirectory:error]) return NO;
     NSURL *url = [self urlForIdentifier:layout.identifier];
-    if ([NSFileManager.defaultManager fileExistsAtPath:url.path]) return fail(error, @"F01.exists", @"同 id 布局已存在，请先更换 JSON 中的 id；原方案未覆盖");
+    if ([NSFileManager.defaultManager fileExistsAtPath:url.path]) return fail(error, @"F01.exists", S2AL(@"vpad.layout.err.exists"));
     NSURL *temporary = [_directory URLByAppendingPathComponent:[@".import-" stringByAppendingString:NSUUID.UUID.UUIDString]];
     if (![data writeToURL:temporary options:NSDataWritingAtomic error:error]) return NO;
     // moveItem refuses an existing destination; the visible file is always complete.
@@ -475,7 +481,7 @@ static BOOL key_style_valid(S2AVPadKeyStyle s) {
     return ok;
 }
 - (BOOL)selectIdentifier:(NSString *)identifier error:(NSError **)error {
-    if (!identifier_ok(identifier)) return fail(error, @"F01.identity", @"布局 id 无效");
+    if (!identifier_ok(identifier)) return fail(error, @"F01.identity", S2AL(@"vpad.layout.err.id"));
     if (![S2AVPadLayout isBuiltinIdentifier:identifier] && ![self readIdentifier:identifier error:error]) return NO;
     if (![self prepareDirectory:error]) return NO;
     NSData *data = [NSJSONSerialization dataWithJSONObject:@{@"schemaVersion": @1, @"id": identifier} options:0 error:error];

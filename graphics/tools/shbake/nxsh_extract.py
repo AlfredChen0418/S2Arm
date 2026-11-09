@@ -981,10 +981,17 @@ def scan_unity(root, files, stat):
         for n, b in inner.items():
             try: entries(f'{_rel(p, root)}//{n}', b)
             except Exception: stat['UnityFS 包内文件不是序列化文件'] += 1
-    for p in files:   # 播放器数据：头 = 4 个大端 u32，第 3 个（格式版本）22–40，+16 字节序位 0 / 1，+24 文件长 = 实际长
+    for p in files:   # 播放器数据：Unity 序列化文件 v17–40
         h = heads.get(p, b'')
-        if len(h) < 48 or unity_res.is_bundle(h) or not 22 <= struct.unpack_from('>I', h, 8)[0] <= 40 or h[16] > 1: continue
-        if struct.unpack_from('>Q', h, 24)[0] != os.path.getsize(p): continue   # 头里记的文件长 = 实际长（动森 34 个文件头前几项碰巧像，这一项不像）
+        if len(h) < 20 or unity_res.is_bundle(h) or h[16] > 1: continue
+        version = struct.unpack_from('>I', h, 8)[0]
+        if not 17 <= version <= 40: continue
+        if version < 22:
+            declared_size = struct.unpack_from('>I', h, 4)[0]
+        else:
+            if len(h) < 48: continue
+            declared_size = struct.unpack_from('>Q', h, 24)[0]
+        if declared_size != os.path.getsize(p): continue   # 头里记的文件长 = 实际长（动森 34 个文件头前几项碰巧像，这一项不像）
         try: entries(_rel(p, root), open(p, 'rb').read())
         except Exception: stat['Unity 序列化文件解析失败'] += 1
     return rows, blobs

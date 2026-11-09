@@ -62,6 +62,7 @@ public sealed partial class EnvironmentWindow : Window
     {
         var button = new Button { Content = T(key), IsEnabled = enabled, Padding = new Thickness(16, 9),
             Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8) };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(button, key);   // 自动化按文案键找按钮（如 library.connect），不靠显示文字
         button.Click += (_, _) => handler();
         return button;
     }
@@ -103,6 +104,7 @@ public sealed partial class EnvironmentWindow : Window
             if (page == "library") libraryFolder = libraryFolderBox.Text ?? "";
             language = languages.SelectedIndex == 0 ? "zh-Hans" : "en"; Render();
         };
+        if (PhonePill() is { } phonePill) rightBar.Children.Add(phonePill);
         AddUpdateControls(rightBar);
         rightBar.Children.Add(languages);
 

@@ -78,4 +78,9 @@ T=$(mktemp -d); git clone -q --shared "$H" "$T/c" 2> /dev/null && (cd "$T/c" && 
   python3 tools/gate_route.py hooks runtime/src/alt.c) > "$T/o" 2>&1
 ck "负对照：临时克隆去掉 runtime/src/ 登记 → 改 runtime/src/alt.c 不选 core-link 钩子、原生钩子照选（实得：$(tr '\n' ' ' < "$T/o" | cut -c1-200)）" 'grep -qx runtime/gate.sh "$T/o" && ! grep -qx android/core-link/gate.sh "$T/o"'
 rm -rf "$T"
+# 构建清单自动进覆盖面（11-09 维护方：present_settings_test 现算 $(HOST_SRCS) 把 macos/front_mac.m 编进来，头上「门禁只看」手写清单没有它，
+#   feat/launch-settings 改 front_mac.m 列车没跑、合入后 main 链接红）：期望按 launchers/macos/build.mk 的 HOST_SRCS += macos/front_mac.m 手写
+o=$(r tests macos/front_mac.m); ck "改 macos/front_mac.m（HOST_SRCS 的 Mac 前端源文件）→ 含 present_settings_test（实得：${o}）" '[[ "$o" == *tests/present_settings_test.sh* ]]'
+o=$(r tests runtime/src/input_config.c); ck "改 runtime/src/input_config.c（HOST_SRCS）→ 含 present_settings_test、shared_matrix_test（实得：${o}）" '[[ "$o" == *tests/present_settings_test.sh* ]] && [[ "$o" == *tests/shared_matrix_test.sh* ]]'
+o=$(r tests launchers/macos/build.mk); ck "改 launchers/macos/build.mk（拼 HOST_SRCS 的清单）→ 含 present_settings_test（实得：${o}）" '[[ "$o" == *tests/present_settings_test.sh* ]]'
 [ $bad = 0 ] && echo "gate_route 单测全过" || { echo "gate_route 单测有不通"; exit 1; }

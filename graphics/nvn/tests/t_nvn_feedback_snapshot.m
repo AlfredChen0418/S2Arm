@@ -15,7 +15,8 @@ static NSString *const source = @"#include <metal_stdlib>\nusing namespace metal
 "struct Inputs { texture2d<float, access::read> a [[id(0)]]; texture2d<float, access::read> b [[id(1)]]; };\n"
 "vertex float4 triangle(uint i [[vertex_id]]) { const float2 p[3] = {float2(-1,-1),float2(3,-1),float2(-1,3)}; return float4(p[i],0,1); }\n"
 "struct Result { float4 c [[color(2)]]; };\n"
-"fragment Result colors(constant Inputs &t [[buffer(0)]]) { float4 a=t.a.read(uint2(0)), b=t.b.read(uint2(0)); Result o; o.c=float4(a.r,b.r,a.g,1); return o; }\n";
+"fragment Result colors(constant Inputs &t [[buffer(0)]]) { float4 a=t.a.read(uint2(0)), b=t.b.read(uint2(0)); Result o; o.c=float4(a.r,b.r,a.g,1); return o; }\n"
+"fragment float4 self_colors(constant Inputs &t [[buffer(0)]]) { float4 a=t.a.read(uint2(0)), b=t.b.read(uint2(0)); return float4(a.r,b.r,a.g,1); }\n";
 
 static NvShader *shader(id<MTLLibrary> library, NSString *name, int stage) {
     NvShader *s = [NvShader new]; s->stage = stage;
@@ -31,7 +32,7 @@ static NvShader *shader(id<MTLLibrary> library, NSString *name, int stage) {
         for (int i = 0; i < 2; i++) s->rf.b[i] = (nvn_rbind){.kind=NVN_RB_TEX, .reg=i, .aid=i, .dtt=MTLTextureType2D};
         s->ae = [s->fn newArgumentEncoderWithBufferIndex:0]; REQUIRE(s->ae);
         s->arg_len = s->ae.encodedLength;
-        s->rf.color_known = 1; s->rf.color_mask = 1 << 2;
+        s->rf.color_known = 1; s->rf.color_mask = [name isEqualToString:@"self_colors"] ? 1 : 1 << 2;
     }
     return s;
 }
@@ -102,12 +103,58 @@ static void pending_clear_draw(const p_draw *triangle) {
     nvn_be_exec((const uint8_t *)&commands);
 }
 
-int main(void) {
+// Inspect the actual resource ID encoded by production encode_args, not just
+// its choice of feedback branch. These root 2D textures have no aliasing views:
+// a sampled resource equal to the attached resource leaves a feedback hazard,
+// even when a particular GPU happens to return the expected pixels.
+static void binding(const char *name, NvShader *fs, tex_t *attachment, int isolated) {
+    REQUIRE(fs->ab_buf && fs->arg_len >= 8);
+    uint64_t sampled=0;
+    memcpy(&sampled,(const uint8_t *)fs->ab_buf.contents+fs->ab_off,sizeof sampled);
+    uint64_t attached=tex_mtl(attachment).gpuResourceID._impl;
+    CHECK(sampled && ((sampled!=attached)==isolated),
+        "%s: production argument id=%#llx attachment id=%#llx, expected %s",
+        name,(unsigned long long)sampled,(unsigned long long)attached,
+        isolated ? "different resources" : "original resource (read-only attachment)");
+}
+
+static void automatic_cases(NvProg *reader, prog_t *reader_p, NvProg *self, prog_t *self_p,
+                            tex_t *a, tex_t *b, tex_t *out, const p_draw *triangle) {
+    nvn_be_sub_begin(); state_reset(); S.prog=reader_p; S.tex[1][0]=1; S.tex[1][1]=2;
+    clear(a,32,64,96); clear(b,160,192,224); clear(out,0,0,0);
+    uint64_t before=g_fb_count;
+    targets(a,b,out); rp_begin(); REQUIRE(g_enc && !g_fb_dirty[0] && !g_fb_dirty[1]);
+    draw(triangle,NULL);
+    binding("default non-self-write",reader->sh[1],a,0);
+    CHECK(g_fb_count==before,"default non-self-write uses no snapshot");
+    finish(); pixels("default non-self-write",out,32,160,64);
+
+    nvn_be_sub_begin(); state_reset(); S.prog=self_p; S.tex[1][0]=1; S.tex[1][1]=2;
+    clear(a,32,64,96); clear(b,160,192,224); clear(out,0,0,0);
+    targets(a,b,out); rp_begin(); REQUIRE(g_enc && !g_fb_dirty[0]);
+    draw(triangle,NULL);
+    binding("default self-write dirty=0",self->sh[1],a,1);
+    finish(); pixels("default self-write dirty=0",a,32,160,64);
+
+    nvn_be_sub_begin(); state_reset(); S.prog=self_p; S.tex[1][0]=2; S.tex[1][1]=2;
+    clear(a,32,64,96); clear(b,160,192,224); clear(out,0,0,0);
+    targets(a,b,out); draw(triangle,NULL); // Real writer: A=(B.r,B.r,B.g,1).
+    REQUIRE(g_enc && g_fb_dirty[0]);
+    S.tex[1][0]=1; args_dirty_all();
+    draw(triangle,NULL);
+    binding("default self-write dirty=1",self->sh[1],a,1);
+    finish(); pixels("default self-write dirty=1",a,160,160,160);
+}
+
+int main(int argc, char **argv) {
+    int all=argc==2 && !strcmp(argv[1],"--snap-all");
+    REQUIRE(argc==1 || all);
     @autoreleasepool {
         char map[]="/tmp/t_feedback_map_XXXXXX"; int fd=mkstemp(map); REQUIRE(fd>=0); close(fd);
         char user[]="/tmp/t_feedback_user_XXXXXX"; fd=mkstemp(user); REQUIRE(fd>=0); close(fd);
         setenv("DM_NVN_SHMAP",map,1); setenv("DM_PSO_USER",user,1);
-        setenv("DM_NVN_FB_SNAP","all",1);
+        if (all) setenv("DM_NVN_FB_SNAP","all",1);
+        else unsetenv("DM_NVN_FB_SNAP");
         setenv("DM_PSO_ARCHIVE","0",1); // no shared /tmp pipeline cache; real PSOs still compile
         mtl_init(); printf("BACKEND %s\n",g_m3?"Metal3":"Metal4");
         // Replay's first entry initializes its state. Do so before installing
@@ -117,6 +164,10 @@ int main(void) {
         if(!library) fprintf(stderr,"MSL: %s\n",error.localizedDescription.UTF8String); REQUIRE(library);
         NvProg *program=[NvProg new]; program->sh[0]=shader(library,@"triangle",0); program->sh[1]=shader(library,@"colors",1);
         prog_t p={.magic=MAGIC('P','R','O','G'), .serial=nvn_new_serial()}; serial_put(p.serial,program);
+        NvProg *self=[NvProg new]; self->sh[0]=program->sh[0]; self->sh[1]=shader(library,@"self_colors",1);
+        // Distinct real shader functions must also have distinct pipeline keys.
+        strlcpy(self->sh[1]->key,"cccccccccccccccc_b",sizeof self->sh[1]->key);
+        prog_t self_p={.magic=MAGIC('P','R','O','G'), .serial=nvn_new_serial()}; serial_put(self_p.serial,self);
         uint8_t *memory=NULL; REQUIRE(!posix_memalign((void **)&memory,65536,1<<20)); memset(memory,0,1<<20);
         // Production no-copy pool remains alive for the complete GPU lifetime.
         pool_t *pool=calloc(1,sizeof *pool); REQUIRE(pool);
@@ -127,6 +178,9 @@ int main(void) {
         nvn_be_reg_tex(1,&a,NULL); nvn_be_reg_tex(2,&b,NULL);
         p_draw triangle={.prim=NVN_DRAW_PRIMITIVE_TRIANGLES, .count=3, .instances=1};
 
+        if (!all) {
+            automatic_cases(program,&p,self,&self_p,&a,&b,&first,&triangle);
+        } else {
         nvn_be_sub_begin(); state_reset(); S.prog=&p; S.tex[1][0]=1; S.tex[1][1]=2;
         clear(&a,32,64,96); clear(&b,160,192,224); clear(&first,0,0,0); clear(&second,0,0,0);
         targets(&a,&b,&first); draw(&triangle,NULL);
@@ -150,8 +204,9 @@ int main(void) {
         clear(&a,0,0,0); clear(&b,0,0,0); clear(&first,0,0,0);
         targets(&a,&b,&first); pending_clear_draw(&triangle); finish();
         pixels("pending ClearColor lands before feedback snapshot",&first,48,176,80);
+        }
         unlink(map); unlink(user);
     }
-    printf("%s t_nvn_feedback_snapshot: %u checks, %u failures\n",failures?"✗":"✓",checks,failures);
+    printf("%s t_nvn_feedback_snapshot %s: %u checks, %u failures\n",failures?"✗":"✓",all?"snap-all":"default",checks,failures);
     return failures?1:0;
 }

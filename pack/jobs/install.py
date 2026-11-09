@@ -485,6 +485,16 @@ def pack_id(pack):
     return read(Path(pack) / "manifest.json", {}).get("index_sha256") or ""
 
 
+PUSHING = "正在传输资源"   # 推送阶段的进度消息（定文案，两端前端按它本地化；数字走 done / total / unit）
+
+
+def push_progress(c, done, total, step, steps):
+    """推资源包的作业计数（Mac 解析 push_pack 的机器读行、Windows 直接回调，同一出口）：done / total 字节，unit = B；前端据此画百分比、速度、剩余时间。
+    没有要推的（total = 0）不发计数，免得画出 0/0；传完（done = total）也只是「传完」，之后的机上解包另有「机上解包 k/n」计数，最终成功仍以解包确认为准"""
+    if total > 0:
+        c.emit(message=PUSHING, done=done, total=total, unit="B")
+
+
 def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None):
     """资源包推进 App 并在机上解开：调 Mac / Windows 共用的 tools/push_pack.py run --apply（同 dev_run、Windows 一键装机、s2armctl push-pack，
     #206 / PR #470、11-06 两端合一）——按 sha256 只推机上没有 / 变了的文件（免费账号 7 天到期重装、改一点重出一版时只推几个文件），
@@ -498,6 +508,10 @@ def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None):
         raise Failure(f"资源包缺清单或清单没有 index_sha256（{pack}）：请重新打 iPhone 包。", code="job_failed")
     got = {}
     def line(text):
+        m = re.match(r"S2A_PUSH_PROGRESS (\d+) (\d+) (\d+) (\d+)$", text.strip())   # tools/push_pack.py --progress-lines：每推完一批的已传 / 本次待传总字节（#266）
+        if m:
+            push_progress(c, *map(int, m.groups()))
+            return
         m = re.search(r"推 (\d+) 个文件 (\d+) MB", text)
         if m: got.update(files=int(m.group(1)), mb=int(m.group(2)))
         m = re.search(r"机上解包 (\d+)/(\d+)", text)   # tools/push_pack.py apply 每解完一包打一行：启动器显示「机上解包 13/17」
@@ -507,7 +521,7 @@ def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None):
     log = c.logs / (c.task + "-push" + (f"-{docs.rsplit('/', 1)[-1]}" if docs else "") + ".log")
     extra = (["--docs", docs] if docs else []) + (["--launch-ctx", ctx] if ctx else [])
     try:
-        c.run([sys.executable, "-B", c.engine / "tools/push_pack.py", "run", ident, bid, pack, "--via", "devicectl", "--apply", *extra], log, env=env, on_line=line)
+        c.run([sys.executable, "-B", c.engine / "tools/push_pack.py", "run", ident, bid, pack, "--via", "devicectl", "--apply", "--progress-lines", *extra], log, env=env, on_line=line)
     except Failure as e:
         if e.code != "tool_exit":
             raise
@@ -869,7 +883,8 @@ class WinPhone:
     def push(self, g, pack):
         try:
             return self.W.push_pack(self.udid, self.bid, str(pack), str(self.devpush) if self.devpush.is_file() else None,
-                                    say=lambda m: self.c.emit("message", m), docs=game_docs(g), ctx=game_ctx(g), apply_after=True)
+                                    say=lambda m: self.c.emit("message", m), docs=game_docs(g), ctx=game_ctx(g), apply_after=True,
+                                    progress=lambda d, t, k, n: push_progress(self.c, d, t, k, n))
         except self.W.Fail as e:
             if e.err == "manual_unpack_required":
                 self.c.diagnostic(str(e), code=e.err, severity="warning")

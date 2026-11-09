@@ -72,6 +72,79 @@ public sealed partial class EnvironmentWindow
     // A checklist that could not be read must not lock the player out: start and let the install job give the real reason.
     private bool InstallAllowed => readiness?.Ready == true || (readiness is null && installCheckFailed);
     private string installState = "", installMessage = "", installDiagnostics = "";
+    // 当前 / 最近一次手机作业属于哪一款（#308：原先只有一份「当前安装」状态、没记是哪款，回游戏库再点别的游戏，进度会画到那款上）。
+    //   installSeen：跑完后玩家回安装页看过结果没有；没看过时顶栏胶囊一直在。进度计数来自作业事件 done / total / unit（推资源包按字节，机上解包按包）
+    private string? installGameId, installGameName;
+    private long? installDone, installTotal;
+    private string installUnit = "";
+    private DateTime installRateAt; private long installRateBase; private double? installRate;
+    private bool installSeen = true;
+
+    /// 开始一个手机作业：记下是哪一款、清掉上次的计数
+    private void BeginPhoneJob(LibraryGame game, string message)
+    {
+        installBusy = true; installState = "running"; installMessage = message; installDiagnostics = "";
+        installGameId = game.Id; installGameName = game.Name; installSeen = false;
+        installDone = installTotal = null; installUnit = ""; installRate = null;
+        Render();
+    }
+
+    /// 作业事件 → 安装页文字与计数（推资源包：已传 / 本次待传字节；机上解包：k / n 包）。单位变了（传完进解包）计数与速度重新算
+    private void IngestPhoneEvent(JsonElement e)
+    {
+        if (e.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } text) installMessage = text;
+        if (e.TryGetProperty("done", out var d) && d.ValueKind == JsonValueKind.Number && e.TryGetProperty("total", out var t) && t.ValueKind == JsonValueKind.Number && t.GetInt64() > 0)
+        {
+            var unit = e.TryGetProperty("unit", out var u) && u.ValueKind == JsonValueKind.String ? u.GetString() ?? "" : "";
+            var done = d.GetInt64(); var total = t.GetInt64();
+            if (unit != installUnit || total != installTotal || done < (installDone ?? 0)) { installRateAt = DateTime.UtcNow; installRateBase = done; installRate = null; }
+            else if ((DateTime.UtcNow - installRateAt).TotalSeconds >= 3 && done > installRateBase)
+                installRate = (done - installRateBase) / (DateTime.UtcNow - installRateAt).TotalSeconds;
+            installDone = done; installTotal = total; installUnit = unit;
+        }
+        Render();
+    }
+
+    /// 回到正在装 / 刚装完的那一款的安装页（同一个作业，不新起安装）
+    private void OpenPhoneJob()
+    {
+        if (installGameId is null) return;
+        libraryFolder = libraryFolderBox.Text ?? libraryFolder;
+        selectedGame = installGameId; readinessFor = null; Navigate("install");
+    }
+
+    /// 顶栏胶囊（#308，Mac 同款）：装机在跑 → 「正在装到 iPhone：X · 查看进度」；跑完没回去看 → 「已装到 / 没装完 · 查看」。正看着这款的安装页时不显示
+    private Button? PhonePill()
+    {
+        if (installGameId is null || (!installBusy && installSeen) || (page == "install" && SelectedGame?.Id == installGameId)) return null;
+        var key = installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : "install.pill.failed";
+        var text = T(key).Replace("{0}", installGameName ?? installGameId);
+        if (installBusy && installDone is { } d && installTotal is { } t && t > 0) text += " · " + (100 * d / t) + "%";
+        var pill = new Button { Content = text, Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(16),
+            Background = Brush.Parse("#29292D"), Foreground = Ink };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(pill, "install.pill");
+        pill.Click += (_, _) => OpenPhoneJob();
+        return pill;
+    }
+
+    /// 计数那一行：「42% · 8.5 GB / 13.0 GB · 21.2 MB/s · 还剩约 4 分钟」或「机上解包 15 / 28」；没有计数 → 空
+    private string PhoneProgressText()
+    {
+        if (installDone is not { } done || installTotal is not { } total || total <= 0) return "";
+        var parts = new List<string> { (100 * done / total) + "%" };
+        if (installUnit == "B")
+        {
+            parts.Add(FormatBytes(done) + " / " + FormatBytes(total));
+            if (installRate is { } rate && rate > 0)
+            {
+                parts.Add(FormatBytes((long)rate) + "/s");
+                var left = (total - done) / rate;
+                parts.Add(T("install.eta").Replace("{0}", left < 90 ? Math.Max(1, (int)left) + T("install.eta_seconds") : (int)Math.Round(left / 60) + T("install.eta_minutes")));
+            }
+        }
+        else parts.Add(done + " / " + total + (installUnit.Length > 0 ? " " + installUnit : ""));
+        return string.Join(" · ", parts);
+    }
     private DateTime lastCheck = DateTime.MinValue;
     private DispatcherTimer? ticker;
     private ScrollViewer? packScroller;
@@ -140,6 +213,7 @@ public sealed partial class EnvironmentWindow
         {
             var backLib = new Button { Content = T("nav.library"), Padding = new Thickness(16, 9),
                 Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8) };
+            Avalonia.Automation.AutomationProperties.SetAutomationId(backLib, "top.library");   // 同游戏库页顶栏（自动化按 id 找，不靠文字）
             backLib.Click += (_, _) => Navigate("library");
             inner.Children.Add(backLib);
         }
@@ -147,6 +221,7 @@ public sealed partial class EnvironmentWindow
         {
             var backLib = new Button { Content = T("nav.library"), Padding = new Thickness(16, 9),
                 Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8) };
+            Avalonia.Automation.AutomationProperties.SetAutomationId(backLib, "top.library");   // 同游戏库页顶栏（自动化按 id 找，不靠文字）
             backLib.Click += (_, _) => Navigate("library");
             inner.Children.Add(backLib);
         }
@@ -941,7 +1016,7 @@ public sealed partial class EnvironmentWindow
     private void RenderInstall(StackPanel body)
     {
         var game = SelectedGame ?? packGame;
-        body.Children.Add(Action("export.back", () => Navigate("build"), !installBusy));
+        body.Children.Add(Action("export.back", () => Navigate("build")));   // 装机在后台照跑，离开后顶栏胶囊能回来（#308）
         if (game is null || connectedFolder is null || libraryId is null) { body.Children.Add(Label(T("export.no_game"), 18)); return; }
         if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; installCheckFailed = false; _ = CheckInstallAsync(); }
         body.Children.Add(GameHeader(game));
@@ -1014,15 +1089,31 @@ public sealed partial class EnvironmentWindow
         list.Children.Add(buttons);
         body.Children.Add(Card(list));
 
-        if (installState != "")
+        if (installState != "" && installGameId is not null && installGameId != game.Id)
         {
+            // 正在装 / 刚装完的是另一款：这里不画它的进度（原先会画到当前这款上），给一个回去的入口
+            var other = new StackPanel { Spacing = 8 };
+            other.Children.Add(Muted(T(installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : "install.pill.failed").Replace("{0}", installGameName ?? installGameId)));
+            other.Children.Add(Action("install.pill.open", OpenPhoneJob));
+            body.Children.Add(Card(other));
+        }
+        else if (installState != "")
+        {
+            if (!installBusy) installSeen = true;   // 回到这款的安装页看过结果，顶栏胶囊收起
             var state = new StackPanel { Spacing = 8 };
             state.Children.Add(Label(T(installState switch
             {
                 "running" => "install.running", "succeeded" => "install.done", "cancelled" => "progress.cancelled",
                 "invalid" => "library.invalid_result", _ => "install.failed"
             }), 18));
-            if (installBusy) state.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 4 });
+            if (installBusy)
+            {
+                var counted = installDone is { } d && installTotal is { } t && t > 0;
+                state.Children.Add(counted
+                    ? new ProgressBar { Minimum = 0, Maximum = 1, Value = (double)installDone!.Value / installTotal!.Value, Height = 6 }
+                    : new ProgressBar { IsIndeterminate = true, Height = 4 });
+                if (PhoneProgressText() is { Length: > 0 } progress) state.Children.Add(Muted(progress));
+            }
             if (installMessage.Length > 0) state.Children.Add(Muted(installMessage));
             if (installState is "failed" or "invalid")
                 state.Children.Add(CopyReportButton(game.Id, ["install", "installRemove", "installRestore"], () => installMessage + "\n" + installDiagnostics));
@@ -1057,14 +1148,10 @@ public sealed partial class EnvironmentWindow
     private async Task InstallAsync(LibraryGame game)
     {
         if (installBusy || !InstallAllowed) return;
-        installBusy = true; installState = "running"; installMessage = ""; installDiagnostics = ""; Render();
+        BeginPhoneJob(game, "");
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id), e => Dispatcher.UIThread.Post(() =>
-            {
-                if (e.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } text)
-                { installMessage = text; Render(); }
-            }), CancellationToken.None);
+            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
             installState = job.Report.State;
             installMessage = job.Report.Succeeded && job.Report.Result.TryGetProperty("device", out var device) && device.ValueKind == JsonValueKind.String
                 ? T("install.device") + " · " + device.GetString() : job.Report.Message;
@@ -1187,14 +1274,10 @@ public sealed partial class EnvironmentWindow
     private async Task RunPhoneJobAsync(LibraryGame game, string operation, string prefix)
     {
         if (installBusy || packRunning) return;
-        installBusy = true; installState = "running"; installMessage = T(prefix + "_running"); installDiagnostics = ""; Render();
+        BeginPhoneJob(game, T(prefix + "_running"));
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest(operation, game.Id), e => Dispatcher.UIThread.Post(() =>
-            {
-                if (e.TryGetProperty("message", out var m) && m.ValueKind == JsonValueKind.String && m.GetString() is { Length: > 0 } text)
-                { installMessage = text; Render(); }
-            }), CancellationToken.None);
+            var job = await PackJobClient.RunAsync(PackRequest(operation, game.Id), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
             installState = job.Report.State;
             installMessage = job.Report.Succeeded ? T(prefix + "_done") : job.Report.Message;
             installDiagnostics = JobDiagnostics(job);

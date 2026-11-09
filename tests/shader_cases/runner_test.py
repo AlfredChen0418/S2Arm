@@ -42,6 +42,14 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(encode('MOV32I R3 42'),0x0100000002a7f003)
         self.assertEqual(encode('LDG32 R2 R0 0'),0xeed4200000070002)
         self.assertEqual(encode('STG32 R2 R0 4'),0xeedc200000470002)
+    def test_iadd_carry_encoding(self):
+        # InstIaddR: .PO is AvgMode 3, .CC is bit 47, and .X is bit 43.
+        self.assertEqual(encode('IADD.PO.CC R8 R2 R3'), 0x5c13800000370208)
+        self.assertEqual(encode('IADD.X R9 RZ RZ'), 0x5c1008000ff7ff09)
+        for line in ('IADD.PO.CC R8 R2 -1', 'IADD.X R9 RZ c[0][0]', 'ISCADD.PO.CC R8 R2 R3 0'):
+            with self.subTest(line=line), self.assertRaises(ValueError):
+                encode(line)
+
     def test_reject_unsupported_contract(self):
         for key,value in [('schema',2),('stage','geometry'),('expected',[0,0,0]),('inputs',{'texture0':[]}),('inputs',{'varying0':[1,2,3,4]})]:
             with self.subTest(key=key,value=value):

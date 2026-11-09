@@ -159,6 +159,7 @@ public sealed partial class EnvironmentWindow
         var connection = new StackPanel { Spacing = 10 };
         connection.Children.Add(Label(T("library.folder")));
         libraryFolderBox = new TextBox { Text = libraryFolder, IsEnabled = !libraryBusy };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(libraryFolderBox, "library.folder");
         connection.Children.Add(libraryFolderBox);
         var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
         void AddButton(string key, Action action, bool enabled = true)
@@ -177,6 +178,9 @@ public sealed partial class EnvironmentWindow
 
         var status = new StackPanel { Spacing = 8 };
         status.Children.Add(Label(T(librarySummary), 18));
+        // 失败时原因直接写在这里（第一行就是作业 / 输入校验给的人话），不用再展开「本次操作与处理建议」才看得到
+        if (librarySummary is "library.failed" or "library.invalid_result" && libraryDiagnostics.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).FirstOrDefault() is { Length: > 0 } why)
+            status.Children.Add(Muted(why, 14));
         if (libraryBusy) status.Children.Add(new ProgressBar { IsIndeterminate = true, Height = 4 });
         if (catalog is not null)
         {

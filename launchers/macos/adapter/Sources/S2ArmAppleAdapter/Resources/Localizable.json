@@ -6706,5 +6706,9 @@
  {
   "source": "这款暂时打不了包，换一款官方游戏试试；如果确定是正版游戏，点「复制错误摘要」发给我们。",
   "en": "This game can't be packaged yet. Try an official game; if you are sure this is a retail game, click \"Copy error summary\" and send it to us."
+ },
+ {
+  "source": "正在传输资源",
+  "en": "Transferring resources"
  }
 ]

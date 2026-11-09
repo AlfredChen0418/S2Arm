@@ -47,6 +47,7 @@ import S2ArmAppleAdapter
             case .checking: return .bad("环境检查还在跑，几秒后再试", code: 409)
             case .environment: return .bad("环境缺东西：看 GET /state 的 checks（ok 为 false 的项），处理后 POST /environment 重查")
             case .busy: return .bad("有作业在跑：等它结束或 cancel 再来", code: 409)
+            case .alreadyQueued: return .bad("这款已在出包或排队，没有新建任务：等它结束再发", code: 409)
             }
         }
         switch (r.method, r.path) {
@@ -275,7 +276,8 @@ import S2ArmAppleAdapter
                  "needsPreparation": g.needsPreparation, "needsKeys": g.needsKeys, "buildable": g.buildable, "missing": g.missing,
                  "baseBytes": g.packages.filter { $0.type == "base" }.reduce(Int64(0)) { $0 + $1.size }, "bytes": g.totalBytes] },
             "session": session, "busy": m.busy,
-            "tasks": ControlJournal.tasks(privateRoot: privateRoot), "queue": [String](), "executionTask": NSNull(),
+            "tasks": ControlJournal.tasks(privateRoot: privateRoot), "queue": [String](),
+            "executionTask": m.busy ? (m.session?.taskID.map { $0 as Any } ?? NSNull()) : NSNull(),   // 在跑的作业层任务号（同旧前端 Store.executionTask），s2armctl next 据此判「本游戏正在运行」
             "notice": NSNull(),
             "error": (m.actionError ?? (m.libraryError == LibraryProvider.noLibraryMessage ? nil : m.libraryError) ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
             "installReadiness": rd,

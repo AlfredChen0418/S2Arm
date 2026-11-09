@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #import "vpad_layout.h"
+#import "s2a_l10n.h"
 
 // 游戏号进路径：同 launchctx.c id_ok —— 只收 [A-Za-z0-9._-]、不以 . 开头、≤127 字
 static BOOL gid_ok(const char *g) {
@@ -49,7 +50,7 @@ int s2a_shell_vpad_save(const char *game_id, const char *centers_json, double sa
         NSData *d = [NSData dataWithBytes:centers_json length:strlen(centers_json)];
         id c = [NSJSONSerialization JSONObjectWithData:d options:0 error:nil]; if (![c isKindOfClass:NSDictionary.class]) return 0;
         CGRect safe = CGRectMake(0, 0, safe_w, safe_h); BOOL hasMine; NSError *e;
-        S2AVPadLayout *m = [base_for(s, safe, &hasMine) layoutWithButtonCenters:c safeRect:safe identifier:S2AVPadLayoutMineIdentifier name:@"我的布局" error:&e];
+        S2AVPadLayout *m = [base_for(s, safe, &hasMine) layoutWithButtonCenters:c safeRect:safe identifier:S2AVPadLayoutMineIdentifier name:S2AL(@"vpad.layout.mine") error:&e];
         BOOL ok = m && [s replaceLayout:m error:&e] && [s selectIdentifier:S2AVPadLayoutMineIdentifier error:&e] && [s markManual:&e];
         if (!ok) NSLog(@"S2Arm 游戏库：保存 %s 的按键位置失败：%@", game_id, e.localizedDescription);
         return ok ? 1 : 0;

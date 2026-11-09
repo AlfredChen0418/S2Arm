@@ -299,6 +299,45 @@ class ImagePush(Base):
         self.assertLess(order.index(f"{RP}/.applied"), order.index(f"{RP}/romfs.img"))
 
 
+class SendProgress(Base):
+    """#266：推送进度计数。3 批不同大小（上限 60 字节：a30+b30 | c50 | e90）；分母 = 本次待传量，不是整包"""
+    def setUp(self):
+        super().setUp()
+        self.data = {"a": b"A" * 30, "b": b"B" * 30, "c": b"C" * 50, "e": b"E" * 90}
+        for k, v in self.data.items(): (self.pk / k).write_bytes(v)
+        (self.pk / "index.tsv").write_text("".join(self.row(k) for k in self.data))
+        self.old = push.LIM; push.LIM = 60
+        self.calls = []
+
+    def tearDown(self): push.LIM = self.old; super().tearDown()
+
+    def run_push(self, files):
+        self.dev = Fake(files)
+        return push.run(self.dev, self.pk, self.w, False, say=self.log.append, progress=lambda *a: self.calls.append(a))
+
+    def test_three_batches_cumulative(self):
+        self.run_push({})
+        self.assertEqual(self.calls, [(0, 200, 0, 3), (60, 200, 1, 3), (110, 200, 2, 3), (200, 200, 3, 3)])
+
+    def test_denominator_is_this_push_not_whole_pack(self):   # 机上已有 a、b：只推 c、e（两批 50 | 90），总量 140
+        self.run_push(self.on_phone("a", "b"))
+        self.assertEqual(self.calls, [(0, 140, 0, 2), (50, 140, 1, 2), (140, 140, 2, 2)])
+
+    def test_nothing_to_push_reports_zero_total(self):   # 机上全有：只报一次 0/0，作业层见 total=0 不发计数（不画 0/0）
+        self.run_push(self.on_phone("a", "b", "c", "e"))
+        self.assertEqual(self.calls, [(0, 0, 0, 0)])
+
+    def test_failed_batch_never_reports_done(self):   # 第一批就写满：不许报任何已完成量
+        self.dev = Fake({}, full_disk=True)
+        with self.assertRaises(push.Fail):
+            push.run(self.dev, self.pk, self.w, False, say=self.log.append, progress=lambda *a: self.calls.append(a))
+        self.assertEqual([c for c in self.calls if c[0] > 0], [])
+
+    def test_cli_progress_lines(self):   # Mac 装机作业读的机器行
+        line = push.PROGRESS_PREFIX + " 60 200 1 3"
+        self.assertRegex(line, r"^S2A_PUSH_PROGRESS \d+ \d+ \d+ \d+$")
+
+
 class SendFail(Base):
     def test_nospc(self):
         with self.assertRaises(push.Fail) as e: self.go({}, full_disk=True)

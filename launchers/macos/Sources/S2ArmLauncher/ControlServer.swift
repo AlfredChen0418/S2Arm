@@ -115,7 +115,9 @@ typealias Request = ControlRequest
             guard let g = game() else { return bad("没有这个 gameId") }
             switch str("target") ?? "ios" {
             case "ios", "iphone", "ipad": closeOnboarding(); store.packIPhone(g); return ok()
-            case "mac", "macos": closeOnboarding(); store.enqueue(g); return ok()
+            case "mac", "macos":
+                if let why = store.enqueueBlocker(g) { return (409, "application/json", Self.json(["error": why])) }
+                closeOnboarding(); store.enqueue(g); return ok()
             case "android", "harmony", "ohos": return (409, "application/json", Self.json(["error": "即将上线，敬请期待", "comingSoon": true]))
             default: return bad("target 只认 ios / mac / android / harmony")
             }

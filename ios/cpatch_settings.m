@@ -3,6 +3,7 @@
 //   帧率类社区项（编号 fps:）跟 60 帧开关走（runtime/src/cpatch.c s2a_cpatch_fps_follow），这里只显示、不单独开关。主标题中文名（cpatch_model.m 对照表），
 //   副标题英文原名 + 「社区 · 我方已验 / 未经验证」。下次启动生效
 #import "cpatch_settings.h"
+#import "s2a_l10n.h"
 
 static BOOL default_on(NSString *key) { id v = [NSUserDefaults.standardUserDefaults objectForKey:key]; return v ? [v boolValue] : YES; }   // 两个总开关缺省开
 
@@ -13,7 +14,7 @@ static BOOL default_on(NSString *key) { id v = [NSUserDefaults.standardUserDefau
 }
 - (instancetype)initWithGroups:(NSArray<S2ACPatchGroup *> *)groups {
     if (!(self = [super initWithStyle:UITableViewStyleInsetGrouped])) return nil;
-    _groups = groups; self.title = @"社区补丁";
+    _groups = groups; self.title = S2AL(@"cpatch.title");
     return self;
 }
 - (void)viewDidLoad {
@@ -21,7 +22,7 @@ static BOOL default_on(NSString *key) { id v = [NSUserDefaults.standardUserDefau
     [NSNotificationCenter.defaultCenter addObserver:self selector:@selector(updateMaterial) name:UIAccessibilityReduceTransparencyStatusDidChangeNotification object:nil];
     [self updateMaterial];
     UILabel *notice = [UILabel new];
-    notice.text = S2ACPatchNotice; notice.numberOfLines = 0; notice.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote]; notice.adjustsFontForContentSizeCategory = YES;
+    notice.text = S2AL(@"cpatch.notice"); notice.numberOfLines = 0; notice.font = [UIFont preferredFontForTextStyle:UIFontTextStyleFootnote]; notice.adjustsFontForContentSizeCategory = YES;
     notice.textColor = UIColor.secondaryLabelColor; notice.accessibilityIdentifier = @"cpatch.notice";
     UIView *header = [UIView new]; [header addSubview:notice];
     notice.translatesAutoresizingMaskIntoConstraints = NO;
@@ -51,8 +52,8 @@ static NSString *master_key(S2ACPatchGroup *g) { return [g.kind isEqual:@"widesc
 - (NSString *)tableView:(UITableView *)t titleForHeaderInSection:(NSInteger)s { (void)t; return _groups[s].title; }
 - (NSString *)tableView:(UITableView *)t titleForFooterInSection:(NSInteger)s {
     (void)t;
-    if ([_groups[s].kind isEqual:@"fps"]) return @"标「跟随 60 帧开关」的项随上面的 60 帧开关一起开关。改动下次启动游戏生效";
-    return @"改动下次启动游戏生效";
+    if ([_groups[s].kind isEqual:@"fps"]) return S2AL(@"cpatch.footer.fps");
+    return S2AL(@"cpatch.footer");
 }
 - (UITableViewCell *)tableView:(UITableView *)t cellForRowAtIndexPath:(NSIndexPath *)ip {
     (void)t;
@@ -64,8 +65,8 @@ static NSString *master_key(S2ACPatchGroup *g) { return [g.kind isEqual:@"widesc
     UISwitch *sw = [UISwitch new]; cell.accessoryView = sw;
     cell.textLabel.numberOfLines = 0; cell.detailTextLabel.numberOfLines = 0; cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
     if (mk && ip.row == 0) {
-        cell.textLabel.text = [mk isEqual:@"S2AWidescreen"] ? @"宽屏" : @"60 帧";
-        cell.detailTextLabel.text = [mk isEqual:@"S2AWidescreen"] ? @"本款宽屏适配（与设置页里的「宽屏」是同一个开关）" : @"本款 60 帧（与设置页里的「60 帧」是同一个开关）";
+        cell.textLabel.text = [mk isEqual:@"S2AWidescreen"] ? S2AL(@"cpatch.group.widescreen") : S2AL(@"cpatch.group.fps");
+        cell.detailTextLabel.text = [mk isEqual:@"S2AWidescreen"] ? S2AL(@"cpatch.master.widescreen.note") : S2AL(@"cpatch.master.fps.note");
         sw.on = default_on(mk); sw.accessibilityLabel = cell.textLabel.text; sw.accessibilityIdentifier = [@"cpatch.master." stringByAppendingString:g.kind];
         [sw addTarget:self action:@selector(masterChanged:) forControlEvents:UIControlEventValueChanged];
         sw.tag = ip.section;
@@ -73,10 +74,10 @@ static NSString *master_key(S2ACPatchGroup *g) { return [g.kind isEqual:@"widesc
     }
     S2ACPatchItem *it = g.items[ip.row - (mk ? 1 : 0)];
     cell.textLabel.text = it.title;
-    NSString *lic = it.license.length && ![it.license hasPrefix:@"none"] ? it.license : @"未声明";   // 出包表里「没声明」写作空或 none(未声明)
+    NSString *lic = it.license.length && ![it.license hasPrefix:@"none"] ? it.license : S2AL(@"cpatch.license.none");   // 出包表里「没声明」写作空或 none(未声明)
     // 缺省开 = 出包时在 graphics/cpatch/verified.tsv 里（我方验过本款这一份，pack/stage_rewrite.sh）；其余是社区未经验证、缺省关
-    NSString *tag = it.defaultOn ? @"社区 · 我方已验" : @"社区 · 未经验证";
-    cell.detailTextLabel.text = [NSString stringWithFormat:@"%@\n%@ · 许可 %@%@", it.name, tag, lic, it.followsFps60 ? @" · 跟随 60 帧开关" : @""];
+    NSString *tag = it.defaultOn ? S2AL(@"cpatch.tag.verified") : S2AL(@"cpatch.tag.unverified");
+    cell.detailTextLabel.text = [NSString stringWithFormat:S2AL(@"cpatch.item.detail"), it.name, tag, lic, it.followsFps60 ? S2AL(@"cpatch.item.followsFps") : @""];
     sw.accessibilityLabel = it.title; sw.accessibilityIdentifier = [@"cpatch.item." stringByAppendingString:it.ident];
     if (it.followsFps60) { sw.on = default_on(@"S2AFps60"); sw.enabled = NO; }
     else {

@@ -71,7 +71,7 @@ Part of #1159。4 个原创 compute 用例 `integer/bitfield_*`，输入与前�
 
 # T221 第四片：加法与最值
 
-Part of #1159。6 个原创 compute 用例 `integer/add_*`（第五片补了 `add_po`），输入与前几片相同；特殊值（`0x7fffffff` / `0x80000000` / 1）用 `MOV32I` 设。
+Part of #1159。7 个原创 compute 用例 `integer/add_*`。特殊值可由 `MOV32I` 设置，进位用例的操作数从存储缓冲载入。
 
 | 用例 | emitter | 内容 |
 |---|---|---|
@@ -80,11 +80,14 @@ Part of #1159。6 个原创 compute 用例 `integer/add_*`（第五片补了 `ad
 | `add_iscadd` | `IscaddR`、`IscaddI`、`Iscadd32i` | 移位 0 / 1 / 4 / 31、`-A` / `-B`、回绕 |
 | `add_imnmx` | `ImnmxR`、`ImnmxI` | `.U32` / `.S32` × MIN / MAX：负数对正数、0 对全 1、相等、有符号立即数 |
 | `add_cbuf_zero` | `IaddC`、`Iadd3C`、`IscaddC`、`ImnmxC` | 常量缓冲形式，对零 C0 |
-| `add_po` | `IaddR` / `IaddI` / `IaddC`、`IscaddR` / `IscaddI` / `IscaddC` 的 `.PO` | 第五片（#1339 裁定后补）：三种形式各一；B = 0xffffffff 时加一的进位、无符号回绕、有符号溢出 |
+| `add_po` | `IaddR` / `IaddI` / `IaddC`、`IscaddR` / `IscaddI` / `IscaddC` 的 `.PO` | 第五片（#1339 裁定后补）：三种形式的低字结果、无符号回绕、有符号溢出 |
+| `add_po_carry` | `IaddR` | `IADD.PO.CC` 写入 `CF`，`IADD.X Rd RZ RZ` 消费 `CF` 并写入高字 |
 
-独立期望：`python3 tests/shader_cases/integer/add_reference_test.py`（已接进 `tests/shader_cases_test.sh`），按补码 mod 2^32 算；`IMNMX` 按 `.U32` / `.S32` 比较。
+独立期望：`python3 tests/shader_cases/integer/add_reference_test.py`（已接进 `tests/shader_cases_test.sh`），按补码 mod 2^32 算；`IMNMX` 按 `.U32` / `.S32` 比较。进位用例按 33 位无符号和取高低字。
 
-**`.PO`（#1339）**：直连线裁定 `.PO`（取负两位同时置位）= 加一、两个源都不取负，即 `IADD.PO = A + B + 1`、`ISCADD.PO = (A << s) + B + 1`。依据是 nvdisasm 显示不带取负标记，以及 Mesa NAK `sm50.rs` 把「两源都取负」编成 `iadd.po`。翻译器修复在 main `75bd1f2b3`。参考模型按裁定算，`.PO` 与 `-` 同用判域外；`add_po` 在修复前的翻译器上红（见第五片 PR）。`.SAT`、`IADD3` 的半字选择与左右移、`.CC` / `.X` 不在本片。
+**`.PO`（#1339）**：直连线裁定 `.PO`（取负两位同时置位）= 加一、两个源都不取负，即 `IADD.PO = A + B + 1`、`ISCADD.PO = (A << s) + B + 1`。依据是 nvdisasm 显示不带取负标记，以及 Mesa NAK `sm50.rs` 把「两源都取负」编成 `iadd.po`。翻译器修复在 main `75bd1f2b3`。参考模型按裁定算，`.PO` 与 `-` 同用判域外；`add_po` 在修复前的翻译器上红（见第五片 PR）。`.SAT` 与 `IADD3` 的半字选择和左右移另计。
+
+`add_po_carry` 依次读回 `0 + 0xffffffff + 1`、`0xffffffff + 0 + 1` 和 `0x12345678 + 5 + 1`。这三组分别检验 `B + 1` 回绕的补偿进位、普通进位和随后清除 `CF`，读回的（低字，进位）依次为 `(0, 1)`、`(0, 1)`、`(0x1234567e, 0)`。测试助记符 `IADD.PO.CC Rd Ra Rb` 和 `IADD.X Rd Ra Rb` 限于寄存器形式，按 `InstIaddR` 的 `AvgMode`、`WriteCC` 和 `X` 字段编码。
 
 # T221 第六片：XMAD
 

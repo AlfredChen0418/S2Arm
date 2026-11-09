@@ -7,6 +7,7 @@
 3. [docs/坑记录.md](docs/坑记录.md)：先按当前任务关键词搜索坑记录标题和正文，只读匹配条目；不要把整份坑记录装进上下文。
 4. [docs/贡献者开发测试套件.md](docs/贡献者开发测试套件.md)：**四步闭环**——自查（一条命令出标准化报告）→ 自纠（按症状查 `docs/排查/` 手册）→ 自修 → 提 PR 与回报。
 5. [skills/s2arm-rootfix/SKILL.md](skills/s2arm-rootfix/SKILL.md)：**修任何问题前先加载**——先量再猜、修机制不修症状、对齐 Ryujinx 真值、先红后绿、负对照、报射程；按症状再加载 `skills/gfx-triage/` 或 `skills/native-triage/`。
+6. 改 `android/` 下的文件：再读 [android/AGENTS.md](android/AGENTS.md)（安卓只做直连、尽量不与 iOS 分叉）。
 
 必须遵守：
 - 不直接推 `main`，只提 PR；只改 issue 写明的目录。

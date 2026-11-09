@@ -303,7 +303,8 @@ public sealed partial class EnvironmentWindow
         object? session = null;
         if (packRunning) session = new Dictionary<string, object?> { ["kind"] = "ipa", ["gameId"] = packGame?.Id, ["name"] = packGame?.Name, ["phase"] = "running" };
         else if (importBusy) session = new Dictionary<string, object?> { ["kind"] = "import", ["gameId"] = null, ["name"] = importJobName, ["phase"] = "running" };
-        else if (installBusy) session = new Dictionary<string, object?> { ["kind"] = "install", ["gameId"] = SelectedGame?.Id, ["name"] = SelectedGame?.Name, ["phase"] = "running" };
+        else if (installBusy) session = new Dictionary<string, object?> { ["kind"] = "install", ["gameId"] = installGameId, ["name"] = installGameName, ["phase"] = "running",   // 装的那款，不是当前选中的（#308）
+            ["done"] = installDone, ["total"] = installTotal, ["unit"] = installUnit };
         object? install = null;
         if (readiness is { } ready && readinessFor is { } readyFor)
             install = new Dictionary<string, object?>

@@ -105,11 +105,11 @@ int main(int argc, char **argv) {
         NSMutableDictionary *specs = [NSMutableDictionary new];
         NSDictionary *group = nil;
         NSUInteger groupItems = 0; BOOL gfxGroup = NO;   // 画面组（含画面设置键）：说明对应且仅对应一个设置项；别的组（如诊断）只要求不空
-        NSDictionary *footers = @{
-            @"S2AResolutionScale": @"相对于游戏当前渲染尺寸缩放",
-            @"S2AAntiAliasing": @"对最终游戏画面减少锯齿",
-            @"S2AScalingFilter": @"用于将游戏画面缩放到屏幕",
-            @"S2AFrameRateLimit": @"设置游戏画面的帧率上限",
+        NSDictionary *footers = @{   // Root.plist 原文是英文，中文在 zh-Hans.lproj/Root.strings（#316，两边一一对应由 tests/ios_l10n_test.sh 核）
+            @"S2AResolutionScale": @"Scales relative to the game’s current render size",
+            @"S2AAntiAliasing": @"Reduces jagged edges in the final game picture",
+            @"S2AScalingFilter": @"Used to scale the game picture to the screen",
+            @"S2AFrameRateLimit": @"Sets a frame rate cap for the game picture",
         };
         for (NSDictionary *spec in plist[@"PreferenceSpecifiers"]) {
             if ([spec[@"Type"] isEqual:@"PSGroupSpecifier"]) {
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
                     specs[spec[@"Key"]] = spec;
                     check([group[@"FooterText"] hasPrefix:footers[spec[@"Key"]]], [spec[@"Key"] stringByAppendingString:@" 的组说明对应当前选项"]);
                     if ([spec[@"Key"] isEqual:keys[0]]) {
-                        check([group[@"Title"] isEqual:@"画面（改完要重开游戏）"], @"画面首组标题提示重开游戏");
+                        check([group[@"Title"] isEqual:@"Graphics (Restart the Game to Apply)"], @"画面首组标题提示重开游戏");
                     }
                 }
             }
@@ -214,7 +214,7 @@ int main(int argc, char **argv) {
             NSDictionary *docked = nil; NSUInteger count = 0;
             for (NSDictionary *spec in plist[@"PreferenceSpecifiers"])
                 if ([spec[@"Key"] isEqual:key]) { docked = spec; count++; }
-            check(count == 1 && [docked[@"Type"] isEqual:@"PSToggleSwitchSpecifier"] && [docked[@"Title"] isEqual:@"主机模式"] && [docked[@"DefaultValue"] isEqual:@NO], @"主机模式设置只有一个开关且默认关闭");
+            check(count == 1 && [docked[@"Type"] isEqual:@"PSToggleSwitchSpecifier"] && [docked[@"Title"] isEqual:@"Docked Mode"] && [docked[@"DefaultValue"] isEqual:@NO], @"主机模式设置只有一个开关且默认关闭");
             check([s2a_ios_graphics_snapshot(a)[key] isEqual:@NO], @"应用内首次读取为掌机档");
             clear_environment();
             s2a_ios_apply_graphics_settings(a);

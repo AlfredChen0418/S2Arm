@@ -64,6 +64,12 @@
       "regex": "总指挥|天眼(?:（Windows 出包机）|\\(Windows 出包机\\))?"
     },
     {
+      "id": "internal_line_name",
+      "category": "internal_name",
+      "messages_only": true,
+      "regex": "(?:主线线|合入运维线|运维线|启动器线|出包修复线|质量线|新功能线|迁仓线|单壳线|Switch ?2 ?线|满屏补丁线|满屏线|普查线|帧率能耗线|能耗线|一次成功线|画质性能线|性能线|体验线|合入线|列车线|众包线|直连线|出包速度线|卡顿线|Windows ?出包线)(?![程性路索条框])"
+    },
+    {
       "id": "internal_device_word",
       "category": "internal_name",
       "regex": "测试机"

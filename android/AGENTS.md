@@ -1,0 +1,57 @@
+# 给 AI 代理的说明：安卓线（android/）
+
+先读仓库根目录的 [AGENTS.md](../AGENTS.md)，那里的规矩在这里全部适用。本文件只补安卓线特有的说明，方向是：**安卓只做直连，不与 iOS 各写一套**。安卓直连追平 iOS 的任务总表在 #48。
+
+## 1. 安卓只做直连
+
+- 安卓线只做直连：NVN 款走 `android/native/nvn/`，Vulkan 类游戏走 `android/native/direct*`。
+- 通用路径（`graphics/vulkan/` 的 Ryujinx 后端）不再为安卓修：安卓的问题不在通用后端里修，也不新增 `s2arm.graphics_mode=generic` 专用的逻辑。
+
+## 2. 先分清你改的是哪一层
+
+```
+runtime/（装载、线程、改写器）              ← 共用：两端同一份源码
+graphics/nvn/gfx/nvn/hle_nvn.c（NVN 前端）   ← 共用
+回放层：命令解码、状态与脏位、池与别名、     ← 应当共用；目前 iOS 在 nvn_mtl.m，
+  资源身份、管线变体、通道规划、节拍策略        安卓在 mtl_vk_shim.c / vk_record.c 另写了一套
+nvn_gpu_* 后端（graphics/nvn/gfx/nvn/nvn_backend.h） ← 平台专属：只放 Metal / Vulkan API 调用
+节拍源（nvn_vsync.h）                        ← 平台专属：DisplayLink / AChoreographer
+```
+
+收敛的设计和步骤（D0–D9）见 [docs/设计_回放核心共用.md](../docs/设计_回放核心共用.md)。
+
+## 3. 尽量不分叉（建议）
+
+共用层还没成形，下面是建议，不是硬约束。确实只能写在安卓侧的，在 PR 里说一句为什么。
+
+- **新能力优先做到共用层。** 要加命令解码、状态跟踪、资源身份 / 别名、管线变体、节拍策略这类回放层能力时，先看 iOS 在 `graphics/nvn/gfx/nvn/nvn_mtl.m` 里怎么做，能抽到共用层就抽，或者做在 `nvn_gpu_*` 契约之下的 Vulkan 后端里；只能写进 `android/native/nvn/mtl_vk_shim.c`、`android/native/direct/vk_record.c`、`android/native/nvn/nvn_be_android.c` 的，PR 里说明原因。
+- **先找现成的共用件，再动手写。** 动手前查 [docs/安卓接入矩阵.md](../docs/安卓接入矩阵.md)：iOS 已有、安卓没接的模块，先接入，不重写。目前已知能直接接的有：
+  - `runtime/src/fps.c`（60 帧表）；
+  - `runtime/src/gclimit.c`；
+  - `qprompt`；
+  - `dguard`（链进来了但没武装）；
+  - `graphics/dsx` 的 SPIR-V 加固；
+  - `nvn_bcdec.c` / `nvn_fmt_expand.c`。
+- **共用文件里的平台差异，优先通过钩子、能力位或后端契约注入**，少在 `hle_nvn.c`、`runtime/src/` 里加 `#ifdef __ANDROID__` 的行为分支。
+- **同一件事已有安卓副本时，先看能不能并回共用实现**，比如 `direct_session.c` 里另写的 `s2a_direct_lookup`、`direct/attempt.c` 与 `dguard`。
+
+## 4. 零配置
+
+- 不按游戏、Title ID、设备型号或驱动版本特判；拓扑、能力一律在运行时读真值，读不到就回退并报原因。
+- 未实现的服务、不支持的能力一律报红，不返回成功兜底；跳过的绘制要计数并报出来。
+
+## 5. 性能与开关
+
+- 性能改动用 `debug.s2a.*` 运行时开关隔离，默认值写进 PR 并说明理由。
+- 同一批的几项合成一个包，整批做设备 A/B；有退步再逐项关开关定位。
+- 读数口径：
+  - 8E 要满帧，天玑 9000 目标 30 fps，只记录不作门槛；
+  - 每局标热状态和充电，能耗至少 3 局取中位；
+  - 报平均帧、p99、>33 ms 帧数和每帧 CPU 时间，不只报平均帧率。
+
+## 6. 验证
+
+- 改 `android/`：跑 `bash android/test.sh`，按 `android/gate.sh` 文件头的路由跑相关门禁，再跑 `bash tools/contrib_check.sh` 并把摘要贴进 PR。
+- 宿主测试先红后绿：修前红要红在被修的那一处，编译失败不算有效的红；带负控。
+- Vulkan 相关改动开校验层（VVL）跑；不靠关掉校验层或关掉扩展来让测试变绿。
+- 设备结论以真机为准，宿主替身不代表设备行为，PR 的「限制」里写清。

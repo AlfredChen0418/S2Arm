@@ -231,7 +231,7 @@ def assemble(template_app, output_app, *, bundle_id, display_name, icon, metadat
             if not re.fullmatch(r'[A-Za-z]{2,3}(?:[-_][A-Za-z0-9]+)*', lang) or not isinstance(name, str) or not name.strip():
                 raise BundleError(f'本地化显示名不合法：{lang}={name!r}')
             esc = name.replace('\\', '\\\\').replace('"', '\\"')
-            d = temp / f'{lang}.lproj'; d.mkdir()
+            d = temp / f'{lang}.lproj'; d.mkdir(exist_ok=True)   # 模板壳自带同语言 .lproj（宿主界面字符串表 S2ArmHost.strings，#316）：并进去，不覆盖原表
             (d / 'InfoPlist.strings').write_text(f'"CFBundleDisplayName" = "{esc}";\n', encoding='utf-8', newline='\n')
         write_icons(icon, temp)
         _, copied = _tree(temp, unsigned=True)

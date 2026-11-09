@@ -30,7 +30,9 @@
 2. 注册的 Transform passes 与 Optimizer 实际调用的优化 pass；只消费真实测试副本的 IR before/after 观察。没有变化不能计覆盖。当前注入 ConstantFolding/Simplification 操作快照，以及 XmadOptimizer 的块快照（它按块跑，before / after 是整块的操作序列，#1159 第七片）；其余遍即使被调用也不冒称覆盖。
 3. `compat/patches/series` 中生效且触及 Shader 的补丁。首个归因项是 `20261102-0640-shader-iadd-plus-one-1339.patch` 的 IADD/ISCADD `.PO` 结果加一语义。其余补丁列为未覆盖。
 
-归因复用 `integer/add_po` 的独立期望。用同一 DLL 重译这个用例时，独立子进程用 `S2A_TEST_IADD_PO_MUTATION=1` 在隔离副本里跳过 `PlusOne` 的加一处理。两版 SPIR-V 均须通过验证并由 lavapipe 执行。正常版须匹配全部 64 字，负控须在第 8–18 字（从 0 起）各少 1（按 uint32 回绕），其余 53 字相同。满足这些条件后，`coverage.json` 的 `patches.evidence` 按补丁名记录用例 ID、逐字差异、补丁和两版 SPIR-V 的 SHA256。该用例的证据范围是结果值，进位标志需要单独的用例。
+归因复用 `integer/add_po` 的独立期望。用同一 DLL 重译这个用例时，独立子进程用 `S2A_TEST_IADD_PO_MUTATION=1` 在隔离副本里跳过 `PlusOne` 的加一处理。两版 SPIR-V 均须通过验证并由 lavapipe 执行。正常版须匹配全部 64 字，负控须在第 8–18 字（从 0 起）各少 1（按 uint32 回绕），其余 53 字相同。满足这些条件后，`coverage.json` 的 `patches.evidence` 按补丁名记录用例 ID、逐字差异、补丁和两版 SPIR-V 的 SHA256。该用例的证据范围是结果值。
+
+`integer/add_po_carry` 单独验证寄存器形式的进位。`IADD.PO.CC` 写条件码，`IADD.X` 以两个 `RZ` 为操作数读出 `CF`。同一 DLL 在独立子进程中用 `S2A_TEST_IADD_PO_CARRY_MUTATION=1` 跳过 `SetPlusOneCarry`，保留 `PlusOne` 的结果加一。正常版逐字匹配独立期望。负控须让第 9 字（从 0 起）从 1 变成 0，其余 63 字逐字匹配。逐字差异与两版 SPIR-V 的 SHA256 写入 `iadd-po-carry-proof.json`，与 `coverage.json` 的结果值归因分开记录。
 
 观察只注入隔离副本，不改生产输出路径。保存实际 IR 文本和SHA256；验证 hash/source/case 一致。`coverage_test.py` 对伪声明、同 IR、损坏hash、未知opcode、错误source做拒绝负控。
 

@@ -403,14 +403,22 @@ def space(dev, nbytes, work, env=None):
     return dev.free(), need_bytes(work, nbytes, env)
 
 
-def send(dev, pack, work, say=print):
-    """推 plan 写好的批次 → 推了几批；每批写完才把它的文件记进 .pushed 并推上机；最后推索引与清单"""
+PROGRESS_PREFIX = "S2A_PUSH_PROGRESS"   # --progress-lines 打的机器读行：S2A_PUSH_PROGRESS <已传字节> <本次待传总字节> <已完成批次> <总批次>
+
+
+def send(dev, pack, work, say=print, progress=None):
+    """推 plan 写好的批次 → 推了几批；每批写完才把它的文件记进 .pushed 并推上机；最后推索引与清单。
+    progress(已传字节, 本次待传总字节, 已完成批次, 总批次)：开推时报一次 0，之后每推完一个直写大文件 / 一批报一次（#266：原先只有人读的日志行，
+    作业事件没有计数，十几分钟的正常推送被当成卡死）。分母是本次实际待传量（plan 算好的差量），不是整个游戏的大小"""
     pack, work = Path(pack), Path(work)
     files = sorted(work.glob("push_*.tsv"))
     led = work / "pushed"; ledger = led.read_text(encoding="utf-8") if led.is_file() else ""
     nt = nb = ns = nd = done = 0; ts = int(time.time()); t0 = time.time()
     dl = work / "direct_img.tsv"
     direct = [l.split("\t") for l in dl.read_text(encoding="utf-8").splitlines() if l] if dl.is_file() else []
+    batches = [[l.split("\t") for l in bf.read_text(encoding="utf-8").splitlines() if l] for bf in files]
+    total, steps, step = sum(int(w[1]) for w in direct) + sum(int(w[1]) for b in batches for w in b), len(direct) + len(files), 0
+    if progress: progress(0, total, 0, steps)
     if direct:   # 先把「已应用」作废：镜像写到一半时机上不能判成就绪（App 看到长度不对会提示重新传）
         e = work / "not_applied"; e.write_bytes(b"")
         try: dev.put(e, f"{rp(dev)}/.applied")
@@ -425,8 +433,9 @@ def send(dev, pack, work, say=print):
             raise Fail(f"资源传输中断：{w[0]} 没传完，重新装到 iPhone 会从头再传一次")
         done += int(w[1]); nt += 1; ledger += f"{w[0]}\t{w[2]}\n"; led.write_text(ledger, encoding="utf-8"); dev.put(led, f"{rp(dev)}/.pushed")
         say(f"  直写 {w[0]}：{int(w[1]) / 1e9:.2f} GB，{time.time() - t1:.0f} 秒，{int(w[1]) / 1e6 / max(time.time() - t1, 1e-3):.1f} MB/s")
-    for k, bf in enumerate(files):
-        b = [l.split("\t") for l in bf.read_text(encoding="utf-8").splitlines() if l]
+        step += 1
+        if progress: progress(done, total, step, steps)
+    for k, b in enumerate(batches):
         lst = work / "push.lst"; lst.write_text("".join(w[0] + "\n" for w in b), encoding="utf-8")
         tn = f"{ts}_{k:03d}.tar"
         try:
@@ -442,6 +451,8 @@ def send(dev, pack, work, say=print):
         ledger += "".join(f"{w[0]}\t{w[2]}\n" for w in b); led.write_text(ledger, encoding="utf-8"); dev.put(led, f"{rp(dev)}/.pushed")
         if len(files) > 1:
             say(f"  批 {k + 1}/{len(files)}：{sz >> 20} MB，累计 {done / 1e9:.2f} GB，{done / 1e6 / max(time.time() - t0, 1e-3):.1f} MB/s")
+        step += 1
+        if progress: progress(done, total, step, steps)
     for f in ("index.tsv", "manifest.json"):
         try:
             dev.put(pack / f, f"{rp(dev)}/{f}")
@@ -496,7 +507,7 @@ def apply(dev, pack, work, nb, say=print, sleep=time.sleep, now=time.time, stall
                f"资源包推进去了，但起 App 后 {stall} 秒机上解包没有开始：打开这款游戏、保持在前台等它导入完")
 
 
-def run(dev, pack, work, full=False, say=print, env=None, on_plan=None):
+def run(dev, pack, work, full=False, say=print, env=None, on_plan=None, progress=None):
     """一条龙：算 → 核空间（不够报红，读不到照推）→ 推 → (推了几批, 文件数, 字节数)"""
     nb, nt, nbytes = plan(dev, pack, work, full, say)
     if on_plan: on_plan(nb, nt, nbytes)
@@ -506,7 +517,7 @@ def run(dev, pack, work, full=False, say=print, env=None, on_plan=None):
         elif fb < need:
             say(f"【红】测试设备剩余空间不足：可写 {fb >> 30} GB < 要 {need >> 30} GB（待推 {nbytes >> 30} GB + 解开时最大一批 + 余量）；先卸掉机上不用的包")
             raise Fail("测试设备空间不足")
-    send(dev, pack, work, say)
+    send(dev, pack, work, say, progress)
     return nb, nt, nbytes
 
 
@@ -517,6 +528,7 @@ def main(argv=None):
     ap.add_argument("op", choices=("run", "plan", "free", "send", "need")); ap.add_argument("device"); ap.add_argument("bundle_id"); ap.add_argument("pack")
     ap.add_argument("--work"); ap.add_argument("--full", action="store_true"); ap.add_argument("--udid"); ap.add_argument("--devpush")
     ap.add_argument("--via", choices=("devpush", "devicectl")); ap.add_argument("--apply", action="store_true")
+    ap.add_argument("--progress-lines", action="store_true")   # 推送进度另打机器读的行「PROGRESS_PREFIX 已传 总量 批 总批」（Mac 装机作业 pack/jobs/install.py 解析成作业计数）
     ap.add_argument("--docs", default=DOCS); ap.add_argument("--launch-ctx")   # 多款容器：本款设备侧文档根 Documents/games/<游戏号>、起 App 解包时的 S2A_LAUNCH_CTX   # run 推完起一次 App 只解包并等解完（s2armctl push-pack / Windows 装机）
     a = ap.parse_args(argv)
     pack = Path(a.pack)
@@ -540,7 +552,8 @@ def main(argv=None):
         if a.op == "send":
             state.write_text(f"SENT {send(dev, pack, work, say)}\n"); return 0
         say(f"推资源包：设备 {a.device} 包 {a.bundle_id} 目录 {pack}" + ("（--full 整包重推）" if a.full else ""))
-        nb, _, _ = run(dev, pack, work, a.full, say)
+        lines = (lambda d, t, k, n: print(f"{PROGRESS_PREFIX} {d} {t} {k} {n}", flush=True)) if a.progress_lines else None
+        nb, _, _ = run(dev, pack, work, a.full, say, progress=lines)
         if a.apply: apply(dev, pack, work, nb, say)
         else: say(f"资源包：推完 {nb} 批；起一次 App 让它解开 .incoming（S2A_PACK_APPLY_ONLY=1 只解包不跑游戏）" if nb else "资源包：机上已是最新，不用推")
         return 0

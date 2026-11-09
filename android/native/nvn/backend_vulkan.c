@@ -2740,16 +2740,17 @@ static int copy_region(const struct nvn_gpu_tex_s *t, uint32_t level, const NVNc
     if (t->target == NVN_TEXTURE_TARGET_3D) {
         if (r && (r->width > 0 || r->height > 0)) {
             uint32_t rz = (uint32_t)(r->depth > 0 ? r->depth : 1);
-            if (r->xoffset < 0 || r->yoffset < 0 || r->zoffset < 0 ||
+            if (r->xoffset < 0 || r->yoffset < 0 ||
                 (uint32_t)r->xoffset + (uint32_t)r->width > w ||
-                (uint32_t)r->yoffset + (uint32_t)r->height > h ||
-                (uint32_t)r->zoffset + rz > d) return -1;
+                (uint32_t)r->yoffset + (uint32_t)r->height > h) return -1;
             *off = (VkOffset3D){r->xoffset, r->yoffset, r->zoffset};
             *ext = (VkExtent3D){(uint32_t)r->width, (uint32_t)r->height, rz};
         } else {
             *off = (VkOffset3D){0, 0, r ? r->zoffset : 0};
             *ext = (VkExtent3D){w, h, (uint32_t)(r && r->depth > 0 ? (uint32_t)r->depth : d)};
         }
+        // 两个宽高分支都必须落在当前 mip 的深度内；减法避免区间末端溢出。
+        if (off->z < 0 || (uint32_t)off->z >= d || ext->depth > d - (uint32_t)off->z) return -1;
         return 0;
     }
     if (r && r->width > 0 && r->height > 0) {

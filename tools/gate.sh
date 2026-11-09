@@ -28,6 +28,10 @@
 #   本机那份与 gate-host 那份（GATE_PLAN）各用各机器上的缓存。GATE_TEST_CACHE=0 关；算键失败 / 读不到一律当没命中照跑（宁可多跑）
 set -u
 R=$(git rev-parse --show-toplevel) || exit 1; cd "$R"
+# 停门禁只停本树（11-09：一条线 pkill -f "tools/gate.sh" 停自己的预跑，连别的会话的门禁和列车本机步骤一起杀了）：
+#   本份门禁的 pid 写本工作树自己的 git 目录（git rev-parse --git-dir，每棵工作树一份、不算改动不进提交），退出删掉；
+#   要停用 tools/gate_stop.sh <工作树>（核对 pid 确是这棵树的门禁、只收它的后代）。不许按进程名 pkill / killall 门禁（规矩：关进程按完整路径，别按进程名）
+GPF=$(git rev-parse --absolute-git-dir 2> /dev/null)/s2a_gate.pid; echo $$ > "$GPF" 2> /dev/null || GPF=/dev/null
 # 统一工具链（tools/toolchain.env）：各步编译 / 单测都用这一套。只有带这份文件的仓库才引入（列车 / 门禁单测的假仓库只拷了 gate.sh，没有工具链，也不编东西）
 # 多宿主（10-30 维护者 / 维护者：自检要证明的是「这台宿主能证明的那部分」，剩下的交列车在 gate-host 上证）：
 #   没有苹果工具链的宿主（Linux、WSL 等非 macOS）照样跑门禁——平台无关的步和本宿主平台的钩子（android、launchers/linux …）本机跑、照判红绿；
@@ -48,7 +52,7 @@ apple_step() {
 # 固定 Python 解释器（11-07 维护者：android_widen_disabled_test 用 ${S2A_PY:-python3}，gate-host 门禁没设 S2A_PY 就落到 homebrew 裸 python3，缺 lz4 红；
 #   固定解释器 ~/.s2arm/venv 里按 tools/rewriter-requirements.txt 钉了版本、doctor.sh 预检核它）：没给 S2A_PY 且固定解释器在 → 各步统一用它
 [ -z "${S2A_PY:-}" ] && [ -x "$HOME/.s2arm/venv/bin/python3" ] && export S2A_PY=$HOME/.s2arm/venv/bin/python3
-TIER=${GATE_TIER:-full}; PLANM=${GATE_PLAN:-}; RER=${GATE_RERUN:-}
+TIER=${GATE_TIER:-full}; PLANM=${GATE_PLAN:-}; RER=${GATE_RERUN:-}; NOLQ=${GATE_NO_LOADQ:-}   # 列车起的门禁（下文 unset 前先记下：本机预跑令牌豁免它）
 # 与列车/自检共用 gate_tier。普通文档才降 doc；敏感文档不降档。
 # 改动集为空不改档；只允许降为 doc，保留调用者显式给的其他档位。
 CHG=${GATE_CHANGED:-$(git -c core.quotepath=off diff --name-only "origin/main...${GATE_REV:-HEAD}" 2> /dev/null)}
@@ -57,7 +61,8 @@ if [ -n "$CHG" ]; then
   [ "$(gate_tier "$(tr ' ' '\n' < <(printf '%s\n' "$CHG"))")" != doc ] || TIER=doc
 fi
 # 远端那一份（GATE_PLAN 非空）把每步结果写进仓库里的 GATE_OUT（build/ 下、被忽略），本机经 维护方工具 --pull 拉回；本机那份用临时目录
-if [ -n "$PLANM" ]; then L=$R/${GATE_OUT:?远端计划要给 GATE_OUT}; rm -rf "$R/build/gate_out"; mkdir -p "$L"; else L=$(mktemp -d); trap 'rm -rf "$L"' EXIT; fi
+if [ -n "$PLANM" ]; then L=$R/${GATE_OUT:?远端计划要给 GATE_OUT}; rm -rf "$R/build/gate_out"; mkdir -p "$L"; trap '[ "$(cat "$GPF" 2> /dev/null)" = $$ ] && rm -f "$GPF"' EXIT
+else L=$(mktemp -d); trap 'rm -rf "$L"; [ "$(cat "$GPF" 2> /dev/null)" = $$ ] && rm -f "$GPF"' EXIT; fi
 # C / ObjC / C++ 按内容编译缓存（tools/cc_cache.sh，10-30 列车线）：本机那份与 gate-host 那份各自打开，每次编译的命中情况记 $L/ccache.log（gate-host 那份随结果目录拉回）
 [ -f tools/cc_cache.sh ] && { source tools/cc_cache.sh; S2A_CCACHE_LOG=$L/ccache.log s2a_ccache_on "$R"; }
 # doc 仍须扫描；只有非 doc 档需要统一 Apple 编译工具链（#665）。
@@ -293,6 +298,12 @@ tcw() {   # tcw <步号> <命令>：有键就包一层：命中 → 不跑、记
   printf 'if python3 tools/test_cache.py hit %q %q; then : > %q; echo "输入与工具链没变，沿用上次的绿"; exit 0; fi; ( %s ); _tr=$?; [ $_tr = 0 ] && python3 tools/test_cache.py put %q %q; exit $_tr' \
     "$TCD" "$k" "$L/$1.hit" "$2" "$TCD" "$k"; }
 LI=(); for i in $(seq 1 $N); do [ "${WH[$i]}" = 本机 ] && LI+=("$i"); done; tc_keys ${LI[@]+"${LI[@]}"}
+# 本机预跑整份令牌（tools/run_token.sh，11-09）：有本机步才领，同机同时不超过 GATE_RUN_PAR 份（缺省 2）；领不到排队。
+#   列车（GATE_NO_LOADQ=1）/ 门禁步里嵌套的门禁 / 远端那份（GATE_PLAN）/ 单测假仓库（没有路由器；专测的 run_token_test 给 S2A_GATE_RUNTOK_TEST）不领
+if [ ${#LI[@]} -gt 0 ] && [ -z "$PLANM" ] && [ -z "$NOLQ" ] && [ -z "${GATE_IN_STEP:-}" ] && [ -f tools/run_token.sh ] \
+   && { [ -f tools/gate_route.py ] || [ -n "${S2A_GATE_RUNTOK_TEST:-}" ]; }; then
+  source tools/run_token.sh; runtok_take $$ || { echo "门禁 环境未就绪：拿不到本机预跑令牌（tools/run_token.sh）"; exit 75; }
+fi
 # 本机那份：整步本机的 + 拆出来的子项；gate-host 那份一次 维护方工具 跑完（带 @gate 共享数据，结果目录拉回 $L/r），两边同时跑
 for i in $(seq 1 $N); do s=${STEPS[$((i - 1))]}; [ "${WH[$i]}" = 本机 ] && { r1=${s#*	}; job "$i" "$(tcw "$i" "${r1%	*}")" "${s##*	}"; }; done
 { j=0; for i in ${LPI[@]+"${LPI[@]}"}; do s=${STEPS[$((i - 1))]}; r1=${s#*	}; job "$i.k$j" "export GATE_ONLY='${LPK[$j]}'; ${r1%	*}" "${s##*	}"; j=$((j + 1)); done; }
@@ -389,6 +400,9 @@ where=; if [ "$HOST" = gate-host ]; then
   if [ -n "$WHY" ]; then where="（GATE_HOST=${RHN}，整份本机跑：${WHY}）"; else where="（${RHN} $nm 步，其中 $ns 步的子项本机另跑；本机 $nl 步$([ $FBN -gt 0 ] && echo "，其中 $FBN 步是 ${RHN} 不可用退回本机补跑")）"; fi
   [ -f "$L/remote.log" ] && grep -m1 '^remote：rc=' "$L/remote.log" | cut -c1-300 | sed "s/^/${RHN} 执行：/"
 fi
+# 远端同步阶段的黄字（11-09：remote.sh 同步门禁数据时本机缺了离线包等，原先静默跳过，门禁机那份一旧就没人发现）：原样抄进门禁日志，
+#   总结行在「应跑 N 步」后面点一句（列车回执、守望都只读末行，守望还截前 120 字，所以点在前面、写短）
+RWARN=; if [ -f "$L/remote.log" ]; then RW=$(grep '^【黄】remote：' "$L/remote.log" | sort -u | cut -c1-300); [ -n "$RW" ] && { printf '%s\n' "$RW"; RWARN="；⚠ ${RHN} 同步缺 $(grep -c . <<< "$RW") 项（见黄字行）"; }; fi
 CCS=; [ -s "$L/ccache.log" ] && CCS="本机 $(s2a_ccache_sum "$L/ccache.log")"; [ -s "$L/r/ccache.log" ] && CCS="${CCS:+${CCS}；}${RHN:-gate-host} $(s2a_ccache_sum "$L/r/ccache.log")"
 [ -n "$CCS" ] && echo "编译缓存（ccache）：$CCS"
 # 红步清单（机读，tab 分隔）：列车据此判假红、只重跑这几步（GATE_RERUN）；末行仍是总结
@@ -402,13 +416,13 @@ for f in "$L/stop" "$L/r/stop"; do [ -f "$f" ] && { echo "早停：确定性步�
 # 远端那份：结果齐了的标记（本机凭它认这次的结果，没有 = 远端没跑完）。写在「环境未就绪退 75」之前（11-02：远端有一步自报 75 时整份没写标记，
 #   本机当成 gate-host 不可用、把 gate-host 已绿的 11 步全部退回本机重跑，挤本机显卡与普查）
 [ -n "$PLANM" ] && basename "$L" > "$L/done"
-if { [ -n "${QWHY:-}" ] || [ ${#LQ[@]} -gt 0 ]; } && [ $real = 0 ]; then echo "门禁 环境未就绪：$TIER 档，跑了 $ran 步 / 应跑 $N 步$where"; exit 75; fi
+if { [ -n "${QWHY:-}" ] || [ ${#LQ[@]} -gt 0 ]; } && [ $real = 0 ]; then echo "门禁 环境未就绪：$TIER 档，跑了 $ran 步 / 应跑 $N 步${RWARN}$where"; exit 75; fi
 macsum
 # 宿主项汇总：机读行原样（去重）；有待证项 → 末行写「本机绿、待<类别>证」，不许被当成整份门禁绿（列车另核证明）
 HPL=; if [ -s "$L/hostlines" ]; then sort -u "$L/hostlines" > "$L/hostlines.u"; cat "$L/hostlines.u"
   while IFS=$'\t' read -r k c it st; do [ "$k" = 待宿主证 ] && echo "⏭ ${it}（${st}）：本机不是${c}，待${c}证"; done < "$L/hostlines.u"
   HPL=$(awk -F'\t' '$1 == "待宿主证" { n[$2]++ } END { for (c in n) printf "；待%s证 %d 项", c, n[c] }' "$L/hostlines.u"); fi
-if [ -n "$HPL" ] && [ "$MACN" = 0 ]; then echo "门禁 $([ $red = 0 ] && echo "本机绿、待宿主证" || echo 红)：$TIER 档，本机已证：跑了 $ran 步 / 应跑 $N 步${HPL}$where"
+if [ -n "$HPL" ] && [ "$MACN" = 0 ]; then echo "门禁 $([ $red = 0 ] && echo "本机绿、待宿主证" || echo 红)：$TIER 档，本机已证：跑了 $ran 步 / 应跑 $N 步${RWARN}${HPL}$where"
 elif [ "$MACN" -gt 0 ]; then echo "门禁 $([ $red = 0 ] && echo 本机绿、待 Mac 证 || echo 红)：$TIER 档，本机已证：跑了 $ran 步 / 应跑 $N 步${MACL}${HPL}"
-else echo "门禁 $([ $red = 0 ] && echo 绿 || echo 红)：$TIER 档，跑了 $ran 步 / 应跑 $N 步$where"; fi
+else echo "门禁 $([ $red = 0 ] && echo 绿 || echo 红)：$TIER 档，跑了 $ran 步 / 应跑 $N 步${RWARN}$where"; fi
 exit $red

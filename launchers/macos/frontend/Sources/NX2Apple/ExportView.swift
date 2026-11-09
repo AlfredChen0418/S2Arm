@@ -291,6 +291,7 @@ struct ExportView: View {
         case .checking: return loc.t("s2arm.env.checking")
         case .environment: return loc.t("s2arm.export.block.environment")
         case .busy: return loc.t("s2arm.export.block.busy")
+        case .alreadyQueued: return loc.t("s2arm.export.block.alreadyQueued")
         }
     }
 

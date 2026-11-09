@@ -773,6 +773,16 @@ final class WorkerOutput: @unchecked Sendable {
             }
         }
     }
+    /// enqueue 会不会被挡回、为什么（控制口 POST /build target=mac 先问它：原先挡回时静默 return，控制口照回 ok 却没建任务）；不挡 → nil
+    func enqueueBlocker(_ game: Game) -> String? {
+        // 同 importPrerequisitesReady 的三条，但不弹引导页（这里只是问）
+        if !environmentReady { return "环境缺东西：看 GET /state 的 checks，处理后 POST /environment 重查" }
+        if preferences.library.isEmpty { return "还没选游戏库：s2armctl library <目录>" }
+        if !hasImportedKeys || !FileManager.default.isReadableFile(atPath: privateRoot.appendingPathComponent("keys/prod.keys").path) { return "还没放密钥：s2armctl keys <prod.keys>" }
+        if !game.buildable { return "这款还不能编译：" + ((game.missing ?? []).isEmpty ? "兼容性不支持" : (game.missing ?? []).joined(separator: "、")) }
+        if queue.contains(game.id) || tasks.contains(where: { $0.operation == "build" && $0.gameId == game.id && $0.active && !$0.id.hasPrefix("queued-") }) { return "这款已在编译或排队，没有新建任务" }
+        return nil
+    }
     func enqueue(_ game: Game, auto: Bool = false) {
         guard importPrerequisitesReady() else { return }
         guard game.buildable else { showRequirements(game); return }

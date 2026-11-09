@@ -1351,6 +1351,7 @@
   "s2arm.export.basis": "from the last %d runs on this Mac",
   "s2arm.export.basisReuse": "the rest reuses the cache",
   "s2arm.export.block.busy": "Another task is running. Export when it is done.",
+  "s2arm.export.block.alreadyQueued": "This game is already exporting or queued. Try again when it is done.",
   "s2arm.export.block.environment": "This Mac is missing components the export needs.",
   "s2arm.export.block.keys": "prod.keys (the keys that decrypt the game) is not in place yet. Add it to export.",
   "s2arm.export.block.noPlatform": "Pick at least one platform to export to.",

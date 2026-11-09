@@ -1,7 +1,7 @@
 #import "cpatch_model.h"
+#import "s2a_l10n.h"
 
 NSString *const S2ACPatchDefaultsKey = @"S2ACommunityPatches";
-NSString *const S2ACPatchNotice = @"宽屏和 60 帧会提高系统负载和耗电，换取更好的游玩体验，低配设备请谨慎选择";
 
 @implementation S2ACPatchItem
 - (BOOL)followsFps60 { return [self.ident hasPrefix:@"fps:"]; }
@@ -27,30 +27,30 @@ NSString *S2ACPatchClassify(NSString *name, NSString *category, NSString *ident)
 
 NSString *S2ACPatchTitle(NSString *name, NSString *group) {
     NSString *fps = cap(name, @"(\\d+)\\s*fps", 1);
-    if (has(name, @"split\\s*screen") && fps) return [NSString stringWithFormat:@"强制 %@ 帧（分屏）", fps];
-    if (has(name, @"present interval|swap interval")) return [NSString stringWithFormat:@"%@ 帧（交换间隔 2→1）", cap(name, @"->\\s*(\\d+)\\s*fps", 1) ?: @"60"];
-    if (has(name, @"enabler") && fps) return [NSString stringWithFormat:@"%@ 帧（启用钩子）", fps];
-    if (has(name, @"\\d+\\s*fps in game") && has(name, @"cutscene")) return [NSString stringWithFormat:@"游戏中 %@ 帧（过场 %@ 帧）", fps, cap(name, @"(\\d+)\\s*fps\\s*cutscene", 1) ?: @"30"];
-    if (fps) return [NSString stringWithFormat:@"%@ 帧", fps];
+    if (has(name, @"split\\s*screen") && fps) return [NSString stringWithFormat:S2AL(@"cpatch.title.splitScreen"), fps];
+    if (has(name, @"present interval|swap interval")) return [NSString stringWithFormat:S2AL(@"cpatch.title.swapInterval"), cap(name, @"->\\s*(\\d+)\\s*fps", 1) ?: @"60"];
+    if (has(name, @"enabler") && fps) return [NSString stringWithFormat:S2AL(@"cpatch.title.enabler"), fps];
+    if (has(name, @"\\d+\\s*fps in game") && has(name, @"cutscene")) return [NSString stringWithFormat:S2AL(@"cpatch.title.inGame"), fps, cap(name, @"(\\d+)\\s*fps\\s*cutscene", 1) ?: @"30"];
+    if (fps) return [NSString stringWithFormat:S2AL(@"cpatch.title.fps"), fps];
     NSString *w = cap(name, @"\\b(\\d{3,4})\\s*x\\s*(\\d{3,4})\\b", 1), *h = cap(name, @"\\b(\\d{3,4})\\s*x\\s*(\\d{3,4})\\b", 2);
-    if (w) return [NSString stringWithFormat:@"分辨率 %@×%@%@", w, h, has(name, @"docked") ? @"（主机模式）" : has(name, @"handheld") ? @"（掌机模式）" : @""];
-    if (has(name, @"depth of field|\\bdof\\b")) return has(name, @"remov|disabl") ? @"去景深" : has(name, @"improv") ? @"改进景深" : @"景深调整";
-    if (has(name, @"dynamic resolution") && has(name, @"disabl|remov")) return @"关动态分辨率";
-    if (has(name, @"resolution scaling") && has(name, @"disabl|remov")) return @"关分辨率缩放（固定分辨率）";
-    if (has(name, @"lod\\s*bias")) return @"改进 LOD 偏移";
-    if (has(name, @"motion blur") && has(name, @"remov|disabl")) return @"去动态模糊";
-    if (has(name, @"outline") && has(name, @"remov|disabl")) return @"去角色描边";
-    if (has(name, @"shadow resolution") && has(name, @"increas|improv")) return @"提高阴影分辨率";
-    if (has(name, @"cutscene") && has(name, @"effect") && has(name, @"remov|disabl")) return @"去过场特效";
+    if (w) return [NSString stringWithFormat:S2AL(@"cpatch.title.resolution"), w, h, has(name, @"docked") ? S2AL(@"cpatch.title.docked") : has(name, @"handheld") ? S2AL(@"cpatch.title.handheld") : @""];
+    if (has(name, @"depth of field|\\bdof\\b")) return has(name, @"remov|disabl") ? S2AL(@"cpatch.title.dofRemove") : has(name, @"improv") ? S2AL(@"cpatch.title.dofImprove") : S2AL(@"cpatch.title.dofTweak");
+    if (has(name, @"dynamic resolution") && has(name, @"disabl|remov")) return S2AL(@"cpatch.title.noDynamicRes");
+    if (has(name, @"resolution scaling") && has(name, @"disabl|remov")) return S2AL(@"cpatch.title.noResScaling");
+    if (has(name, @"lod\\s*bias")) return S2AL(@"cpatch.title.lodBias");
+    if (has(name, @"motion blur") && has(name, @"remov|disabl")) return S2AL(@"cpatch.title.noMotionBlur");
+    if (has(name, @"outline") && has(name, @"remov|disabl")) return S2AL(@"cpatch.title.noOutlines");
+    if (has(name, @"shadow resolution") && has(name, @"increas|improv")) return S2AL(@"cpatch.title.shadowRes");
+    if (has(name, @"cutscene") && has(name, @"effect") && has(name, @"remov|disabl")) return S2AL(@"cpatch.title.noCutsceneFx");
     NSString *ratio = cap(name, @"\\b(21:9|32:9|16:10)\\b", 1);
-    if (ratio) return [@"宽屏 " stringByAppendingString:ratio];
-    if (has(name, @"ultra\\s*wide|widescreen|aspect")) return @"超宽屏";
-    if (has(name, @"\\bgraphics?\\b")) return @"画面增强";
-    return [group isEqual:@"widescreen"] ? @"宽屏补丁" : [group isEqual:@"fps"] ? @"帧率补丁" : @"画面补丁";
+    if (ratio) return [NSString stringWithFormat:S2AL(@"cpatch.title.ratio"), ratio];
+    if (has(name, @"ultra\\s*wide|widescreen|aspect")) return S2AL(@"cpatch.title.ultrawide");
+    if (has(name, @"\\bgraphics?\\b")) return S2AL(@"cpatch.title.graphics");
+    return [group isEqual:@"widescreen"] ? S2AL(@"cpatch.title.widescreenPatch") : [group isEqual:@"fps"] ? S2AL(@"cpatch.title.fpsPatch") : S2AL(@"cpatch.title.gfxPatch");
 }
 
 NSArray<S2ACPatchGroup *> *S2ACPatchGroupsFromTSV(NSString *text) {
-    static NSString *const kinds[] = {@"widescreen", @"fps", @"gfx"}, *const titles[] = {@"宽屏", @"60 帧", @"画面"};
+    static NSString *const kinds[] = {@"widescreen", @"fps", @"gfx"};
     NSMutableArray<S2ACPatchItem *> *byKind[3] = {[NSMutableArray new], [NSMutableArray new], [NSMutableArray new]};
     NSMutableDictionary<NSString *, S2ACPatchItem *> *seen = [NSMutableDictionary new];
     NSArray<NSString *> *lines = [text componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet];
@@ -70,7 +70,7 @@ NSArray<S2ACPatchGroup *> *S2ACPatchGroupsFromTSV(NSString *text) {
     for (int k = 0; k < 3; k++) {
         if (!byKind[k].count) continue;
         S2ACPatchGroup *g = [S2ACPatchGroup new];
-        g.kind = kinds[k]; g.title = titles[k]; g.items = byKind[k];
+        g.kind = kinds[k]; g.title = k == 0 ? S2AL(@"cpatch.group.widescreen") : k == 1 ? S2AL(@"cpatch.group.fps") : S2AL(@"cpatch.group.gfx"); g.items = byKind[k];
         [groups addObject:g];
     }
     return groups;

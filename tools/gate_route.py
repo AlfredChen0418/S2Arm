@@ -136,7 +136,7 @@ def test_cover(test, files, by_name, full=False):
     if only is not None:
         gone = [g for g in only if not re.search(r'[*?\[]', g) and g not in FILESET]   # 写错 / 改名的路径永远对不上 = 这支单测再也不跑，报红
         if gone: sys.exit(f'【红】gate_route：{test} 的「门禁只看」里 {" ".join(gone)} 不在仓库里（改名了要同笔改这行）')
-        if not full: return {test}, globs + only, always
+        if not full: return {test} | build_cover([txt] + [read_text(f) for f in FILESET if f.endswith(('.sh', '.py')) and any(fnmatch.fnmatch(f, g) for g in only)]), globs + only, always
         globs = globs + only
     while todo:
         f = todo.pop()
@@ -145,7 +145,40 @@ def test_cover(test, files, by_name, full=False):
         for g in got - seen: seen.add(g); todo.append(g)
     for a in closures:   # 10-27 维护者：#550 改 runtime/run_mac.sh、新增 tools/mac_chain_check.py，落进直连阶段闭包，门禁没选 stage_keys_test，main 红
         seen |= stage_closure(tuple(a))
+    seen |= build_cover([read_text(f) for f in seen if f.endswith(('.sh', '.py')) or f == test])
     return seen, globs, always
+
+
+# 构建清单（11-09 维护方：feat/launch-settings 改 macos/front_mac.m，present_settings_test 现算 HOST_SRCS 把它编进来，
+#   头上「门禁只看」手写清单没有它，列车没跑、合入后 main 红；同日 input_config_apple 同因退回一次——靠人手写覆盖面记不住）：
+#   单测本身或它覆盖到的 .sh / .py 里用美元号加括号展开这些构建清单 → 覆盖面并进 make 从仓库根现算的清单（Mac 前端开 / 关两种取并集），「门禁只看」也并
+BUILD_VARS = ('HOST_SRCS', 'IOS_SRCS')
+_BUILD = {}
+
+
+def read_text(f):
+    try: return open(f, encoding='utf-8', errors='replace').read()
+    except OSError: return ''
+
+
+def build_files(var):
+    if var not in _BUILD:
+        out = set()
+        for extra in ([], ['S2A_MAC_FRONTEND=1']):
+            p = subprocess.run(['make', '-s', '-f', 'Makefile', '-f', '-', '_gate_route_list', *extra],
+                               input=f'_gate_route_list:;@echo $({var})\n', capture_output=True, text=True)
+            if p.returncode: sys.exit(f'【红】gate_route：make 算不出构建清单 {var}（{p.stderr.strip()[:200]}）——推不出覆盖面不能静默放过')
+            out |= {f for f in p.stdout.split() if f in FILESET}
+        out |= {f for f in FILESET if f == 'Makefile' or f.endswith('/build.mk')}   # 清单本身由根 Makefile 与各 build.mk 拼出：改清单（加删源文件）也跑
+        _BUILD[var] = out
+    return _BUILD[var]
+
+
+def build_cover(texts):
+    out = set()
+    for v in BUILD_VARS:
+        if any('$(' + v + ')' in t for t in texts): out |= build_files(v)   # 只认构建命令里展开清单（美元号加括号取值）；单纯提到这个词（说明文字、定义清单的 .mk）不算
+    return out
 
 
 _CLOSURE = {}
