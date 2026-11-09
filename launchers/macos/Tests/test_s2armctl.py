@@ -46,6 +46,18 @@ class WaitTests(unittest.TestCase):
             ctl.wait("game", operation, limit)
         return result.exception.code, call.call_count, output.getvalue()
 
+    def test_space_override_flag_reaches_the_app(self):
+        for argv, path, body in [
+                (["build", "G", "mac", "--space-override"], "/build", {"gameId": "G", "target": "mac", "spaceOverride": True}),
+                (["build", "G", "--space-override"], "/build", {"gameId": "G", "target": "ios", "spaceOverride": True}),
+                (["build", "G", "ios"], "/build", {"gameId": "G", "target": "ios"}),
+                (["ipa", "G", "--space-override"], "/ipa", {"gameId": "G", "spaceOverride": True}),
+                (["ipa", "G"], "/ipa", {"gameId": "G"})]:
+            with mock.patch.object(ctl, "call", return_value={"ok": True}) as call, mock.patch.object(ctl.sys, "argv", ["s2armctl", *argv]), \
+                    mock.patch("builtins.print"):
+                ctl.main()
+            call.assert_called_once_with("POST", path, body)
+
     def test_queued_then_running_then_completed(self):
         old = task("old", "completed", 1)
         states = [state(old, task("queued-game", "queued", 2), queue=["game"]),

@@ -35,6 +35,7 @@ import S2ArmAppleAdapter
         guard let model else { return .bad("界面已关") }
         let a = r.body
         func str(_ k: String) -> String? { a[k] as? String }
+        let spaceOverride = a["spaceOverride"] as? Bool ?? false   // 同界面「仍然继续」：磁盘预检不够也照出，真写满会停下报错
         func game(_ k: String = "gameId") -> GameSummary? { str(k).flatMap { id in model.games.first { $0.id == id } } }
         func busy() -> ControlReply? { model.busy ? .bad("有作业在跑（\(model.session?.name ?? "")）：等它结束或 cancel 再来", code: 409) : nil }
         func blocked(_ b: ExportBlocker?) -> ControlReply {
@@ -84,16 +85,16 @@ import S2ArmAppleAdapter
             model.importGames(ps.map { URL(fileURLWithPath: $0) }); return .ok()
         case ("POST", "/prepare"):
             guard let g = game() else { return .bad("没有这个 gameId") }
-            return blocked(model.export(g, platforms: [.mac]))
+            return blocked(model.export(g, platforms: [.mac], spaceOverride: spaceOverride))
         case ("POST", "/ipa"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             return blocked(model.export(g, platforms: [.ios],
-                                        deviceTarget: deviceTarget ?? (probe["connected"] as? [[String: Any]])?.first))
+                                        deviceTarget: deviceTarget ?? (probe["connected"] as? [[String: Any]])?.first, spaceOverride: spaceOverride))
         case ("POST", "/build"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             switch str("target") ?? "ios" {
-            case "ios", "iphone", "ipad": return blocked(model.export(g, platforms: [.ios]))
-            case "mac", "macos": return blocked(model.export(g, platforms: [.mac]))
+            case "ios", "iphone", "ipad": return blocked(model.export(g, platforms: [.ios], spaceOverride: spaceOverride))
+            case "mac", "macos": return blocked(model.export(g, platforms: [.mac], spaceOverride: spaceOverride))
             case "android", "harmony", "ohos": return ControlReply(code: 409, body: ControlReply.json(["error": "即将上线，敬请期待", "comingSoon": true]))
             default: return .bad("target 只认 ios / mac / android / harmony")
             }
@@ -189,8 +190,8 @@ import S2ArmAppleAdapter
         ["POST /keys {path}", "导入 prod.keys"],
         ["POST /games {paths:[…]}", "放入游戏（NSP / XCI 文件或文件夹；本体、更新、DLC 一起放）；放完会自动准备 Mac 运行"],
         ["POST /prepare {gameId}", "Mac 准备运行（出 Mac 版）"],
-        ["POST /ipa {gameId}", "打 iPhone 包（出 IPA + 资源包）；没装 .NET SDK 会先自动装"],
-        ["POST /build {gameId, target}", "出包：target = ios（iPhone / iPad，缺省）| mac | android | harmony；安卓、鸿蒙回 409「即将上线，敬请期待」"],
+        ["POST /ipa {gameId, spaceOverride?}", "打 iPhone 包（出 IPA + 资源包）；没装 .NET SDK 会先自动装；spaceOverride = true 同界面「仍然继续」"],
+        ["POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」，磁盘预检不够也照出；target = ios（iPhone / iPad，缺省）| mac | android | harmony；安卓、鸿蒙回 409「即将上线，敬请期待」"],
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
         ["POST /install {gameId}", "装到 iPhone（清单全齐才能装）"],
         ["POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）"],

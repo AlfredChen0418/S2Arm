@@ -15,6 +15,9 @@ public sealed record ControlRequest(string Method, string Path, IReadOnlyDiction
     public string? Text(string key) =>
         Body.ValueKind == JsonValueKind.Object && Body.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
+    public bool Flag(string key) =>
+        Body.ValueKind == JsonValueKind.Object && Body.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.True;
+
     public string[]? Strings(string key) =>
         Body.ValueKind == JsonValueKind.Object && Body.TryGetProperty(key, out var v) && v.ValueKind == JsonValueKind.Array
             ? v.EnumerateArray().Where(i => i.ValueKind == JsonValueKind.String).Select(i => i.GetString()!).ToArray() : null;

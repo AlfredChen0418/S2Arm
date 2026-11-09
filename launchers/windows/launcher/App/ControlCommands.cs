@@ -90,11 +90,11 @@ public sealed partial class EnvironmentWindow
         return connectedFolder is not null && libraryId is not null;
     }
 
-    private ControlReply ControlExport(LibraryGame game)
+    private ControlReply ControlExport(LibraryGame game, bool spaceOverride = false)
     {
         selectedGame = game.Id;
         if (ExportBlocker(game) is { } why) return ControlReply.Bad(why, 409);
-        StartPack(game);
+        StartPack(game, spaceOverride);
         return ControlReply.Ok();
     }
 
@@ -148,11 +148,11 @@ public sealed partial class EnvironmentWindow
                 return ControlReply.Ok();
             }
             case ("POST", "/ipa"):
-                return ControlGame(r) is { } ipaGame ? ControlExport(ipaGame) : NoGame;
+                return ControlGame(r) is { } ipaGame ? ControlExport(ipaGame, r.Flag("spaceOverride")) : NoGame;
             case ("POST", "/build"):
                 switch (r.Text("target") ?? "ios")
                 {
-                    case "ios" or "iphone" or "ipad": return ControlGame(r) is { } buildGame ? ControlExport(buildGame) : NoGame;
+                    case "ios" or "iphone" or "ipad": return ControlGame(r) is { } buildGame ? ControlExport(buildGame, r.Flag("spaceOverride")) : NoGame;
                     case "mac" or "macos": return MacOnly("Mac 版导出");
                     case "android" or "harmony" or "ohos": return ControlReply.Json(new Dictionary<string, object?> { ["error"] = "即将上线，敬请期待", ["comingSoon"] = true }, 409);
                     default: return ControlReply.Bad("target 只认 ios / android / harmony");
@@ -254,8 +254,8 @@ public sealed partial class EnvironmentWindow
         ("GET /snapshot", "主窗口截图（PNG）"),
         ("POST /keys {path}", "导入 prod.keys"),
         ("POST /games {paths:[…]}", "放入游戏（NSP / XCI 文件、游戏文件夹或解包好的游戏文件夹）"),
-        ("POST /build {gameId, target}", "出包：target = ios（iPhone / iPad，缺省）；android / harmony 回 409「即将上线」"),
-        ("POST /ipa {gameId}", "打 iPhone 包（出 IPA + 资源包）"),
+        ("POST /build {gameId, target, spaceOverride?}", "出包：spaceOverride = true 同界面「仍然继续」；target = ios（iPhone / iPad，缺省）；android / harmony 回 409「即将上线」"),
+        ("POST /ipa {gameId, spaceOverride?}", "打 iPhone 包（出 IPA + 资源包）；spaceOverride = true 同界面「仍然继续」"),
         ("POST /installCheck {gameId}", "装机前清单：几秒后看 GET /state 的 installReadiness"),
         ("POST /install {gameId}", "用 Impactor 装到 iPhone（清单全齐才能装；Apple ID 由玩家本人在 Impactor 里登录）"),
         ("POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款"),
