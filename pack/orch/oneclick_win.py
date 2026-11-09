@@ -23,6 +23,7 @@
 退出码：0 成功；1 失败（标准输出最后一行【红】说明停在哪一步）；3 内容缺口（直连库出不了）；75 环境缺件（--check 同口径）。
 今晚实测（11-05 Windows 出包机 20 核）：旷野之息 解包 39 秒 / 轻阶段 ~260 秒 / 直连库 267 秒 / ipa 136 秒；金刚 导出整理 91 秒 / 轻阶段 ~300 秒 / 直连库 493 秒 / ipa 196 秒。
 """
+import atexit
 import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
 
@@ -545,12 +546,31 @@ def share_walk_dir(out):
     os.environ.setdefault('S2A_ROMFS_WALK', str(Path(out).resolve() / '.romfs-walk'))
 
 
+TEMP_MAX = 200   # TMP / TEMP 的上限：超过 MAX_PATH 时 CreateProcess 的兼容性查询（BasepQueryAppCompat）在 GetTempPath 上无限循环，子进程永远起不来；留出子进程拼文件名的余量
+
+
+def short_temp_dir(out):
+    """工作目录太深时用同盘根下的短目录，临时文件仍不落系统盘：<盘符>\\S2ArmTmp\\<工作目录摘要>"""
+    import hashlib, ntpath
+    return ntpath.join(ntpath.splitdrive(str(out))[0] + '\\', 'S2ArmTmp', hashlib.sha256(str(out).encode('utf-8', 'surrogatepass')).hexdigest()[:16])
+
+
 def work_temp(out):
     """临时文件跟工作目录走（11-06 维护者：Windows 出包机 C 盘被编库临时文件写满，时之笛出库两次失败；玩家机 C 盘常常很小）：
     本进程与全部子进程（C# 编库 Path.GetTempPath、Python tempfile、dotnet、bash）的 TMP / TEMP / TMPDIR 指到 <工作目录>/tmp，
     不再落系统盘的用户 Temp。在 main 起步时设一次，之后起的子进程都继承；S2A_KEEP_SYSTEM_TEMP=1 时保持原样（排查用）"""
     if os.environ.get('S2A_KEEP_SYSTEM_TEMP') == '1': return None
-    t = Path(out).resolve() / 'tmp'; t.mkdir(parents=True, exist_ok=True)
+    t = Path(out).resolve() / 'tmp'
+    if WIN and len(str(t)) > TEMP_MAX:
+        short = Path(short_temp_dir(Path(out).resolve()))
+        try:
+            short.mkdir(parents=True, exist_ok=True)
+        except OSError as e:   # 盘根不让建目录：保持系统 Temp，临时文件落系统盘，但子进程能起来
+            print(f'【黄】工作目录路径太长，盘根也建不了短临时目录（{e}），临时文件用系统 Temp', file=sys.stderr)
+            return None
+        atexit.register(shutil.rmtree, short, ignore_errors=True)
+        t = short
+    t.mkdir(parents=True, exist_ok=True)
     for k in ('TMP', 'TEMP', 'TMPDIR'): os.environ[k] = str(t)
     tempfile.tempdir = None   # tempfile 缓存过系统 Temp 的话重新按环境变量取
     return t
