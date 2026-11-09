@@ -26,6 +26,8 @@
 import atexit
 import argparse, glob, json, os, re, shutil, subprocess, sys, tempfile, time
 from pathlib import Path
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+from pack.orch import shortroot   # noqa: E402
 
 R = Path(__file__).resolve().parents[2]
 PY = sys.executable
@@ -446,7 +448,9 @@ def direct(run, cur, target, jobs, tid=None, name='direct'):
 
 
 def junction(dst, src):
-    if WIN: subprocess.run(['cmd', '/c', 'mklink', '/J', str(dst), str(src)], check=True, stdout=subprocess.DEVNULL)
+    if WIN:   # 目标写真实长路径：短根是工作期的入口，产物里的联接要在它之外也有效；CreateJunction 不受 cmd 的长度限制
+        import _winapi
+        _winapi.CreateJunction(shortroot.to_long(src, shortroot.table_now()), str(dst))
     else: os.symlink(src, dst)
 
 
@@ -560,7 +564,7 @@ def work_temp(out):
     本进程与全部子进程（C# 编库 Path.GetTempPath、Python tempfile、dotnet、bash）的 TMP / TEMP / TMPDIR 指到 <工作目录>/tmp，
     不再落系统盘的用户 Temp。在 main 起步时设一次，之后起的子进程都继承；S2A_KEEP_SYSTEM_TEMP=1 时保持原样（排查用）"""
     if os.environ.get('S2A_KEEP_SYSTEM_TEMP') == '1': return None
-    t = Path(out).resolve() / 'tmp'
+    t = Path(os.environ[shortroot.TEMP_ENV]) if os.environ.get(shortroot.TEMP_ENV) else Path(out).resolve() / 'tmp'
     if WIN and len(str(t)) > TEMP_MAX:
         short = Path(short_temp_dir(Path(out).resolve()))
         try:
@@ -593,6 +597,11 @@ def main(argv=None):
         for n, ok, why, *_ in items: print(f'{"✅" if ok else "❌"} {n}：{why}')
         return 75 if bad else 0
     if not (a.source or a.from_extract) or not a.out: ap.error('要 <原件>（或 --from-extract <解包目录>）与 --out')
+    if WIN:   # 工作区走短根：之后的路径（工具参数、bash、dotnet、TEMP）都短；深路径的玩家数据目录不再踩 MAX_PATH
+        mapped = shortroot.enter(a.out, *([a.from_extract] if a.from_extract else []))
+        if mapped:
+            a.out = mapped[os.path.abspath(a.out)]
+            if a.from_extract: a.from_extract = mapped[os.path.abspath(a.from_extract)]
     run = Run(a.out, a.events); t0 = time.time(); cur = None
     work_temp(run.out)
     share_walk_dir(a.out)

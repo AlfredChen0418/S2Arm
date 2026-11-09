@@ -85,6 +85,42 @@ def _wrap(module, name, count):
     setattr(module, name, wrapper)
 
 
+def parse_table(text):
+    rows = []
+    for line in (text or "").splitlines():
+        long, sep, short = line.partition("\t")
+        if sep and long and short:
+            rows.append((ntpath.normcase(long).rstrip("\\"), long.rstrip("\\"), short.rstrip("\\")))
+    return sorted(rows, key=lambda r: -len(r[0]))
+
+
+def to_short(path, table):
+    """长路径（含 \\\\?\\ 前缀写法）落在某个工作区下 → 换成短路径；否则原样"""
+    if not isinstance(path, str) or not table:
+        return path
+    bare = path[4:] if path.startswith("\\\\?\\") and not path.startswith("\\\\?\\UNC\\") else path
+    low = ntpath.normcase(bare)
+    for key, _, short in table:
+        if low == key or low.startswith(key + "\\"):
+            return short + bare[len(key):]
+    return path
+
+
+def _wrap_realpath():
+    """工作区走短根（pack/orch/shortroot.py）时，realpath / Path.resolve 把目录联接展开成长路径后再换回短路径，否则和短路径比 relative_to 会失败（同 #138）"""
+    original = ntpath.realpath
+
+    def realpath(path, **kwargs):
+        result = original(path, **kwargs)
+        text = os.environ.get("S2A_SHORT_ROOTS")
+        if not text or not isinstance(result, str):
+            return result
+        return to_short(result, parse_table(text))
+
+    realpath.__doc__ = original.__doc__
+    ntpath.realpath = realpath
+
+
 def install():
     global _done
     if _done or os.name != "nt":
@@ -102,3 +138,4 @@ def install():
     import _winapi
     _wrap(_winapi, "CopyFile2", 2)
     _wrap(_winapi, "CreateJunction", 2)
+    _wrap_realpath()

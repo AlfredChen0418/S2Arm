@@ -50,6 +50,23 @@ class LongPathTest(unittest.TestCase):
         fake.scandir(short)
         self.assertEqual(seen[-1], short)
 
+    def test_short_root_mapping(self):
+        from pack.orch import shortroot as sr
+        long = "R:\\" + "d" * 200 + "\\work"
+        base = sr.short_base(long)
+        self.assertTrue(base.startswith("R:\\S2ArmTmp\\")); self.assertLess(len(base), 40)
+        self.assertEqual(base, sr.short_base(long + "\\"))                 # 同一路径同一短根（阶段键稳定）
+        self.assertNotEqual(base, sr.short_base(long + "2"))              # 不同工作目录不串
+        link = base + "\\w0"
+        t = sr.parse_table(f"{long}\t{link}")
+        self.assertEqual(sr.to_short(long + "\\roots\\a.bin", t), link + "\\roots\\a.bin")
+        self.assertEqual(sr.to_short("\\\\?\\" + long + "\\x", t), link + "\\x")         # 带前缀的写法也认
+        self.assertEqual(sr.to_short(long.upper() + "\\x", t), link + "\\x")             # Windows 路径不分大小写
+        self.assertEqual(sr.to_short(long + "2\\x", t), long + "2\\x")                    # 前缀相同的别的目录不动
+        self.assertEqual(sr.to_short("C:\\other", t), "C:\\other")
+        self.assertEqual(sr.to_long(link + "\\roots", t), long + "\\roots")
+        self.assertEqual(sr.to_long("C:\\x", t), "C:\\x")
+
     def test_redact_keeps_windows_path_length(self):
         out = redact.redact_text(r"[WinError 206] : 'C:\Users\example\a\b.txt'")
         self.assertIn("[PRIVATE_PATH len=", out)
