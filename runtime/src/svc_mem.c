@@ -1834,8 +1834,16 @@ static int svc_mem_impl(int num, uint64_t *regs, uint64_t orig) {
         (void)lo; (void)hi;
         if (mapping && a + size - L.alias_base > g_pk_alias_end) g_pk_alias_end = a + size - L.alias_base;
 #endif
+#ifndef __ANDROID__
+        // [258-exp] 实验钩子（不进 PR）：S2A_258_SLEEP_MS = 大块（≥ 1 MB）解除后人为停这么久，复现原版持锁约 1 s 的时序；S2A_258_SLEEP_OUTSIDE=1 改成放锁后再停（只拖住调用线程）
+        static int x_ms = -1, x_out; if (x_ms < 0) { const char *e = getenv("S2A_258_SLEEP_MS"); x_ms = e ? atoi(e) : 0; x_out = getenv("S2A_258_SLEEP_OUTSIDE") != NULL; }
+        int x_big = size >= (1ull << 20);
+        if (x_big) LOG("[258-exp] %s %#llx +%llu MB%s", num == 0x2C ? "map" : "unmap", (unsigned long long)a, (unsigned long long)(size >> 20), num == 0x2D && x_ms > 0 ? (x_out ? " 放锁后停" : " 持锁停") : "");
+        if (num == 0x2D && x_big && x_ms > 0 && !x_out) usleep((useconds_t)x_ms * 1000);
+#endif
         GMU_UNLOCK();
 #ifndef __ANDROID__
+        if (num == 0x2D && x_big && x_ms > 0 && x_out) usleep((useconds_t)x_ms * 1000);
         if (rel_hi > we) rel_hi = we;
         if (rel_hi > rel_lo) backing_changed(rel_lo, rel_hi - rel_lo);
 #endif
