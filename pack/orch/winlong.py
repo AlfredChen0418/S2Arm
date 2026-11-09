@@ -10,6 +10,7 @@ import builtins
 import io
 import ntpath
 import os
+import struct
 
 LIMIT = 240   # 留出目录内再拼文件名的余量；系统上限 260
 _done = False
@@ -122,6 +123,40 @@ def _wrap_realpath():
     ntpath.realpath = realpath
 
 
+def reparse_buffer(target):
+    """目录联接的重解析数据（Windows REPARSE_DATA_BUFFER 挂载点版）：替换名 \\\\??\\<目标> 和显示名 <目标> 各带一个宽字符结尾"""
+    sub, shown = ("\\??\\" + target).encode("utf-16-le", "surrogatepass"), target.encode("utf-16-le", "surrogatepass")
+    data = struct.pack("<HHHH", 0, len(sub), len(sub) + 2, len(shown)) + sub + b"\0\0" + shown + b"\0\0"
+    return struct.pack("<IHH", 0xA0000003, len(data), 0) + data
+
+
+def create_junction(target, link):
+    """建目录联接，顶替 _winapi.CreateJunction：系统没开 LongPathsEnabled 时它对 260 字符以上的目标报 WinError 3，给目标加 \\\\?\\ 又写出访问时报 WinError 123 的非法联接"""
+    import ctypes as C
+    from ctypes import wintypes as W
+    bare = ntpath.abspath(target[4:] if target.startswith("\\\\?\\") else target)
+    if not os.path.isdir(long_path(bare)):
+        raise FileNotFoundError(3, "联接目标不存在", bare)
+    k = C.WinDLL("kernel32", use_last_error=True)
+    k.CreateFileW.restype = W.HANDLE
+    k.CreateFileW.argtypes = (W.LPCWSTR, W.DWORD, W.DWORD, C.c_void_p, W.DWORD, W.DWORD, W.HANDLE)
+    k.DeviceIoControl.argtypes = (W.HANDLE, W.DWORD, C.c_char_p, W.DWORD, C.c_void_p, W.DWORD, C.POINTER(W.DWORD), C.c_void_p)
+    k.CloseHandle.argtypes = (W.HANDLE,)
+    path = long_path(ntpath.abspath(link))
+    os.mkdir(path)
+    h = k.CreateFileW(path, 0x40000000, 0, None, 3, 0x02000000 | 0x00200000, None)   # GENERIC_WRITE, OPEN_EXISTING, BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+    ok = h != W.HANDLE(-1).value
+    err = 0 if ok else C.get_last_error()
+    if ok:
+        data = reparse_buffer(bare); done = W.DWORD()
+        ok = bool(k.DeviceIoControl(h, 0x000900A4, data, len(data), None, 0, C.byref(done), None))   # FSCTL_SET_REPARSE_POINT
+        err = 0 if ok else C.get_last_error()
+        k.CloseHandle(h)
+    if not ok:
+        os.rmdir(path)
+        raise C.WinError(err)
+
+
 def install():
     global _done
     if _done or os.name != "nt":
@@ -138,7 +173,5 @@ def install():
     io.open = builtins.open
     import _winapi
     _wrap(_winapi, "CopyFile2", 2)
-    original_junction = _winapi.CreateJunction
-    # 目标不能加 \\?\：CreateJunction 自己拼 \??\ 前缀，再加一层就成了非法联接（访问时 WinError 123）；只有联接自身的路径需要长路径写法
-    _winapi.CreateJunction = lambda target, link: original_junction(target, long_path(link))
+    _winapi.CreateJunction = create_junction
     _wrap_realpath()

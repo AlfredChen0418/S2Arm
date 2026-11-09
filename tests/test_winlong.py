@@ -27,6 +27,12 @@ class LongPathTest(unittest.TestCase):
         unc = "\\\\srv\\share\\" + "a\\" * 130 + "f"
         self.assertEqual(winlong.long_path(unc), "\\\\?\\UNC\\srv\\share\\" + "a\\" * 130 + "f")
 
+    def test_reparse_buffer_layout(self):   # 期望按 Windows REPARSE_DATA_BUFFER 挂载点版手写：替换名 8 个宽字符、显示名 4 个宽字符
+        sub = "\\??\\C:\\a".encode("utf-16-le"); shown = "C:\\a".encode("utf-16-le")
+        self.assertEqual(len(sub), 16); self.assertEqual(len(shown), 8)
+        body = (0).to_bytes(2, "little") + (16).to_bytes(2, "little") + (18).to_bytes(2, "little") + (8).to_bytes(2, "little") + sub + b"\0\0" + shown + b"\0\0"
+        self.assertEqual(winlong.reparse_buffer("C:\\a"), (0xA0000003).to_bytes(4, "little") + (36).to_bytes(2, "little") + b"\0\0" + body)
+
     def test_scandir_keeps_callers_path_form(self):   # #138：目录项路径带 \\?\ 前缀时，relative_to 比不上不带前缀的根
         import types
         parent = "C:\\" + "a\\" * 130 + "d"
