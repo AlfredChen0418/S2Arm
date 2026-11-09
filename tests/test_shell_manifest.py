@@ -16,6 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TOOL = ROOT / "pack/shell/manifest.py"
 COMMIT, INPUTS, CHAIN, IOS = "a" * 40, "0123456789abcdef", "c7a4970bffe5", "18.0"
+SDK = "27"
 
 
 def run(*args):
@@ -31,12 +32,17 @@ class ShellManifest(unittest.TestCase):
         self.man = self.t / "shell.json"
 
     def seal(self):
-        return run("seal", "--root", str(self.shell), "--manifest", str(self.man), "--source-commit", COMMIT, "--inputs", INPUTS, "--chain", CHAIN, "--ios-min", IOS)
+        return run("seal", "--root", str(self.shell), "--manifest", str(self.man), "--source-commit", COMMIT, "--inputs", INPUTS, "--chain", CHAIN, "--ios-min", IOS, "--ios-sdk", SDK)
+
+    def test_sdk_major_changes_shell_id(self):
+        # 审计 P1-124：只换链接 SDK 主版本，编号也要变（手算：同 want_id 的格式，只差最后一段）
+        ids = {hashlib.sha256(f"s2a.shell.v2\0{INPUTS}\0{CHAIN}\0{IOS}\0{v}".encode()).hexdigest()[:16] for v in ("26", "27")}
+        self.assertEqual(len(ids), 2)
 
     def test_seal_verify_tamper(self):
         r = self.seal(); self.assertEqual(r.returncode, 0, r.stderr)
         doc = json.loads(self.man.read_text())
-        want_id = hashlib.sha256(f"s2a.shell.v2\0{INPUTS}\0{CHAIN}\0{IOS}".encode()).hexdigest()[:16]
+        want_id = hashlib.sha256(f"s2a.shell.v2\0{INPUTS}\0{CHAIN}\0{IOS}\0{SDK}".encode()).hexdigest()[:16]
         self.assertEqual((doc["schema"], doc["target"], doc["details"]["schema"], doc["details"]["shellId"]), ("s2a.artifact.v2", "ios-shell", "s2a.artifact.shell.v2", want_id))
         self.assertEqual(doc["files"], [{"path": p, "size": len(b), "sha256": hashlib.sha256(b).hexdigest()} for p, b in sorted(self.files.items())])
         self.assertEqual(run("verify", "--root", str(self.shell), "--manifest", str(self.man)).returncode, 0)
@@ -64,7 +70,7 @@ class ShellManifest(unittest.TestCase):
     def test_no_overwrite_and_outside(self):
         self.assertEqual(self.seal().returncode, 0)
         self.assertEqual(self.seal().returncode, 2)
-        r = run("seal", "--root", str(self.shell), "--manifest", str(self.shell / "m.json"), "--source-commit", COMMIT, "--inputs", INPUTS, "--chain", CHAIN, "--ios-min", IOS)
+        r = run("seal", "--root", str(self.shell), "--manifest", str(self.shell / "m.json"), "--source-commit", COMMIT, "--inputs", INPUTS, "--chain", CHAIN, "--ios-min", IOS, "--ios-sdk", SDK)
         self.assertEqual(r.returncode, 2); self.assertFalse((self.shell / "m.json").exists())
 
     def test_forged_id(self):

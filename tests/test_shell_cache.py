@@ -33,10 +33,10 @@ PAYLOAD = {"S2Arm.app/host": b"original host\0\x01", "S2Arm.app/中文 图标.da
 def fixture(commit="a" * 40):
     # Concatenation keeps the NUL delimiter distinct from the leading digit.
     inputs = hashlib.sha256(commit.encode()).hexdigest()[:16]   # 夹具：每个「提交」一份不同的输入指纹
-    sid = hashlib.sha256(("s2a.shell.v2\0" + inputs + "\0abc12\0" + "18.0").encode()).hexdigest()[:16]
+    sid = hashlib.sha256(("s2a.shell.v2\0" + inputs + "\0abc12\0" + "18.0\0" + "27").encode()).hexdigest()[:16]
     return {"schema": "s2a.artifact.v2", "target": "ios-shell",
             "details": {"schema": "s2a.artifact.shell.v2", "shellId": sid, "inputs": inputs,
-                        "sourceCommit": commit, "chain": "abc12", "iosMin": "18.0"},
+                        "sourceCommit": commit, "chain": "abc12", "iosMin": "18.0", "iosSdk": "27"},
             "files": [{"path": name, "size": len(data), "sha256": hashlib.sha256(data).hexdigest()}
                       for name, data in sorted(PAYLOAD.items())]}
 
@@ -282,7 +282,7 @@ class ShellCache(unittest.TestCase):
         shell = self.parent / "shell"
         for name, data in PAYLOAD.items():
             f = shell / "root" / name; f.parent.mkdir(parents=True, exist_ok=True); f.write_bytes(data)
-        doc = manifest.seal(shell / "root", shell / "manifest.json", "b" * 40, "1" * 16, "abc12", "18.0")
+        doc = manifest.seal(shell / "root", shell / "manifest.json", "b" * 40, "1" * 16, "abc12", "18.0", "27")
         sid = doc["details"]["shellId"]
         pub = self.parent / "pub"
         self.assertEqual(cache.publish(shell, pub), sid)

@@ -125,7 +125,7 @@ class ShipExtTest(unittest.TestCase):
         (r / "S2Arm").write_bytes(b"\xcf\xfa\xed\xfe" + bytes(60))
         (r / "Frameworks").mkdir()
         (r / "S2AShell.tables").write_text("addr_need.tsv\nwiden_enable.*.tsv\n")
-        ident = shell_manifest._defaults() if commit_ok else ("0" * 40, "f" * 16, "x", "1.0")
+        ident = shell_manifest._defaults() if commit_ok else ("0" * 40, "f" * 16, "x", "1.0", "27")
         shell_manifest.seal(r, Path(d) / "shell/manifest.json", *ident)
         return Path(d) / "shell"
 

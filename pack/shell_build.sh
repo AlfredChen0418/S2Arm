@@ -16,6 +16,10 @@ IN=$(LC_ALL=C awk -F'\t' '$1 == "入" { print $2 }' "$R/pack/stage_inputs/shell.
 # shellcheck disable=SC2086
 [ -z "$(git -C "$R" status --porcelain -- $IN pack/stage_inputs/shell.tsv)" ] || { echo "【红】壳输入表里的文件有未提交改动，壳编号对不上源码，不出"; exit 1; }
 source "$R/tools/toolchain.sh" || exit 2
+# 壳编号里记了 iOS SDK 主版本（tools/toolchain.env，审计 P1-124）：实际 SDK 对不上就不出，免得同一个编号对应两种链接 SDK
+SDKV=$(xcrun --sdk iphoneos --show-sdk-version 2> /dev/null) || { echo "【红】读不出 iOS SDK 版本（xcrun --sdk iphoneos）"; exit 1; }
+SDKM=$(awk -F= '$1 == "IPHONEOS_SDK_MAJOR" { print $2 }' "$R/tools/toolchain.env")
+[ "${SDKV%%.*}" = "$SDKM" ] || { echo "【红】这台机器的 iOS SDK 是 ${SDKV}，tools/toolchain.env 钉的主版本是 ${SDKM}：换 Xcode 大版本要同时改 IPHONEOS_SDK_MAJOR"; exit 1; }
 source "$R/tools/cores.sh"; s2a_cores || exit 1
 # 引擎树里的 iOS 编译中间产物（渲染器 / 直连层静态库、gal_helpers 含 m3、宿主目标文件缓存）按修改时间增量，不认编译器（审计 #1534 P1-107）：
 #   工具链版本行与上次出壳记的不同就整份清掉重编（tools/toolchain.sh s2a_tc_sweep），只在真换了 Xcode / Metal 组件时发生
