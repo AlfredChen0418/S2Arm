@@ -417,14 +417,15 @@ def convert(src, out, say=print):
         return app
 
 
-def _clone(s, d):   # 同卷 APFS 克隆（不占新空间），不行就真拷
-    try:
-        import ctypes
-        libc = ctypes.CDLL(None, use_errno=True)
-        if hasattr(libc, 'clonefile') and libc.clonefile(os.fsencode(s), os.fsencode(d), 0) == 0:
-            return d
-    except OSError:
-        pass
+def _clone(s, d):   # macOS 同卷 APFS 克隆（不占新空间），其余平台或克隆不成就真拷（ctypes.CDLL(None) 在 Windows 上抛 TypeError，#128）
+    if sys.platform == 'darwin':
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None, use_errno=True)
+            if hasattr(libc, 'clonefile') and libc.clonefile(os.fsencode(s), os.fsencode(d), 0) == 0:
+                return d
+        except OSError:
+            pass
     return shutil.copy2(s, d)
 
 

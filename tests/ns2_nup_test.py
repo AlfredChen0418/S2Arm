@@ -313,5 +313,17 @@ with tempfile.TemporaryDirectory() as t:
     r9 = ush('extract', '--src', fake, '--out', os.path.join(t, 'x9f'))
     chk('⑨ unpack.sh 假 .nup 照旧报没有原始包', (r9.returncode, '没有 .xci' in r9.stderr), (1, True))
 
+# ⑩ 非 macOS 走真拷，不碰 ctypes（#128：Windows 上 ctypes.CDLL(None) 抛 TypeError，无本体的 NUP 每次解包崩）
+with tempfile.TemporaryDirectory() as t:
+    from unittest import mock
+    import ctypes
+    sys.path.insert(0, os.path.join(ROOT, 'pack'))
+    import ns2_nup
+    src, dst = os.path.join(t, 'a'), os.path.join(t, 'b')
+    open(src, 'wb').write(b'content')
+    with mock.patch.object(ns2_nup.sys, 'platform', 'win32'), mock.patch.object(ctypes, 'CDLL', side_effect=TypeError('NoneType')) as cdll:
+        got = ns2_nup._clone(src, dst)
+    chk('⑩ 非 macOS：真拷、不调 ctypes', (got == dst, open(dst, 'rb').read(), cdll.called), (True, b'content', False))
+
 print(f'{"✓" if not bad else "✗"} ns2_nup：{ok} 过 / {bad} 不过')
 sys.exit(1 if bad else 0)
