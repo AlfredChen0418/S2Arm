@@ -48,6 +48,7 @@ public sealed partial class EnvironmentWindow
     private double? packSeconds;
     private string packState = "";   // "" | running | succeeded | failed | cancelled | invalid
     private string packSummary = "", packDiagnostics = "";
+    private string? packFailureCode;
     private string? packIpa;
     private long? packIpaBytes, packPackBytes;
     private PackSpace? packSpace;
@@ -275,23 +276,23 @@ public sealed partial class EnvironmentWindow
 
     // ---- pack job ----
 
-    private void StartPack(LibraryGame game)
+    private void StartPack(LibraryGame game, bool spaceOverride = false)
     {
         if (ExportBlocker(game) is not null) return;
         packGame = game; packRunning = true; packState = "running"; packTrack = new(); packStarted = DateTime.UtcNow;
         packSeconds = null; packSummary = ""; packDiagnostics = ""; packIpa = null;
-        packIpaBytes = null; packPackBytes = null; packSpace = null; sessionHidden = false;
+        packIpaBytes = null; packPackBytes = null; packSpace = null; sessionHidden = false; packFailureCode = null;
         Navigate("progress");
-        packOperation = RunPackAsync(game);
+        packOperation = RunPackAsync(game, spaceOverride);
     }
 
-    private async Task RunPackAsync(LibraryGame game)
+    private async Task RunPackAsync(LibraryGame game, bool spaceOverride)
     {
         using var cancellation = new CancellationTokenSource();
         packCancellation = cancellation;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("ipa", game.Id),
+            var job = await PackJobClient.RunAsync(PackRequest("ipa", game.Id, spaceOverride ? new Dictionary<string, object?> { ["spaceOverride"] = true } : null),
                 e => Dispatcher.UIThread.Post(() =>
                 {
                     packTrack.Ingest(e, Clock);
@@ -303,6 +304,7 @@ public sealed partial class EnvironmentWindow
             packState = job.Report.State;
             packSummary = job.Report.Message;
             packDiagnostics = JobDiagnostics(job);
+            packFailureCode = job.Report.Succeeded ? null : DiagnosticCode(job.Report.Diagnostics);
             if (job.Report.Succeeded)
             {
                 if (job.Report.Result.TryGetProperty("ipa", out var ipa) && ipa.ValueKind == JsonValueKind.String)
@@ -736,6 +738,11 @@ public sealed partial class EnvironmentWindow
             var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
             var retry = Action("progress.again", () => Navigate("build"));
             retry.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(retry);
+            if (packFailureCode == "disk_full")   // 磁盘预算偏保守：和 Mac 一样允许玩家自己决定继续
+            {
+                var proceed = Action("export.fix.continue", () => StartPack(game, spaceOverride: true), !PackBusy);
+                proceed.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(proceed);
+            }
             if (packState == "failed")
             {
                 var copy = CopyReportButton(game.Id, ["ipa"], () => ErrorSummary(game));
