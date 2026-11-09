@@ -170,10 +170,9 @@ Apple驱动项与`apple_usb`设备项分开。驱动探测只连接`127.0.0.1:27
 协议事实参照[libusbmuxd ListDevices实现](https://github.com/libimobiledevice/libusbmuxd/blob/master/src/libusbmuxd.c)
 和[帧头定义](https://github.com/libimobiledevice/usbmuxd/blob/master/src/usbmuxd-proto.h)，本片使用标准库独立实现，不安装该库。
 
-官方iCloud当前支持的正证据：当前用户注册的`.iCloud`包、Apple Inc.证书主体CN/O、Store签名类别、
-Ok状态、相符包家族和有效版本元数据同时齐全。仅名称匹配或Developer/损坏包不判绿，输出只来源/版本，
-不输出发布者DN、包家族、路径或用户资料。Microsoft Store的[iCloud条目](https://apps.microsoft.com/detail/9pktq5699m62)
-发布者为Apple Inc.；[Get-AppxPackage](https://learn.microsoft.com/en-us/powershell/module/appx/get-appxpackage)
+官方iCloud当前支持的正证据：当前用户注册的包家族正好是`AppleInc.iCloud_nzyj5cx40ttqa`（末段由发布者算出，实机发布者是商店分配的编号，不是Apple Inc.）、Store签名类别、
+Ok状态和有效版本元数据同时齐全。仅名称匹配或Developer/损坏包不判绿，输出只来源/版本，
+不输出发布者DN、包家族、路径或用户资料。[Get-AppxPackage](https://learn.microsoft.com/en-us/powershell/module/appx/get-appxpackage)
 默认只查询当前用户。未读账号、iCloud数据/密码或安装包内容。
 HKLM64/32和HKCU卸载记录：DisplayName为iCloud且Publisher为Apple Inc.算官方传统安装版，判ok（11-08 实机：官方安装器装的7.21不走商店）；
 其余记录且无齐全Store证据报unverified。当前未检出只代表这些查询范围，不宣称所有用户或任意路径不存在。

@@ -969,7 +969,7 @@ static class Metal
                 if (rc == 0) { if (attempt == 2) St.AddOrUpdate(target + " retried", 1, (_, v) => v + 1); break; }
                 var bad = EnvProblem();
                 if (bad != null) throw new InvalidOperationException($"Metal 编译环境坏了（{bad}），不是这支着色器编不过");
-                if (attempt == 2) throw new CompileError(CompilerWhy(err) ?? $"Command '{string.Join(' ', cmd)} {m} -o {air}' returned non-zero exit status {rc}. {err}");
+                if (attempt == 2) throw new CompileError(CompilerWhy(err) ?? $"exit status {rc}: {err.Trim()} (Command '{string.Join(' ', cmd)} {m} -o {air}')");   // 原话放前面：汇总只留前 160 字符，命令回显占满就看不到原因（#165）
             }
             var data = File.ReadAllBytes(lib);
             key = data.AsSpan().IndexOf(fname) >= 0 ? kNamed : kSrc;
