@@ -38,6 +38,7 @@ import build
 
 
 def run_request(request_path, *, context_class=Context, operation_overrides=None):
+    winproc.prepare_child_environment()
     path = Path(request_path)
     if not winproc.request_is_private(path):
         raise SystemExit("request must be owned by this user and private (0600)")

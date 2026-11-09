@@ -895,6 +895,8 @@ def render(report):
 
 
 def main(argv=None):
+    import winproc
+    winproc.prepare_child_environment()
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")

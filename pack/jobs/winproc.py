@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import stat
 import struct
+import sys
 import subprocess
 import threading
 import time
@@ -574,3 +575,18 @@ def remove_at(parent, name):
 
 def close(opened):
     opened.close()
+
+
+def vcrt_dir():
+    """随包的 VC++ 运行库目录（Runtime/vcrt，和 Runtime/python 同级）。"""
+    return Path(sys.executable).resolve().parent.parent / "vcrt"
+
+
+def prepare_child_environment():
+    """Windows 上所有子进程都继承这两项：metal.exe 动态依赖 VC++ 运行库，随包的目录进 PATH；缺依赖时只返回退出码，不弹系统错误框。"""
+    if os.name != "nt":
+        return
+    C.windll.kernel32.SetErrorMode(0x0001 | 0x8000)   # SEM_FAILCRITICALERRORS | SEM_NOOPENFILEERRORBOX
+    folder = str(vcrt_dir())
+    if os.path.isdir(folder) and folder not in os.environ.get("PATH", "").split(os.pathsep):
+        os.environ["PATH"] = folder + os.pathsep + os.environ.get("PATH", "")

@@ -11,6 +11,7 @@
   versions.json  各件版本与来源
 来源：Python 嵌入版、MinGit、轮子从官方地址下载并缓存（launchers/shared/runtime_cache.py：命中不联网，每个文件核钉死的 SHA-256）；.NET 运行时、Git、zstd 从本机已装的官方发行版拷（路径见下面常量，可用环境变量改）。
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -93,6 +94,26 @@ def mingit(rt, versions):
     versions["mingit_url"] = url
 
 
+VC_RUNTIME_VERSION = "14.44.35112"
+VC_RUNTIME = {   # metal.exe 及其同目录 DLL 的 PE 导入表里，系统不自带的就这三个（苹果 Metal Developer Tools，要求 VC++ 2015-2022 运行库）
+    "msvcp140.dll": "0f885b509a685d2bbfa652fed26b5fb31d88fbdab0a978c641d1c7b8aa460aa9",
+    "vcruntime140.dll": "d5e4d9a3e835fa679450145d6a7d94e36573a509317111904d9b3712c30d9066",
+    "vcruntime140_1.dll": "1f2d41c4aa5db0bc33ebf7b66d72943a817d7ce6cbe880502a9403823633093f",
+}
+
+
+def vc_runtime(rt, versions):
+    """微软可再发行的 VC++ 运行库：玩家机器没装时 metal.exe 也能跑（Windows 上由 winproc.prepare_child_environment 放进 PATH）。"""
+    found = sorted(Path(r"C:/").glob(f"Program Files*/Microsoft Visual Studio/*/*/VC/Redist/MSVC/{VC_RUNTIME_VERSION}/x64/Microsoft.VC143.CRT"))
+    if not found: raise SystemExit(f"【红】出包机缺 VC 运行库 {VC_RUNTIME_VERSION}（Visual Studio 的 Redist 目录）")
+    target = rt / "vcrt"; target.mkdir()
+    for name, want in VC_RUNTIME.items():
+        data = (found[0] / name).read_bytes()
+        if hashlib.sha256(data).hexdigest() != want: raise SystemExit(f"【红】{name} 的 SHA-256 与钉版不符")
+        (target / name).write_bytes(data)
+    versions["vcRuntime"] = VC_RUNTIME_VERSION
+
+
 def zstd(rt, versions):
     shutil.copytree(ZSTD, rt / "zstd")
     if not (rt / "zstd/LICENSE").is_file(): runtime_cache.copy_file("zstd-v1.5.7-LICENSE", rt / "zstd/LICENSE")
@@ -131,6 +152,7 @@ def smoke(rt):   # 每件跑一下：Python 带四个库、dotnet 只有运行�
               ([str(rt / "dotnet/dotnet.exe"), "--list-runtimes"], "Microsoft.NETCore.App 10."),
               ([str(rt / "git/usr/bin/bash.exe"), "-c", "printf 'b\\na\\n' | sort | head -1 | awk '{print \"bash \" $1}'"], "bash a"),
               ([str(rt / "zstd/zstd.exe"), "--version"], "v1.5.7"),
+              ([str(rt / "python/python.exe"), "-B", "-c", f"import ctypes; [ctypes.WinDLL(r'{rt / 'vcrt'}\\' + n) for n in {sorted(VC_RUNTIME)!r}]; print('vcrt ok')"], "vcrt ok"),
               ([str(rt / "mingit/cmd/git.exe"), "--version"], "git version")]
     env.update(PYTHONHOME=str(rt / "python"), PYTHONNOUSERSITE="1"); env.pop("PYTHONPATH", None)
     with tempfile.TemporaryDirectory() as t:   # 脚本能导入同目录兄弟模块；模块路径只含随包 python 目录（不混机器上另装的 Python / 用户 site-packages）
@@ -151,7 +173,7 @@ def main(argv=None):
     rt = Path(argv[0]) / "Runtime"
     if rt.exists(): raise SystemExit(f"【红】{rt} 已存在，不混旧件")
     rt.mkdir(parents=True); versions = {}
-    for step in (python, dotnet, git, mingit, zstd):
+    for step in (python, dotnet, git, mingit, zstd, vc_runtime):
         say(f"[运行时] {step.__name__}"); step(rt, versions)
     licenses(rt); env_cmd(rt)
     (rt / "versions.json").write_text(json.dumps(versions, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
