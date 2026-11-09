@@ -135,19 +135,19 @@ class FreeSpace(JobCase):
         super().setUp()
         games = [dict(id=g, name=n, packages=[]) for g, n in ((GID, "异度神剑3"), (OTHER, "别款"))]
         library.atomic(self.c.library / "catalog.json", dict(schema=1, games=games))
-        L, P = self.c.library, self.c.private
+        L, P, W = self.c.library, self.c.private, self.c.work_root
         self.files = {
             "unpack": [write(L / "cache" / GID / "extract" / "romfs.bin", 1 * MIB)],
             "intermediate": [write(L / "iPhone" / GID / "roots" / "r@1" / "a.bin", 2 * MIB), write(L / "iPhone" / GID / "build.tmp", 1 * MIB)],
-            "shaders": [write(P / "run" / "s2arm" / "cache" / "direct" / GID / "lib.bin", 2 * MIB),
-                        write(P / "run" / "s2arm" / "cache" / "bake" / f"{GID.lower()}-x" / "b.bin", 1 * MIB)],
+            "shaders": [write(W / "run" / "s2arm" / "cache" / "direct" / GID / "lib.bin", 2 * MIB),
+                        write(W / "run" / "s2arm" / "cache" / "bake" / f"{GID.lower()}-x" / "b.bin", 1 * MIB)],
             "mac": [write(L / "games" / GID / "app.bin", 1 * MIB)],
             "ipa": [write(L / "iPhone" / GID / "异度神剑3 S2Arm.ipa", 3 * MIB), write(L / "iPhone" / GID / "异度神剑3 资源包" / "r.bin", 1 * MIB)],
             "saves": [write(L / "saves" / GID / "slot0.bin", 1 * MIB)],
             "logs": [write(L / "iPhone" / GID / "logs" / "build.log", 1 * MIB)],
         }
         self.mib = {"unpack": 1, "intermediate": 3, "shaders": 3, "mac": 1, "ipa": 4, "saves": 1, "logs": 1}
-        self.shared = [write(P / "cache" / "air" / "shared.bin", 1 * MIB)]   # 各款共用的编库缓存：不归任何一款
+        self.shared = [write(W / "cache" / "air" / "shared.bin", 1 * MIB)]   # 各款共用的编库缓存：不归任何一款
         self.other = [write(L / "cache" / OTHER / "x.bin", 1 * MIB), write(L / "iPhone" / OTHER / "o.ipa", 1 * MIB)]
 
     def context(self, operation, **extra):

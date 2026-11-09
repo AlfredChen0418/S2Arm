@@ -438,10 +438,10 @@ class JobsTests(unittest.TestCase):
         out = self.c.library / "iPhone" / "0100000000000000"; out.mkdir(parents=True)
         old = out / "old-title.ipa"; old.write_bytes(b"old"); os.utime(old, (4102444800, 4102444800))
         # Q15: real synthetic cache payload, mocked external packaging only.
-        cache = self.c.private / 'cache/air/ios/aa' / ('a' * 64 + '.air')
+        cache = self.c.work_root / 'cache/air/ios/aa' / ('a' * 64 + '.air')
         cache.parent.mkdir(parents=True)
         cache.write_bytes(b'synthetic reusable AIR')
-        direct = self.c.private / 'run/s2arm/cache/direct/0100000000000000'
+        direct = self.c.work_root / 'run/s2arm/cache/direct/0100000000000000'
         direct_lib = direct / 'store/aa.pack'   # S2Arm 10-31: the direct cache is the store (shard files); the old ios/ / mac/ trees are cleared as transients
         direct_work = direct / 'work/log'
         for path in (direct_lib, direct_work):
@@ -882,6 +882,18 @@ class JobsTests(unittest.TestCase):
             self.c.catalog()
         self.assertFalse(marker.exists())
 
+    def test_caches_follow_a_library_outside_the_private_root(self):
+        """外接盘上的游戏库：出包缓存和运行目录要跟着走，不写系统盘；缺省游戏库（在数据目录里）位置不变。"""
+        outside = self.root / "external" / "lib"
+        c = Context(self.request | dict(taskId="outside", library=str(outside)))
+        self.assertEqual(c.work_root, outside.resolve() / ".s2arm-work")
+        env = c.env()
+        self.assertEqual(env["S2A_RUN_ROOT"], str(outside.resolve() / ".s2arm-work/run"))
+        self.assertTrue(env["GAL_PSO_CACHE"].startswith(str(outside.resolve())))
+        inside = Context(self.request | dict(taskId="inside", library=str(Path(self.request["privateRoot"]) / "lib")))
+        self.assertEqual(inside.work_root, inside.private)
+        self.assertEqual(inside.env()["S2A_RUN_ROOT"], str(inside.private / "run"))
+
     def test_refuses_nonempty_or_legacy_library(self):
         other = self.root / "legacy"
         other.mkdir()
@@ -1158,13 +1170,13 @@ class JobsTests(unittest.TestCase):
 
     def _build_leftovers(self, gid):
         """造一款出完 iPhone 包的现场：输出目录（IPA / 资源包 / 日志 / 产物根 / 解包）+ 私有目录里按程序号存的缓存 + 别的款的缓存 + 共享 metallib 缓存"""
-        low, run = gid.lower(), self.c.private / "run" / "s2arm"
+        low, run = gid.lower(), self.c.work_root / "run" / "s2arm"
         out = self.c.library / "iPhone" / gid
         keep = [out / f"t{low}.ipa", out / f"t{low}资源包" / "manifest.json", out / "logs" / "a.log"]
         gone = [out / "roots" / f"t{low}@现行" / "x", out / "extract" / "romfs" / "f", run / "cache" / "direct" / gid.upper() / "work" / "cas",
                 run / "cache" / "bake" / f"{low}-abc" / "ok", run / "cache" / "aoc" / f"t{low}-k" / "aoc.tsv", run / "cache" / "srcver" / f"t{low}-k" / "r",
-                run / "widen" / f"t{low}_b" / "ui", run / "widen" / "auto" / f"t{low}_b" / "w", self.c.private / "cache" / "air" / "ios" / "x.air"]
-        other = [run / "cache" / "direct" / "0100AAAAAAAAA000" / "cas", run / "cache" / "bake" / "0100aaaaaaaaa000-abc" / "ok", self.c.private / "cache" / "nxaot" / "host.o"]
+                run / "widen" / f"t{low}_b" / "ui", run / "widen" / "auto" / f"t{low}_b" / "w", self.c.work_root / "cache" / "air" / "ios" / "x.air"]
+        other = [run / "cache" / "direct" / "0100AAAAAAAAA000" / "cas", run / "cache" / "bake" / "0100aaaaaaaaa000-abc" / "ok", self.c.work_root / "cache" / "nxaot" / "host.o"]
         for f in keep + gone + other:
             f.parent.mkdir(parents=True, exist_ok=True); f.write_text("x")
         return keep, gone, other

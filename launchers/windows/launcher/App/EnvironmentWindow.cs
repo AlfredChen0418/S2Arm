@@ -150,6 +150,17 @@ public sealed partial class EnvironmentWindow : Window
         body.Children.Add(new Expander { Header = T("settings.title"), Content = settings,
             HorizontalAlignment = HorizontalAlignment.Stretch });
 
+        var libraryRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
+        var libraryText = new StackPanel { Spacing = 4 };
+        libraryText.Children.Add(Label(T("environment.library.title"), 16));
+        libraryText.Children.Add(Label(connectedFolder ?? libraryFolder));
+        libraryText.Children.Add(Label(T("environment.library.detail")));
+        libraryRow.Children.Add(libraryText);
+        var libraryChange = Action("environment.library.change", () => BeginPicker(ChangeLibraryAsync), !libraryBusy && !PackBusy);
+        libraryChange.VerticalAlignment = VerticalAlignment.Center;
+        Grid.SetColumn(libraryChange, 1); libraryRow.Children.Add(libraryChange);
+        body.Children.Add(Card(libraryRow));
+
         var aiRow = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         var aiText = new StackPanel { Spacing = 4 };
         aiText.Children.Add(Label(T("environment.ai.title"), 16));

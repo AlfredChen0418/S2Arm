@@ -292,6 +292,38 @@ public sealed partial class EnvironmentWindow
         libraryFolder = LocalPath(folders[0]); Render();
     }
 
+    private string LibraryPreference => Path.Combine(privateRoot, "library-location.txt");
+
+    private string SavedLibrary()
+    {
+        try { var saved = File.ReadAllText(LibraryPreference).Trim(); return saved.Length > 0 ? saved : DefaultLibrary; }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { return DefaultLibrary; }
+    }
+
+    private string DefaultLibrary => Path.Combine(privateRoot, "DefaultLibrary");
+
+    private async Task ChangeLibraryAsync()
+    {
+        var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = T("library.choose_folder") });
+        if (folders.Count > 0) ConnectLibrary(LocalPath(folders[0]));
+    }
+
+    /// <summary>换到新位置：连上后记下来，下次启动还用它。</summary>
+    private void ConnectLibrary(string folder)
+    {
+        connectedFolder = null; libraryId = null;
+        libraryFolder = folder;
+        libraryOperation = SwitchLibraryAsync(folder);
+    }
+
+    private async Task SwitchLibraryAsync(string folder)
+    {
+        await EnsureLibraryAsync(folder, () => { });
+        if (connectedFolder is null) return;
+        try { PrivateJobRequest.EnsurePrivateRoot(privateRoot); File.WriteAllText(LibraryPreference, folder); }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException) { importError = error.Message; Render(); }
+    }
+
     private async Task ChooseSourceFolderAsync()
     {
         var folders = await StorageProvider.OpenFolderPickerAsync(new FolderPickerOpenOptions { Title = T("library.import_folder") });

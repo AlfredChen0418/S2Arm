@@ -36,6 +36,12 @@ struct EnvironmentView: View {
             }
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
+                    CardGroup(loc.t("s2arm.env.library.group")) {
+                        CardRow(loc.t("s2arm.env.library.title"), detail: model.provider.client.environment.library + "\n" + loc.t("s2arm.env.library.detail")) {
+                            Button(loc.t("s2arm.env.library.change")) { chooseLibrary() }
+                                .buttonStyle(LauncherSecondaryButtonStyle()).disabled(model.busy)
+                        }
+                    }
                     let failing = model.checks.filter { !$0.ok }
                     if !failing.isEmpty || model.environmentError != nil {
                         CopyReportButton(model: model, gameID: nil, operations: nil,

@@ -150,6 +150,10 @@ import S2ArmAppleAdapter
                 model.downloadUpdate(); return .ok()
             default: return .bad("action 只认 restart / retry")
             }
+        case ("POST", "/library"):
+            guard let p = str("path") else { return .bad("缺 path") }
+            if let b = busy() { return b }
+            model.changeLibrary(to: URL(fileURLWithPath: p)); return .ok()
         case ("POST", "/select"):
             if let id = str("gameId") { model.selectedID = id }
             return .ok()
@@ -197,6 +201,7 @@ import S2ArmAppleAdapter
         ["POST /environment", "重新检查环境"], ["POST /refresh", "刷新游戏库"],
         ["POST /diagnostics {action:pull} | {action:export, path}", "拉回 iPhone 诊断 / 导出 Mac 诊断包"],
         ["POST /update {action:restart|retry}", "更新：restart = 重启并换上已下载好的新版，retry = 重试下载；进度看 GET /state 的 update"],
+        ["POST /library {path}", "换游戏库位置（外接盘也行，换后要重新放游戏）"],
         ["POST /dismiss", "关掉提示"], ["POST /select {gameId}", "选中一款"],
     ].map { ["call": $0[0], "what": $0[1]] }
 

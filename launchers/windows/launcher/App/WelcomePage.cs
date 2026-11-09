@@ -184,7 +184,7 @@ public sealed partial class EnvironmentWindow
     private void EnsureLibrary(Action next)
     {
         if (connectedFolder is not null && libraryId is not null) { next(); Render(); return; }
-        var defaultLib = Path.Combine(privateRoot, "DefaultLibrary");
+        var defaultLib = SavedLibrary();
         libraryFolder = defaultLib;
         libraryOperation = EnsureLibraryAsync(defaultLib, next);
     }

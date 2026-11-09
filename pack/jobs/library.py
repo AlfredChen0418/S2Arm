@@ -473,7 +473,7 @@ def pack_footprint(c, gid):
     """这一款出包在游戏库所在卷上的整套占用：iPhone 输出（产物根 / IPA / 资源包）、共用解包与 Mac 构建缓存（cache/<程序号>）、
     Mac 运行版本（games/<程序号>），再加私有目录里本款的出包缓存（直连 / 翻译…，game_caches）——后者只在和游戏库同一卷时才算进来。
     不含各款共用的编库缓存（air / pso / gal_dl_cache）、存档、运行时着色器缓存（runtime-cache，玩的时候才长）"""
-    shared = {c.private / "cache" / "air", c.private / "cache" / "pso", c.private / "run" / "gal_dl_cache"}
+    shared = {c.work_root / "cache" / "air", c.work_root / "cache" / "pso", c.work_root / "run" / "gal_dl_cache"}
     roots = [c.library / "iPhone" / gid, c.library / "cache" / gid, c.library / "games" / gid]
     roots += [p for p in game_caches(c, gid) if p not in shared]
     # APFS 上产物根、资源包、Mac 运行版本里的这两种目录都是解包结果的克隆，不占新空间，只算解包那一份（stat 看不出共享块）；Windows（NTFS 无克隆）照实算
@@ -537,7 +537,7 @@ def check_pack_space(c, game, *, compiler_policy=None):
         if any(not v["enough"] for v in budget["volumes"]):
             # 若不足的是另一卷，只统计缓存，不为它删除本卷冷条目。
             floor = target if any(not v["enough"] for v in relevant) else 0
-            cache_result = trim(c.private, current_gid=game["id"],
+            cache_result = trim(c.work_root, current_gid=game["id"],
                                 **dict(compiler_policy, min_free_bytes=floor))
             budget = space_budget(c, game)
             budget["compilerCache"] = cache_result
@@ -816,7 +816,7 @@ def catalog(c):
 # 这一款在私有目录里按程序号存的出包缓存（直连 / 翻译 / 追加内容 / 原件核对 / 宽屏；都在 S2A_RUN_ROOT = <私有>/run 下，pack/jobs/core.py Context.env）
 # 显式清理/删除含共享编库缓存；Q15 成功后的自动清理仅清本款中间产物，保留可复用编库条目。
 def game_caches(c, gid, *, include_compiler=True):
-    run = c.private / "run" / "s2arm"
+    run = c.work_root / "run" / "s2arm"
     low = gid.lower()
     direct = run / "cache" / "direct" / gid.upper()
     out = [direct] if include_compiler else direct_transients(c, direct)
@@ -824,7 +824,7 @@ def game_caches(c, gid, *, include_compiler=True):
                    (run / "widen", f"t{low}_*"), (run / "widen" / "auto", f"t{low}_*")):
         out += sorted(d.glob(pat)) if d.is_dir() else []
     if include_compiler:
-        out += [c.private / "cache" / "air", c.private / "cache" / "pso", c.private / "run" / "gal_dl_cache"]
+        out += [c.work_root / "cache" / "air", c.work_root / "cache" / "pso", c.work_root / "run" / "gal_dl_cache"]
     return [p for p in out if p.exists() or p.is_symlink()]
 
 
@@ -833,7 +833,7 @@ def direct_transients(c, direct):
     S2Arm 11-01: the direct cache is one content-addressed store, one file per entry (C# dsh_batch build, store/dshb/); the former per-key trees
     ios/ and mac/ (b-<chain>/, cas/…) and work/ are the old layout, which direct_lib.sh deletes on its next build anyway"""
     from cache_retention import _safe_root
-    if _safe_root(c.private, direct) != 'safe':
+    if _safe_root(c.work_root, direct) != 'safe':
         return []
     out = [direct / name for name in ('work', 'merged', 'mac', 'ios')]
     for path in sorted(direct.glob('*.stage.*')):
@@ -860,7 +860,7 @@ def direct_transients(c, direct):
 def _rm_direct_transient(c, direct, path):
     """Remove only this lexical child, without resolving its final component."""
     from cache_retention import _safe_root
-    if path.parent != direct or _safe_root(c.private, direct) != 'safe':
+    if path.parent != direct or _safe_root(c.work_root, direct) != 'safe':
         return False
     # Pin the checked parent; rmtree's dir_fd implementation refuses a directory
     # replaced by a symlink instead of traversing it. Global _rm stays unchanged.
@@ -988,12 +988,12 @@ def prune_build(c, gid, *, retain_compiler=True):
                         _rm_entry(c, q); n += 1
                 continue
             _rm(c, c.library, p); n += 1
-    direct = c.private / 'run/s2arm/cache/direct' / gid.upper()
+    direct = c.work_root / 'run/s2arm/cache/direct' / gid.upper()
     for p in game_caches(c, gid, include_compiler=not retain_compiler):
         if retain_compiler and p.parent == direct:
             n += _rm_direct_transient(c, direct, p)
         else:
-            _rm(c, c.private, p); n += 1
+            _rm(c, c.work_root, p); n += 1
     return n
 
 
@@ -1011,7 +1011,7 @@ def delete(c):
                     if p.exists():
                         _rm(c, c.library, p)
                 for p in game_caches(c, gid):
-                    _rm(c, c.private, p)
+                    _rm(c, c.work_root, p)
                 cat = c.catalog()
                 cat["games"] = [g for g in cat["games"] if g["id"] != gid]
                 atomic(c.library / "catalog.json", cat)
@@ -1073,7 +1073,7 @@ def _ipa_outputs(out):
 def space_parts(c, gid):
     """{部件 id: [路径…]}，外加不给删的 saves / logs。路径都在游戏库或私有目录之内；不存在的不列"""
     out = c.library / "iPhone" / gid
-    shared = {c.private / "cache" / "air", c.private / "cache" / "pso", c.private / "run" / "gal_dl_cache"}   # 各款共用的编库缓存：不归任何一款
+    shared = {c.work_root / "cache" / "air", c.work_root / "cache" / "pso", c.work_root / "run" / "gal_dl_cache"}   # 各款共用的编库缓存：不归任何一款
     ipa = _ipa_outputs(out)
     inter = [p for p in out.iterdir() if p.name != "logs" and p not in ipa] if out.is_dir() else []
     parts = {
@@ -1131,7 +1131,7 @@ def space_free(c):
         for k in [k for k, _, _ in SPACE_PARTS if k in want]:
             before = _part_bytes(parts[k])
             for p in parts[k]:
-                root = c.private if p.is_relative_to(c.private) else c.library
+                root = c.work_root if p.is_relative_to(c.work_root) else c.library
                 _rm(c, root, p)
             after = _part_bytes([p for p in parts[k] if p.exists() or p.is_symlink()])
             freed += before - after

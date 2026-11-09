@@ -223,6 +223,11 @@ public sealed partial class EnvironmentWindow
                         return ControlReply.Ok();
                     default: return ControlReply.Bad("action 只认 restart / retry");
                 }
+            case ("POST", "/library"):
+                if (r.Text("path") is not { Length: > 0 } library) return ControlReply.Bad("缺 path");
+                if (ControlBusy) return Busy();
+                ConnectLibrary(Path.GetFullPath(library));
+                return ControlReply.Ok();
             case ("POST", "/select"):
                 if (r.Text("gameId") is { } selection) selectedGame = selection;
                 return ControlReply.Ok();
@@ -258,6 +263,7 @@ public sealed partial class EnvironmentWindow
         ("POST /diagnostics {action:export, path}", "导出诊断包（已脱敏的 zip）"),
         ("POST /environment", "重新检查环境"), ("POST /refresh", "刷新游戏库"),
         ("POST /update {action:restart|retry}", "更新：restart = 重启并换上已下载好的新版，retry = 重试下载；进度看 GET /state 的 update"),
+        ("POST /library {path}", "换游戏库位置（外接盘也行，换后要重新放游戏）"),
         ("POST /dismiss", "关掉提示"), ("POST /select {gameId}", "选中一款"),
     ];
 

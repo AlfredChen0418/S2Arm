@@ -451,13 +451,18 @@ class Context:
                     return d
         return None
 
+    @property
+    def work_root(self):
+        """出包缓存和临时运行目录的根：游戏库放在别处（比如外接盘）时跟着游戏库走，不占系统盘。"""
+        return self.private if self.library.is_relative_to(self.private) else self.library / ".s2arm-work"
+
     def env(self):
         env = dict(os.environ)
         for k in list(env):
             if k.startswith(("S2A_", "NXGAL_", "DM_", "DMSH", "GAL_", "PSO_", "PYTHON")):
                 env.pop(k)
-        cache = self.private / "cache"
-        cache.mkdir(exist_ok=True)
+        cache = self.work_root / "cache"
+        cache.mkdir(parents=True, exist_ok=True)
         env.pop("DEVELOPER_DIR", None)
         developer = self.r.get("developerDir") or self.default_developer   # 启动器传的 > 装着的最新 Xcode；都没有就不设
         if developer:
@@ -479,7 +484,7 @@ class Context:
                    S2A_PACK_PURPOSE="user",
                    # 出包链里其余缺省落在 ~/.s2arm/run 的缓存 / 锁 / 编好的小工具（直连缓存 6.5 GB、翻译缓存 5.3 GB…，10-26 Spare-host 斯普拉遁3）一律改到私有目录：
                    #   玩家机上不出现 ~/.s2arm/run，清数据目录 / 删游戏能连它们一起删（守卫 tests/userpath_cache_test.py）
-                   S2A_RUN_ROOT=str(self.private / "run"),
+                   S2A_RUN_ROOT=str(self.work_root / "run"),
                    # 玩家作业不认我方开发机的规矩（10-26 侍魂晓在启动器里被 130 G 磁盘闸 + 独占局让路白卡 43 分钟）：不读 tools/machine.local
                    #   （记账、130 G 总量闸、签名团队、gate-host / 远端派活都是我方共享机器的设定），按用户机器出包（守卫 tests/userpath_cache_test.py ④）
                    S2A_MACHINE_NO_LOCAL="1", S2A_CPU_LEDGER="0",
