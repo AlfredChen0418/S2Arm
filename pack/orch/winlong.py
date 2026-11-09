@@ -27,6 +27,52 @@ def long_path(path):
     return "\\\\?\\UNC\\" + full[2:] if full.startswith("\\\\") else "\\\\?\\" + full
 
 
+class _Entry:
+    """目录项：路径按调用方给的写法，其余照原 DirEntry（前缀只在系统调用里用，调用方拿到带前缀的路径后 relative_to 比不上，#138）"""
+    __slots__ = ("_entry", "path", "name")
+
+    def __init__(self, entry, path):
+        self._entry, self.path, self.name = entry, path, entry.name
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def __fspath__(self):
+        return self.path
+
+
+class _Scan:
+    def __init__(self, entries, parent):
+        self._entries, self._parent = entries, parent
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        entry = next(self._entries)
+        return _Entry(entry, ntpath.join(self._parent, entry.name))
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_):
+        self.close()
+
+    def close(self):
+        self._entries.close()
+
+
+def _wrap_scandir(module):
+    original = module.scandir
+
+    def scandir(path="."):
+        converted = long_path(path)
+        return original(path) if converted is path else _Scan(original(converted), os.fspath(path))
+
+    scandir.__doc__ = original.__doc__
+    module.scandir = scandir
+
+
 def _wrap(module, name, count):
     original = getattr(module, name, None)
     if original is None:
@@ -44,8 +90,9 @@ def install():
     if _done or os.name != "nt":
         return
     _done = True
-    for name in ("stat", "lstat", "open", "mkdir", "rmdir", "unlink", "remove", "scandir", "listdir", "chmod", "utime", "readlink", "truncate", "access"):
+    for name in ("stat", "lstat", "open", "mkdir", "rmdir", "unlink", "remove", "listdir", "chmod", "utime", "readlink", "truncate", "access"):
         _wrap(os, name, 1)
+    _wrap_scandir(os)
     for name in ("rename", "replace", "link", "symlink"):
         _wrap(os, name, 2)
     for name in ("exists", "lexists", "isfile", "isdir", "islink", "getsize", "getmtime", "getatime", "getctime", "isjunction"):

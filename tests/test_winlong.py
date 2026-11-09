@@ -27,6 +27,29 @@ class LongPathTest(unittest.TestCase):
         unc = "\\\\srv\\share\\" + "a\\" * 130 + "f"
         self.assertEqual(winlong.long_path(unc), "\\\\?\\UNC\\srv\\share\\" + "a\\" * 130 + "f")
 
+    def test_scandir_keeps_callers_path_form(self):   # #138：目录项路径带 \\?\ 前缀时，relative_to 比不上不带前缀的根
+        import types
+        parent = "C:\\" + "a\\" * 130 + "d"
+        closed = []
+        class Entries:
+            def __iter__(self): return self
+            def __init__(self): self.items = iter([types.SimpleNamespace(name="f.bin", path="\\\\?\\" + parent + "\\f.bin", is_dir=lambda follow_symlinks=True: False)])
+            def __next__(self): return next(self.items)
+            def close(self): closed.append(True)
+        seen = []
+        fake = types.SimpleNamespace(scandir=lambda p=".": (seen.append(p), Entries())[1])
+        winlong._wrap_scandir(fake)
+        with fake.scandir(parent) as it:
+            entries = list(it)
+        self.assertEqual(seen, ["\\\\?\\" + parent])            # 系统调用用长路径前缀
+        self.assertEqual(entries[0].path, parent + "\\f.bin")      # 调用方拿到的路径没有前缀
+        self.assertEqual(os.fspath(entries[0]), parent + "\\f.bin")
+        self.assertEqual((entries[0].name, entries[0].is_dir()), ("f.bin", False))
+        self.assertEqual(closed, [True])
+        short = "C:\\a"
+        fake.scandir(short)
+        self.assertEqual(seen[-1], short)
+
     def test_redact_keeps_windows_path_length(self):
         out = redact.redact_text(r"[WinError 206] : 'C:\Users\example\a\b.txt'")
         self.assertIn("[PRIVATE_PATH len=", out)
