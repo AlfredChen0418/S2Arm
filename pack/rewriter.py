@@ -108,7 +108,7 @@ def c_path():
     source = ROOT / "runtime/rewriter"
     digest = hashlib.sha256(source_digest().encode() + b"\0")
     for value in (platform.system(), platform.machine(), *(os.environ.get(k, "") for k in
-                   ("CC", "CFLAGS", "CPPFLAGS", "LDFLAGS", "CMAKE_TOOLCHAIN_FILE"))):
+                   ("CC", "CFLAGS", "CPPFLAGS", "LDFLAGS", "CMAKE_TOOLCHAIN_FILE", "MACOSX_DEPLOYMENT_TARGET"))):
         digest.update(value.encode() + b"\0")
     if os.name == "nt": digest.update(b"msvcrt=static\0")   # Windows 静态 C 运行库（下面 cmake 参数）进缓存键：旧的动态运行库那份不复用
     cache = Path(os.environ.get("S2A_REWRITER_CACHE", ROOT / "build/rewriter-cli")).resolve()

@@ -12,7 +12,8 @@ import shutil
 import subprocess
 import sys
 from bundle_engine import bundle
-from runtime_audit import verify_portable_runtime
+from runtime_audit import verify_minimum_macos, verify_portable_runtime
+import runtime_sources
 from bundle_runtime import TOOLS, runtime_deps_fingerprint
 import frontend_layout
 
@@ -96,6 +97,7 @@ def bundle_shell(engine_json, dest, env):
 
 
 def main():
+    os.environ["MACOSX_DEPLOYMENT_TARGET"] = runtime_sources.deployment_target()   # clang、cmake、rustc 都读它：包内自己编的程序不能比声明的系统高
     parser = argparse.ArgumentParser(description=__doc__)
     # 出前端用与门禁 / 出包同一套 Xcode：tools/toolchain.sh 解析（指定 / 本机配置 > xcode-select，10-25 起不读仓库里写的版本）
     picked = subprocess.run(["bash", "-c", 'S2A_TC_QUIET=1 source tools/toolchain.sh > /dev/null && printf %s "$DEVELOPER_DIR"'], cwd=ROOT, capture_output=True, text=True)
@@ -197,7 +199,7 @@ def main():
     bundle(resources / "Engine", args.developer_dir)
     bundle_shell(resources / "Engine/engine.json", resources / "Shell", env)
     info = dict(**frontend_layout.info_identity(front), CFBundlePackageType="APPL",
-                CFBundleIconFile="S2Arm", LSMinimumSystemVersion="15.0",
+                CFBundleIconFile="S2Arm", LSMinimumSystemVersion=runtime_sources.deployment_target(),
                 NSHighResolutionCapable=True, CFBundleDevelopmentRegion="en", CFBundleLocalizations=["en", "zh-Hans"],
                 **release_identity(resources / "Engine/engine.json"))
     info["UTExportedTypeDeclarations"] = [dict(UTTypeIdentifier="org.s2arm.save-backup", UTTypeDescription="S2Arm Save Backup",
@@ -207,6 +209,7 @@ def main():
     subprocess.run(["xcrun", "strip", "-S", str(app / "Contents/MacOS" / front["executable"])], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", str(app)], env=env, check=True)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], env=env, check=True)
+    print("最低系统检查：", verify_minimum_macos(app, runtime_sources.deployment_target()), "个 Mach-O")
     smoke_env = dict(env, PATH="/usr/bin:/bin:/usr/sbin:/sbin", PYTHONNOUSERSITE="1")
     subprocess.run([str(resources / "Runtime/python/bin/python3"), "-B", "-I", "-c",
                     "import capstone,lz4.block,numpy,zstandard; "

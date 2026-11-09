@@ -24,8 +24,8 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 REQS = ["tools/rewriter-requirements.txt", "pack/fonts/requirements.txt", "launchers/macos/requirements-runtime.txt"]
 # 公式 → 谁要：bundle_runtime.py 的 prefixes 全部 + C 改写器（runtime/rewriter，CMake 3.18+）+ services/dav1d/build.sh（meson + ninja）
-FORMULAS = {"python@3.12": "运行环境 Python / 构建 venv", "spirv-tools": "运行环境", "spirv-cross": "运行环境", "glslang": "运行环境",
-            "zstd": "运行环境", "bash": "运行环境（bash 5）", "cmake": "C 改写器", "meson": "dav1d 静态库", "ninja": "dav1d 静态库"}
+FORMULAS = {"python@3.12": "构建 venv",
+            "bash": "运行环境（bash 5）", "cmake": "C 改写器", "meson": "dav1d 静态库", "ninja": "dav1d 静态库"}
 IMPORTS = "import capstone, lz4, numpy, PIL, fontTools, pathops"
 rows = []
 

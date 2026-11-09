@@ -2,7 +2,7 @@
 """Collect a relocatable runtime on an Apple Silicon release builder.
 
 Adapted from LumaDock (MIT; README.md).
-Requires Homebrew python@3.12, spirv-tools, spirv-cross, glslang, zstd and bash on the builder.
+Requires Homebrew bash on the builder; Python and the SPIRV tools come from runtime_sources.py so their minimum macOS matches the app's.
 bash 5 ships in Runtime/bin and comes first on the jobs' PATH: engine scripts are written and gated on bash 5; macOS /bin/bash 3.2 lacks BASHPID etc.
 (10-25 launcher Hades run: EXIT traps failed with 'BASHPID: unbound variable').
 bash is an aggregated GPL-3.0 program (separate process, not linked). Its COPYING and the source offer are copied into Runtime/licenses.
@@ -25,6 +25,7 @@ import subprocess
 import tempfile
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 from runtime_audit import SYSTEM_PATHS, rpaths, verify_portable_runtime
+import runtime_sources
 import sys
 sys.path.insert(0, str(ROOT))   # 按包导入：不把 pack/ 放进模块路径（pack/pack.py 会顶替 pack 包，build_app → bundle_engine 取壳编号 from pack.shell 即红）
 from pack import rewriter
@@ -40,6 +41,8 @@ def runtime_deps_fingerprint():
     """
     h = hashlib.sha256()
     h.update(b'runtime-deps-v1\n')
+    h.update((ROOT / 'launchers/macos/runtime_sources.py').read_bytes())
+    h.update(runtime_sources.deployment_target().encode())
     h.update((ROOT / 'launchers/macos/bundle_runtime.py').read_bytes())   # 收什么、怎么收也算：11-02 只改拷贝规则补 Pillow，旧 Runtime 指纹不变照旧复用、玩家仍缺
     h.update((ROOT / 'launchers/macos/requirements-runtime.txt').read_bytes())
     h.update(b'\n')
@@ -87,18 +90,27 @@ def build(out):
     brew = shutil.which('brew')
     if not brew:
         raise RuntimeError('Release builder requires Homebrew.')
-    prefixes = {name:pathlib.Path(output([brew, '--prefix', name])).resolve()
-                for name in ('python@3.12', 'spirv-tools', 'spirv-cross', 'glslang', 'zstd', 'bash')}
-    python_bin = prefixes['python@3.12']/'bin/python3.12'
-    python = pathlib.Path(output([python_bin, '-I', '-c', 'import sys; print(sys.base_prefix)']))
+    prefixes = {name:pathlib.Path(output([brew, '--prefix', name])).resolve() for name in ('bash',)}
+    python = runtime_sources.python()
+    python_bin = python/'bin/python3.12'
+    tool_prefix, tool_sources = runtime_sources.tools()
+    for name in ('spirv-tools', 'spirv-cross', 'glslang', 'zstd'):
+        prefixes[name] = tool_prefix
     venv = ROOT/'build/macos/python'
+    if (venv/'pyvenv.cfg').is_file() and str(python) not in (venv/'pyvenv.cfg').read_text():
+        shutil.rmtree(venv)   # 旧的 venv 是 Homebrew Python 建的，原生扩展要按新解释器重装
     if not (venv/'bin/python').is_file():
         run([python_bin, '-m', 'venv', venv])
     run([venv/'bin/python', '-m', 'pip', 'install', '--disable-pip-version-check', '-r', ROOT/'launchers/macos/requirements-runtime.txt'])
     installed = venv/'lib/python3.12/site-packages'
-    if not (python/'Python').is_file() or not installed.is_dir():
-        raise RuntimeError('Expected Homebrew framework Python and build/macos/python; see README.')
+    if not installed.is_dir():
+        raise RuntimeError('Expected build/macos/python site-packages; see README.')
     cp(python, out/'python')
+    for extra in ('lib/libpython3.12.dylib', 'lib/libtcl9.0.dylib', 'lib/libtcl9tk9.0.dylib', 'lib/pkgconfig', 'share'):
+        victim = out/'python'/extra
+        shutil.rmtree(victim) if victim.is_dir() else victim.unlink(missing_ok=True)
+    for extra in (out/'python/lib').glob('t[ck]*'):
+        if extra.is_dir(): shutil.rmtree(extra)
     site = out/'python/lib/python3.12/site-packages'
     site.mkdir(parents=True, exist_ok=True)
     # 拷贝名单从钉版清单推（11-07：手写名单漏过 Pillow（11-02）、又差点漏 zstandard（.nup 导入要）；清单加一行即随包）。
@@ -185,25 +197,24 @@ def build(out):
     for p in (out/'python/bin').iterdir():
         if p.name not in ('python3', 'python3.12'):
             p.unlink()
-    # Resources/Python.app is required by the framework launcher.
     env = dict(os.environ, PYTHONNOUSERSITE='1', PYTHONDONTWRITEBYTECODE='1')
     run([out/'python/bin/python3', '-B', '-I', '-c', 'import capstone,lz4.block,numpy,PIL.Image,zstandard,ctypes,zlib,hashlib; print("Portable Python dependencies OK")'], env=env)
     # zstd 解压要用 Runtime/bin/zstd 旁边的 ../lib/libzstd.1.dylib（App 的 Python 3.12 没有 compression.zstd；Python 侧入口 graphics/tools/shbake/zstd_lib.py 随 pack/uepak-v8 入）
     run([out/'python/bin/python3', '-B', '-I', '-c', f'import ctypes; ctypes.CDLL({str(out / "lib/libzstd.1.dylib")!r}).ZSTD_versionNumber; print("Runtime libzstd OK")'], env=env)
     licenses = out/'licenses'
     licenses.mkdir()
-    for src, name in [(prefixes['python@3.12']/'LICENSE', 'Python-LICENSE.txt'),
+    for src, name in [(python/'lib/python3.12/LICENSE.txt', 'Python-LICENSE.txt'),
                       (dotnet/'LICENSE.txt', 'dotnet-LICENSE.txt'), (dotnet/'ThirdPartyNotices.txt', 'dotnet-ThirdPartyNotices.txt'),
-                      (prefixes['spirv-tools']/'LICENSE', 'SPIRV-Tools-LICENSE.txt'),
-                      (prefixes['zstd']/'LICENSE', 'Zstandard-LICENSE.txt'),
+                      (tool_sources['spirv-tools']/'LICENSE', 'SPIRV-Tools-LICENSE.txt'),
+                      (tool_sources['zstd']/'LICENSE', 'Zstandard-LICENSE.txt'),
                       (prefixes['bash']/'COPYING', 'bash-COPYING.txt'),
                       (ROOT/'launchers/macos/runtime_source_offer.txt', 'S2Arm-runtime-source-offer.txt'),
-                      (prefixes['spirv-cross']/'LICENSE', 'SPIRV-Cross-LICENSE.txt'),
-                      (prefixes['glslang']/'LICENSE.txt', 'glslang-LICENSE.txt'),
+                      (tool_sources['spirv-cross']/'LICENSE', 'SPIRV-Cross-LICENSE.txt'),
+                      (tool_sources['glslang']/'LICENSE.txt', 'glslang-LICENSE.txt'),
                       (ROOT/'runtime/rewriter/LICENSES/capstone.txt', 'capstone-LICENSE.txt'),
                       (ROOT/'runtime/rewriter/LICENSES/lz4.txt', 'lz4-LICENSE.txt')]:
         shutil.copy2(src, licenses/name)
-    dependencies = output([brew, 'deps', '--installed', 'python@3.12', 'spirv-tools', 'spirv-cross', 'glslang', 'zstd', 'bash']).splitlines()
+    dependencies = output([brew, 'deps', '--installed', 'bash']).splitlines()
     for name in set(dependencies):
         prefix = pathlib.Path(output([brew, '--prefix', name]))
         for p in prefix.glob('*'):
@@ -212,8 +223,8 @@ def build(out):
     versions = json.loads(output([out/'python/bin/python3', '-B', '-I', '-c',
         'import json,sys,importlib.metadata as m; print(json.dumps(dict(python=sys.version.split()[0], **{p:m.version(p) for p in ["capstone","lz4","numpy"]})))']))
     versions.update(runtimeSchema=4, runtimeDeps=runtime_deps_fingerprint(), dotnet=version_dotnet.name, timeout='tools/bin/timeout',
-                    spirvTools=output([brew, 'list', '--versions', 'spirv-tools']), zstd=output([brew, 'list', '--versions', 'zstd']), bash=output([brew, 'list', '--versions', 'bash']),
-                    spirvCross=output([brew, 'list', '--versions', 'spirv-cross']), glslang=output([brew, 'list', '--versions', 'glslang']),
+                    spirvTools='spirv-tools '+runtime_sources.SPIRV_TOOLS_VERSION, zstd='zstd '+runtime_sources.ZSTD_VERSION, bash=output([brew, 'list', '--versions', 'bash']),
+                    spirvCross='spirv-cross '+runtime_sources.SPIRV_CROSS_VERSION, glslang='glslang '+runtime_sources.GLSLANG_VERSION,
                     rewriter=rewriter.source_digest())
     (out/'versions.json').write_text(json.dumps(versions, indent=2))
     for tool, arguments in [('spirv-as',['--version']), ('spirv-val',['--version']), ('zstd',['--version']),

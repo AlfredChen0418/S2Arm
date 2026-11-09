@@ -351,7 +351,10 @@ public final class JobClient {
                 return JobOutcome(taskId: id, state: .cancelled, exitCode: exitCode, message: "任务已取消。",
                                   result: [:], diagnostics: [], stderr: errorText)
             }
-            return JobOutcome(taskId: id, state: .interrupted, exitCode: exitCode, message: rejection ?? JobOutcome.interruptedMessage,
+            // 进程一启动就退出时没有日志可看：把错误输出的末尾带上，玩家和错误摘要才有线索
+            let tail = errorText.trimmingCharacters(in: .whitespacesAndNewlines).suffix(600)
+            let interrupted = tail.isEmpty ? JobOutcome.interruptedMessage : JobOutcome.interruptedMessage + "\n" + tail
+            return JobOutcome(taskId: id, state: .interrupted, exitCode: exitCode, message: rejection ?? interrupted,
                               result: [:], diagnostics: [], stderr: errorText)
         }
     }

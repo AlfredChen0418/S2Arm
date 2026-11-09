@@ -83,7 +83,7 @@ final class JobClientTests: XCTestCase {
         let box = try Sandbox(); defer { box.remove() }
         for (lines, code, state, message) in [
             ([String](), Int32(130), JobOutcome.State.cancelled, "任务已取消。"),
-            ([], 1, .interrupted, JobOutcome.interruptedMessage),
+            ([], 1, .interrupted, JobOutcome.interruptedMessage + "\nbootstrap noise"),
             ([#"{"error":"游戏库里没有这款游戏。","code":"input_missing"}"#], 2, .interrupted, "游戏库里没有这款游戏。"),
         ] {
             let runner = FakeRunner()

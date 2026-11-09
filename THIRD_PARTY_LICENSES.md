@@ -32,7 +32,7 @@ S2Arm 本身以 Apache License 2.0 授权（仓库根目录 [LICENSE](LICENSE) �
 | python-lz4 | 4.4.5 | BSD-3-Clause | https://github.com/python-lz4/python-lz4 | 是 | 否 |
 | NumPy | 2.4.2（.app 钉版） | BSD-3-Clause | https://numpy.org 。开发机文档里出现过 2.5.4，那是另一套环境，不打进 .app | 是 | 否 |
 | Pillow | 12.3.0（与出包机钉版一致） | MIT-CMU | https://github.com/python-pillow/Pillow/blob/12.3.0/LICENSE 。已核许可原文允许使用、修改和分发，要求保留版权及许可声明、不得未经许可使用作者名作宣传，可与本项目 Apache-2.0 自有代码共存；随 Runtime 保留包的 dist-info/licenses（含 wheel 所带库的各自许可）。只用于出包图标缩放 | 是（Runtime Python 包） | 否 |
-| Python | 3.12（Homebrew python@3.12） | PSF License | https://www.python.org | 是 | 否 |
+| Python | 3.12（python-build-standalone 官方构建） | PSF License | https://www.python.org | 是 | 否 |
 | .NET 运行时 | 10.x（构建机已装的 10.* 最新补丁） | MIT | https://github.com/dotnet/runtime | 是（Runtime/dotnet） | 是（NativeAOT 把运行时代码静态编进 iOS 宿主；不带共享运行时目录） |
 | zstd 命令行与 libzstd | Homebrew 构建时的版本 | BSD-3-Clause | https://github.com/facebook/zstd | 是 | 否 |
 | libvpx | 1.15.0 | BSD-3-Clause（附专利授权） | https://chromium.googlesource.com/webm/libvpx ，由 `services/vpx/build.sh` 按 sha256 取，不入库；发版时 iOS arm64 / macOS arm64 静态库预编进 App（`Engine/Binaries/Prepare/libs/vpx/`），玩家出包只链接 | 是（静态链进 Mac 宿主；预编库随 App） | 是（静态链进 iOS 宿主） |

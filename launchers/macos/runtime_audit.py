@@ -28,6 +28,36 @@ def check_load_paths(path,dependencies,commands):
             raise RuntimeError(f'External runtime search path in {path}: {value}')
 
 
+def minimum_macos(build_info):
+    """vtool -show-build 的输出 → 所有 macOS 分片的最低系统（iOS 分片不算）。"""
+    found=[];platform=None
+    for line in build_info.splitlines():
+        words=line.split()
+        if len(words)>=2 and words[0]=='platform': platform=words[1]
+        elif len(words)>=2 and words[0]=='minos' and platform=='MACOS': found.append(words[1])
+    return found
+
+
+def version_tuple(text):
+    return tuple(int(part) for part in text.split('.'))
+
+
+def verify_minimum_macos(app,declared):
+    """App 声明支持 declared，包内每个 macOS 程序的最低系统都不能更高。返回检查的 Mach-O 个数。"""
+    app=Path(app).resolve();limit=version_tuple(declared);bad=[];count=0
+    for path in app.rglob('*'):
+        if path.is_symlink() or not path.is_file() or not macho(path):
+            continue
+        count+=1
+        for minimum in minimum_macos(subprocess.check_output(['vtool','-show-build',path],text=True)):
+            if version_tuple(minimum)>limit:
+                bad.append(f'{path.relative_to(app)} (macOS {minimum})')
+                break
+    if bad:
+        raise RuntimeError(f'【红】{len(bad)} 个程序要求的 macOS 高于声明的 {declared}：\n  '+'\n  '.join(bad))
+    return count
+
+
 def verify_portable_runtime(runtime):
     runtime=Path(runtime).resolve();count=0
     for path in runtime.rglob('*'):
