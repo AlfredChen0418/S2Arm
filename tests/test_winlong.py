@@ -75,6 +75,17 @@ class LongPathTest(unittest.TestCase):
         self.assertEqual(sorted(sr.group_targets(["R:\\lib\\w", "D:\\x"])), ["D:\\x", "R:\\lib\\w"])
 
     @unittest.skipUnless(os.name == "nt", "只在 Windows 上有目录联接")
+    def test_junction_to_long_target_is_usable(self):   # 目标超过 240 字符：不能加 \\\\?\\，否则联接非法
+        import _winapi
+        with tempfile.TemporaryDirectory() as t:
+            deep = t
+            while len(deep) < 260: deep = os.path.join(deep, "d" * 30)
+            winlong.install(); os.makedirs(deep); Path(deep, "f.txt").write_bytes(b"x")
+            link = os.path.join(t, "j"); _winapi.CreateJunction(deep, link)
+            self.assertEqual(Path(link, "f.txt").read_bytes(), b"x")
+            os.rmdir(link)
+
+    @unittest.skipUnless(os.name == "nt", "只在 Windows 上有目录联接")
     def test_teardown_removes_only_the_junction(self):
         import _winapi
         from pack.orch import shortroot as sr

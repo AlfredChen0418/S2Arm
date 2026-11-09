@@ -138,5 +138,7 @@ def install():
     io.open = builtins.open
     import _winapi
     _wrap(_winapi, "CopyFile2", 2)
-    _wrap(_winapi, "CreateJunction", 2)
+    original_junction = _winapi.CreateJunction
+    # 目标不能加 \\?\：CreateJunction 自己拼 \??\ 前缀，再加一层就成了非法联接（访问时 WinError 123）；只有联接自身的路径需要长路径写法
+    _winapi.CreateJunction = lambda target, link: original_junction(target, long_path(link))
     _wrap_realpath()
