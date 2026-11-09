@@ -778,7 +778,8 @@ def win_runtime_env(runtime, engine, system_root):
                                                                ntpath.join(system_root, r"System32\WindowsPowerShell\v1.0")]
     return dict(PATH=";".join(paths), DOTNET_ROOT=ntpath.join(rt, "dotnet"), DOTNET_MULTILEVEL_LOOKUP="0",
                 S2A_BASH=ntpath.join(rt, r"git\usr\bin\bash.exe"), PYTHONHOME=ntpath.join(rt, "python"), PYTHONUTF8="1",
-                S2A_PREBUILT_TOOLS=ntpath.join(str(engine), r"Binaries\Prepare"))
+                S2A_PREBUILT_TOOLS=ntpath.join(str(engine), r"Binaries\Prepare"),
+                PYTHONPATH=ntpath.join(str(engine), r"pack\orch\site"))   # 子 Python 进程的长路径处理（pack/orch/winlong.py）
 
 
 def pid_alive(pid):

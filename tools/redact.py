@@ -92,6 +92,14 @@ def redact_identity(text):
     return DEVICE_NAME.sub(r'[DEVICE_NAME]的\1', text)
 
 
+def _private_path(match):
+    """路径换成占位；Windows 路径保留长度和层数（不含内容），WinError 206 这类问题要靠它分清是不是路径太长"""
+    path = match.group(0).replace('\\\\', '\\')
+    if '\\' not in path:
+        return '[PRIVATE_PATH]'
+    return f"[PRIVATE_PATH len={len(path)} depth={path.count(chr(92))}]"
+
+
 def redact_text(text, *, key_values=None, preserve_identity=False) -> str:
     """Redact known values before shape rules, including formal identity fields."""
     values = load_key_values() if key_values is None else key_values
@@ -105,8 +113,8 @@ def redact_text(text, *, key_values=None, preserve_identity=False) -> str:
     s = re.sub(r'(?i)([?&](?:token|key|api_key|secret|password|auth|signature|session|access_token)=)[^&#\s]+', r'\1[REDACTED]', s)
     s = re.sub(r'(?i)((?:password|passwd|secret|token|api[_-]?key|[a-z0-9_]*_key(?:_[a-z0-9]+)*|titlekek|masterkey|headerkey|cookie|serial(?:number)?|udid|uuid|imei|device[_-]?id|android[_-]?id|idfa|idfv|mac[_-]?address|uniqueidentifier|identifierforvendor)\s*["\x27]?\s*[:=]\s*["\x27]?)[^\s,"\x27;}]+', r'\1[REDACTED]', s)
     s = redact_identity(s)
-    s = re.sub(r'(?:/Volumes/|/private/var/|/var/mobile/|/data/user/|/data/data/|\\\\)[^\r\n\"\x27<>]*', '[PRIVATE_PATH]', s)
-    s = re.sub(r'(?:/Users/|/home/|[A-Za-z]:[\\/](?:Users|Documents)[\\/])[^\r\n\"\x27<>]*', '[PRIVATE_PATH]', s)
+    s = re.sub(r'(?:/Volumes/|/private/var/|/var/mobile/|/data/user/|/data/data/|\\\\)[^\r\n\"\x27<>]*', _private_path, s)
+    s = re.sub(r'(?:/Users/|/home/|[A-Za-z]:[\\/](?:Users|Documents)[\\/])[^\r\n\"\x27<>]*', _private_path, s)
     s = re.sub(r'\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b', '[DEVICE_ID]', s)
     if not preserve_identity:
         s = re.sub(r'(?i)\b[0-9a-f]{64,}\b', '[KEY_MATERIAL]', s)

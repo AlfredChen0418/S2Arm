@@ -6530,5 +6530,9 @@
  {
   "source": "在这台 Mac 屏幕上的钥匙串弹窗里点「始终允许」（需要的话输入 Mac 登录密码），再点一次「装到 iPhone」。",
   "en": "In the keychain prompt on this Mac's screen, click \"Always Allow\" (enter your Mac login password if asked), then install on iPhone again."
+ },
+ {
+  "source": "路径太长：把游戏库搬到盘符根目录附近的短路径（比如 D:\\S2Arm），再打一次包；反馈时请带上错误摘要。",
+  "en": "Path too long: move your game library to a short path near the drive root (for example D:\\S2Arm), then build again. Include the error summary when reporting."
  }
 ]

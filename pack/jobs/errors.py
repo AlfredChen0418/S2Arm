@@ -102,6 +102,7 @@ RECOVERY = {
     'container_last_game': '在 iPhone 桌面长按 S2Arm 删除 App 即可。',
     'container_purge_failed': '手机解锁、数据线插稳后再删一次；不影响其他游戏。',
     'keychain_prompt': '在这台 Mac 屏幕上的钥匙串弹窗里点「始终允许」（需要的话输入 Mac 登录密码），再点一次「装到 iPhone」。',
+    'windows_path_too_long': '路径太长：把游戏库搬到盘符根目录附近的短路径（比如 D:\\S2Arm），再打一次包；反馈时请带上错误摘要。',
     'pack_missing': '没找到这款的资源包目录：重新「打 iPhone 包」后再装到 iPhone。',
     'save_recovery_overridden': '已按你的确认跳过存档回退启动游戏；事务记录保留，下次启动会再试恢复。',
     'save_space': '释放备份目的地的磁盘空间后重试；不要删除原存档或唯一的备份。',
@@ -191,6 +192,7 @@ def player_reason(code):
 # 按日志确凿字样归因，先于阶段映射：按本表顺序，证据里第一个命中的码胜出（盘满最先：写盘失败后面常跟一串连带错误）。
 # 只收工具 / 系统原样会打的字样，不从散文猜。
 LOG_CAUSES = (
+    (r"WinError 206|filename or extension is too long|文件名或扩展名太长", "windows_path_too_long"),
     (r"No space left on device|\bENOSPC\b|\[Errno 28\]|\berrno\s*[=:]?\s*28\b"          # POSIX / Python OSError / .NET IOException（Mac）
      r"|There is not enough space on the disk|\bDisk full\b|WinError 112|ERROR_DISK_FULL|0x80070070"   # Windows / .NET
      r"|STATUS_DISK_FULL|磁盘空间不足", "disk_full"),                                       # Windows 退出码注（direct_lib.sh 127）/ 我方字样
