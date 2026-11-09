@@ -28,10 +28,10 @@ class LongPathTest(unittest.TestCase):
         self.assertEqual(winlong.long_path(unc), "\\\\?\\UNC\\srv\\share\\" + "a\\" * 130 + "f")
 
     def test_redact_keeps_windows_path_length(self):
-        out = redact.redact_text(r"[WinError 206] : 'C:\Users\me\a\b.txt'")
+        out = redact.redact_text(r"[WinError 206] : 'C:\Users\example\a\b.txt'")
         self.assertIn("[PRIVATE_PATH len=", out)
-        self.assertNotIn("me", out.split("PRIVATE_PATH")[1])
-        self.assertEqual(redact.redact_text("/Users/me/a.txt"), "[PRIVATE_PATH]")   # 非 Windows 路径不变
+        self.assertNotIn("example", out.split("PRIVATE_PATH")[1])
+        self.assertEqual(redact.redact_text("/Users/example/a.txt"), "[PRIVATE_PATH]")   # 非 Windows 路径不变
 
 
 @unittest.skipUnless(os.name == "nt", "真实文件操作只在 Windows 上跑")
