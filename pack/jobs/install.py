@@ -115,12 +115,19 @@ def keychain_teams(env=None):
     return out
 
 
+PREFS_UNREADABLE = "S2ArmPrefsUnreadable"
+
+
 def _xcode_prefs(env):
     p = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True, env=env, timeout=20)
-    try:
-        return plistlib.loads(p.stdout) if p.returncode == 0 else {}
-    except Exception:
+    if p.returncode:
         return {}
+    # 第三方 Xcode 扩展的快捷键键名可能带控制字符（如 ESC），defaults 原样导出，XML 不允许，解析会失败：先去掉（#144）
+    text = re.sub(rb"[\x00-\x08\x0b\x0c\x0e-\x1f]", b"", p.stdout)
+    try:
+        return plistlib.loads(text)
+    except Exception:
+        return {PREFS_UNREADABLE: True}
 
 
 def signing_summary(env=None):
@@ -134,7 +141,7 @@ def signing_summary(env=None):
         prefs, version = {}, []
     accounts = prefs.get("DVTDeveloperAccountManagerAppleIDLists") or {}
     count = sum(len(xs) for xs in accounts.values() if isinstance(xs, list)) if isinstance(accounts, dict) else 0
-    return (f"{version[0] if version else 'Xcode 未知'}；账号 {count} 个；团队缓存键{'有' if 'IDEProvisioningTeamByIdentifier' in prefs else '无'}；"
+    return (f"{version[0] if version else 'Xcode 未知'}；账号 {count} 个；团队缓存键{'读不了偏好' if PREFS_UNREADABLE in prefs else '有' if 'IDEProvisioningTeamByIdentifier' in prefs else '无'}；"
             f"可用团队 {len(xcode_account(env)[1])} 个；开发证书 {len(development_identities(env))} 张")
 
 

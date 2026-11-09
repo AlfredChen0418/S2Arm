@@ -91,6 +91,13 @@ class PickTests(unittest.TestCase):
             self.assertEqual(install.signing_project(c)["path"], path)
             self.assertTrue((Path(d) / "signing-helper/App.swift").is_file())
 
+    def test_prefs_with_control_characters_still_show_account(self):
+        body = plistlib.dumps(dict(DVTDeveloperAccountManagerAppleIDLists=dict(a=[dict(identifier="x")]))).replace(b"<dict>", b"<dict><key>ext\x1bkey</key><string>v</string>", 1)
+        with um.patch.object(install.subprocess, "run", return_value=um.Mock(returncode=0, stdout=body)):
+            self.assertIn("DVTDeveloperAccountManagerAppleIDLists", install._xcode_prefs(None))
+        with um.patch.object(install.subprocess, "run", return_value=um.Mock(returncode=0, stdout=b"not a plist")):
+            self.assertEqual(install._xcode_prefs(None), {install.PREFS_UNREADABLE: True})
+
     def test_xcode_teams_reads_prefs(self):
         d = tempfile.mkdtemp(); fake = Path(d) / "defaults"
         prefs = plistlib.dumps({"IDEProvisioningTeamByIdentifier": {"acc": [{"teamID": "TEAM1", "teamName": "我", "isFreeProvisioningTeam": True}, {"teamID": "TEAM1"}]}})
