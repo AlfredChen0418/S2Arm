@@ -81,7 +81,7 @@ The Nintendo Switch 2 edition of *The Legend of Zelda: Ocarina of Time*, measure
 
 ## Getting started
 
-1. Download the Mac or Windows launcher from [Releases](https://github.com/jhaizhou-ops/S2Arm/releases) and open it. Building for iPhone on a Mac needs the free Xcode from the App Store, signed in with your Apple ID; the launcher walks you through it.
+1. Download the Mac or Windows launcher from the [download page](https://jhaizhou-ops.github.io/S2Arm/) and open it. Building for iPhone on a Mac needs the free Xcode from the App Store, signed in with your Apple ID; the launcher walks you through it.
 2. Import your own keys and games. Put the base game, updates and DLC in one folder and import them together.
 3. Choose iPhone / iPad or this Mac, then click Build.
 4. Follow the launcher to sign and install with your own Apple ID (the Windows launcher ships with the Impactor signing tool), open S2Arm, and pick a game from the library.

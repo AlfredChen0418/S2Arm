@@ -81,7 +81,7 @@ Switch 2 版《塞尔达传说 时之笛》在 iPhone 17 Pro Max 上真机实测
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/jhaizhou-ops/S2Arm/releases) 下载 Mac 或 Windows 启动器，打开即用。在 Mac 上出 iPhone 包需要 App Store 免费的 Xcode，并在里面登录你的 Apple ID，启动器会一步步带你完成。
+1. 从[下载页](https://jhaizhou-ops.github.io/S2Arm/)下载 Mac 或 Windows 启动器，打开即用。在 Mac 上出 iPhone 包需要 App Store 免费的 Xcode，并在里面登录你的 Apple ID，启动器会一步步带你完成。
 2. 导入你自己的密钥和游戏；本体、更新和 DLC 放在同一个文件夹里一次导入。
 3. 选 iPhone / iPad 或这台 Mac，点「出包」。
 4. 按启动器提示用你自己的 Apple ID 签名装机（Windows 版已附带签名工具 Impactor），打开 S2Arm，在游戏库里选游戏开玩。
