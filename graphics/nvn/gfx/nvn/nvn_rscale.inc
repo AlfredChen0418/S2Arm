@@ -75,7 +75,9 @@ static int rs_eligible(const tex_t *t, id<MTLTexture> base, const char **why) {
     if (!t || !base) { if (why) *why = "没有存储"; return 0; }
     MTLPixelFormat pf = base.pixelFormat; int depth = pf == MTLPixelFormatDepth32Float || pf == MTLPixelFormatDepth32Float_Stencil8;
     NSUInteger gw = t->d.width, gh = t->d.height;
-    if (!(t->d.flags & NVN_TEXTURE_FLAGS_COMPRESSIBLE) || (t->d.flags & bad)) w = "标志（不可压缩 / 上屏 / 视频 / 存储图像 / 线性 / 稀疏）";
+    // 放大（只有玩家在 Mac 上主动选 1.5 / 2 倍才走到）：主画面目标常不标可压缩、上屏目标带 DISPLAY，不放开它们画面就不变清晰；缩小沿用 Ryujinx 的保守规则
+    if (g_rs > 1.0) bad &= ~(uint32_t)NVN_TEXTURE_FLAGS_DISPLAY;
+    if ((g_rs <= 1.0 && !(t->d.flags & NVN_TEXTURE_FLAGS_COMPRESSIBLE)) || (t->d.flags & bad)) w = "标志（不可压缩 / 上屏 / 视频 / 存储图像 / 线性 / 稀疏）";
     else if (t->d.target != NVN_TEXTURE_TARGET_2D && t->d.target != NVN_TEXTURE_TARGET_2D_ARRAY && t->d.target != NVN_TEXTURE_TARGET_RECTANGLE) w = "类型（只缩二维 / 二维数组 / 矩形）";
     else if (base.sampleCount > 1 || base.parentTexture || base.buffer) w = "多重采样 / 视图 / 缓冲";
     else if (tex_widen_why(t)) w = tex_widen_why(t);
