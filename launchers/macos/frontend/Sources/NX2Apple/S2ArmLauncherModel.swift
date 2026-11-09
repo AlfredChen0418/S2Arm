@@ -752,6 +752,13 @@ public final class S2ArmLauncherModel: ObservableObject {
     }
 
     /// 回库：只有作业结束了才能关掉作业页。
+    /// 顶栏「游戏库」：从任何页面回到游戏库；出包还在跑就留在后台，游戏库上的进度条可以回去。
+    func goToLibrary() {
+        exportFor = nil; viewingResult = nil; showEnvironment = false
+        guard let current = session else { return }
+        if isFinished(current) { session = nil } else { sessionHidden = true }
+    }
+
     func backToLibrary() {
         if viewingResult != nil { viewingResult = nil; return }
         sessionHidden = false

@@ -30,15 +30,17 @@ public struct InstallReadiness: Equatable {
     public let device: String
     /// 本机签名团队名。
     public let account: String
+    /// 这款最新的 .ipa；还没做好 iPhone 版时为空。
+    public let ipaPath: String
 
-    public init(items: [InstallItem], ready: Bool, device: String = "", account: String = "") {
-        self.items = items; self.ready = ready; self.device = device; self.account = account
+    public init(items: [InstallItem], ready: Bool, device: String = "", account: String = "", ipaPath: String = "") {
+        self.items = items; self.ready = ready; self.device = device; self.account = account; self.ipaPath = ipaPath
     }
 
     public init(result r: [String: Any]) {
         let items = (r["items"] as? [[String: Any]] ?? []).compactMap(InstallItem.init(json:))
         self.init(items: items, ready: r["ready"] as? Bool ?? false,
-                  device: r["device"] as? String ?? "", account: r["account"] as? String ?? "")
+                  device: r["device"] as? String ?? "", account: r["account"] as? String ?? "", ipaPath: r["ipaPath"] as? String ?? "")
     }
 }
 

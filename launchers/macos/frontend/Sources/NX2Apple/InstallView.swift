@@ -97,6 +97,10 @@ struct InstallView: View {
             HStack(spacing: 14) {
                 Text(loc.t("s2arm.install.note")).font(.manrope(12)).foregroundStyle(.secondary).lineLimit(3)
                 Spacer(minLength: 8)
+                if let ipa = model.installReadiness?.ipaPath, !ipa.isEmpty {
+                    Button(loc.t("s2arm.export.revealIpa")) { revealInFinder(ipa) }
+                        .buttonStyle(LauncherSecondaryButtonStyle()).accessibilityIdentifier("install.revealIpa")
+                }
                 Button(loc.t("launch.done")) { dismiss() }.buttonStyle(LauncherSecondaryButtonStyle())
                 Button {
                     if let game { model.clearInlineFailure(); model.install(game) }

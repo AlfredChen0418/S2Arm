@@ -890,6 +890,13 @@ public sealed partial class EnvironmentWindow
         AutomationId(remove, "install.remove_game");
         remove.Click += (_, _) => _ = ConfirmRemoveAsync(game);
         buttons.Children.Add(remove);
+        if (readiness is { IpaPath.Length: > 0 } located)
+        {
+            var reveal = Action("progress.reveal_ipa", () => Reveal(located.IpaPath));
+            reveal.Margin = new Thickness(12, 0, 0, 0);
+            AutomationId(reveal, "install.reveal_ipa");
+            buttons.Children.Add(reveal);
+        }
         list.Children.Add(buttons);
         body.Children.Add(Card(list));
 

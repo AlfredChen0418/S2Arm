@@ -337,11 +337,12 @@ def readiness(c):
         return readiness_windows(c, gid)
     from diag import devicectl
     items = []
+    ipa_path = ""
     def item(key, ok, title, detail, who="human", waiting=False):
         wait = waiting and not ok
         items.append(dict(id=key, ok=bool(ok), waiting=wait, blocking=key == "package" and not ok, title=title, detail="" if ok or wait else detail, who=who))   # 等前一步的不给说明，免得 AI 拿去催玩家
     try:
-        latest_ipa(c, gid)
+        ipa_path = str(latest_ipa(c, gid)[0])
         item("package", True, "这款游戏的 iPhone 版已经做好", "")
     except Failure:
         item("package", False, "这款游戏的 iPhone 版已经做好", "还没做好：先做 iPhone 版，做好后这里自动打勾。", who="app")
@@ -367,7 +368,7 @@ def readiness(c):
     dev_mode = paired and one.get("deviceProperties", {}).get("developerModeStatus") == "enabled"
     item("developerMode", dev_mode, "iPhone 已打开开发者模式",
          "在 iPhone 上打开「设置 → 隐私与安全性 → 开发者模式」，按提示重启手机；重启后解锁，这里会自动打勾。", waiting=not paired)
-    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "")
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "", ipaPath=ipa_path)
 
 
 def linked_sdk(exe):
@@ -484,6 +485,7 @@ def readiness_windows(c, gid):
     """装机前清单的 Windows 版：做好 iPhone 版 → Impactor（实测版本 + plumesign）→ 手机连着（设备服务里有且只有一台）；同 Mac 版的项格式"""
     W = win_install_mod(c)
     items = []
+    ipa_path = ""
     def item(key, ok, title, detail, who="human", waiting=False, url=None, action=None):
         wait = waiting and not ok
         # 只有没出包才真挡；其余只提示，直接去签名，真失败再给原因
@@ -491,7 +493,7 @@ def readiness_windows(c, gid):
                           url=None if ok else url,   # 玩家自装件的官方下载页（同环境检查 winenv 的 url 字段）：启动器渲染成「打开官方下载页」，不从说明文字里抠链接
                           action=None if ok else action))   # 启动器本地动作（openImpactor：打开随包的 Impactor）；只认枚举，不传路径
     try:
-        latest_ipa(c, gid)
+        ipa_path = str(latest_ipa(c, gid)[0])
         item("package", True, "这款游戏的 iPhone 版已经做好", "")
     except Failure:
         item("package", False, "这款游戏的 iPhone 版已经做好", "还没做好：先做 iPhone 版，做好后这里自动打勾。", who="app")
@@ -512,7 +514,7 @@ def readiness_windows(c, gid):
         udids = []
     item("connected", len(udids) == 1, "iPhone 已用数据线连上",
          "连着不止一台 iPhone / iPad：只留要装的那一台。" if len(udids) > 1 else "用数据线把 iPhone 连到这台电脑，解锁手机并点「信任」。")
-    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", account="")
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", account="", ipaPath=ipa_path)
 
 
 def latest_container(c):

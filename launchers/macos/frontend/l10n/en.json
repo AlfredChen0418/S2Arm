@@ -1400,6 +1400,7 @@
   "s2arm.export.versionUnknown": "Version not read yet",
   "s2arm.export.waiting": "Getting ready…",
   "s2arm.import.panel": "Add NSP / XCI files or scan a folder",
+  "s2arm.nav.library": "Library",
   "s2arm.install.account": "Signing team: %@",
   "s2arm.install.checklist": "Before installing",
   "s2arm.install.device": "Device: %@",

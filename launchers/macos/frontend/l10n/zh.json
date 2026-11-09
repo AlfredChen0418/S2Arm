@@ -1401,6 +1401,7 @@
   "s2arm.export.versionUnknown": "版本待识别",
   "s2arm.export.waiting": "正在准备…",
   "s2arm.import.panel": "添加 NSP / XCI 文件或扫描文件夹",
+  "s2arm.nav.library": "游戏库",
   "s2arm.install.account": "签名团队：%@",
   "s2arm.install.checklist": "装之前",
   "s2arm.install.device": "设备：%@",

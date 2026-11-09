@@ -162,7 +162,7 @@ public sealed record InstallItem(string Id, bool Ok, bool Waiting, string Title,
     public static readonly IReadOnlySet<string> Actions = new HashSet<string>(StringComparer.Ordinal) { "openImpactor" };
 }
 
-public sealed record InstallReadiness(IReadOnlyList<InstallItem> Items, bool Ready, string Device, string Account)
+public sealed record InstallReadiness(IReadOnlyList<InstallItem> Items, bool Ready, string Device, string Account, string IpaPath = "")
 {
     public static InstallReadiness Parse(JsonElement result)
     {
@@ -191,7 +191,8 @@ public sealed record InstallReadiness(IReadOnlyList<InstallItem> Items, bool Rea
                     LibraryJobResult.Text(i, "detail", true), i.TryGetProperty("who", out var who) ? who.GetString() ?? "" : "", url, action));
             }
             // ready is the backend's verdict: open items may be advisory (only a missing iPhone package blocks).
-            return new(items.AsReadOnly(), result.GetProperty("ready").GetBoolean(), LibraryJobResult.Text(result, "device", true), LibraryJobResult.Text(result, "account", true));
+            return new(items.AsReadOnly(), result.GetProperty("ready").GetBoolean(), LibraryJobResult.Text(result, "device", true), LibraryJobResult.Text(result, "account", true),
+                result.TryGetProperty("ipaPath", out var ipa) && ipa.ValueKind == JsonValueKind.String ? ipa.GetString() ?? "" : "");
         }
         catch (Exception error) when (error is KeyNotFoundException or InvalidOperationException)
         { throw new LibraryProtocolException("Invalid install checklist.", error); }

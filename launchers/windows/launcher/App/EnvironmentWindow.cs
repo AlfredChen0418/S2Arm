@@ -91,6 +91,16 @@ public sealed partial class EnvironmentWindow : Window
         AddUpdateControls(rightBar);
         rightBar.Children.Add(languages);
 
+        // 游戏库：任何页面都能回去；出包还在跑就留在后台
+        var libraryBtn = new Button
+        {
+            Content = T("nav.library"), Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(8),
+            Background = page == "library" ? Accent : Brush.Parse("#29292D"), Foreground = page == "library" ? Canvas : Ink
+        };
+        Avalonia.Automation.AutomationProperties.SetAutomationId(libraryBtn, "top.library");
+        libraryBtn.Click += (_, _) => { if (packRunning) sessionHidden = true; Navigate("library"); };
+        rightBar.Children.Add(libraryBtn);
+
         // 添加游戏
         var addGameBtn = new Button
         {

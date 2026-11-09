@@ -123,6 +123,11 @@ struct LauncherView: View {
                 }
                 .buttonStyle(LauncherSecondaryButtonStyle())
                 .accessibilityIdentifier("top.language")
+                Button { installFor = nil; model.goToLibrary() } label: {
+                    Label(loc.t("s2arm.nav.library"), systemImage: "square.grid.2x2").font(.manrope(12.5, .semibold))
+                }
+                .buttonStyle(LauncherSecondaryButtonStyle())
+                .accessibilityIdentifier("top.library")
                 Button { model.showAddGames = true } label: {
                     Label(loc.t("s2arm.action.import"), systemImage: "plus").font(.manrope(12.5, .semibold))
                 }

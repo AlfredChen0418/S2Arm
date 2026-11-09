@@ -249,6 +249,7 @@ class FlowTests(unittest.TestCase):
         r, it = self._ready([self._dev()])
         self.assertTrue(r["ready"]); self.assertEqual(r["device"], "测试设备2")
         self.assertEqual([i["id"] for i in r["items"]], ["package", "appleId", "connected", "trusted", "developerMode"])
+        self.assertTrue(r["ipaPath"].endswith(".ipa"))
         self.assertEqual((r["account"], it["appleId"]["title"]), ("我", "已登录 Apple ID"))
         self.assertTrue(all(i["detail"] == "" for i in r["items"]))   # 好了的项不带说明
 
@@ -257,6 +258,7 @@ class FlowTests(unittest.TestCase):
         r, it = self._ready([], teams=())                       # 没登录、没连
         self.assertFalse(r["ready"])
         self.assertEqual([i["id"] for i in r["items"] if i["blocking"]], ["package"])
+        self.assertEqual(r["ipaPath"], "")
         self.assertEqual((it["package"]["ok"], it["package"]["who"]), (False, "app"))
         self.assertFalse(it["appleId"]["ok"]); self.assertIn("Apple Accounts", it["appleId"]["detail"]); self.assertIn("团队列表", it["appleId"]["detail"])
         self.assertFalse(it["connected"]["ok"])
