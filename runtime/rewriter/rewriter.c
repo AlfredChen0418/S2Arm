@@ -2490,7 +2490,40 @@ static Jump* jump_at(A at) {
 static void gensite(Site* s) {
   Ins x = dis(iw(s->at), s->at);
   int N = x.w & 31;
-  if (in(s->kind, "tpidr_r|tpidrro_r|cntpct|cntvct|ctr|tpidr_w") && N == 18)
+  if (N == 18 && (eq(s->kind, "tpidr_r") || eq(s->kind, "tpidrro_r"))) {
+    /* 目标是 x18（#52 鬼灭之刃 2 main+0x23f5ec0 mrs x18, tpidr_el0）：线程指针取到临时寄存器，写进虚拟 x18 槽（slot 0，同 plain） */
+    int S, T, U = -1;
+    pick(BIT(18), &S, &T);
+    for (int r = 0; r < 16 && U < 0; r++)
+      if (r != S && r != T)
+        U = r;
+    if (noredzone()) {
+      emit(SUBI(31, 31, 32, 0));
+      emit(STP(S, T, 31, 0));
+      emit(STUR(U, 31, 16));
+    } else {
+      emit(STP(S, T, 31, -16));
+      emit(STUR(U, 31, -24));
+    }
+    tp(T, U);
+    slot(T, U, eq(s->kind, "tpidr_r") ? 1 : 2);
+    emit(LDR(S, T, 0));
+    tp(T, U);
+    slot(T, U, 0);
+    emit(STR(S, T, 0));
+    if (noredzone()) {
+      emit(LDUR(U, 31, 16));
+      emit(LDP(S, T, 31, 0));
+      emit(ADDI(31, 31, 32, 0));
+    } else {
+      emit(LDUR(U, 31, -24));
+      emit(LDP(S, T, 31, -16));
+    }
+    emit(branch(here(), s->at + 4));
+    bump(s->kind);
+    return;
+  }
+  if (in(s->kind, "cntpct|cntvct|ctr|tpidr_w") && N == 18)
     fail("RuntimeError: %" PRIx64 " %s %s：系统寄存器读写的 x18 须走线程槽，块未实现",
          (uint64_t)s->at, x.m, x.op);
   if (eq(s->kind, "x18")) {
