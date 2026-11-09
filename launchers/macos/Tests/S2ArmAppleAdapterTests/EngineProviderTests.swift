@@ -296,7 +296,7 @@ final class EnvironmentAndInstallTests: XCTestCase {
         runner.script = { req in
             switch req["operation"] as? String {
             case "installCheck":
-                // 作业层说 ready 但有一项没好：按没齐算
+                // 作业层说 ready，没好的是提示项：听作业层的，不把「开始装」关掉
                 return ([result(#"{"gameId":"0100A","ready":true,"device":"维护者 的 iPhone","account":"Team","items":[{"id":"package","ok":true,"waiting":false,"title":"这款游戏的 iPhone 版已经做好","detail":"","who":"app"},{"id":"developerMode","ok":\#(ready),"waiting":false,"title":"iPhone 已打开开发者模式","detail":"在 iPhone 上打开","who":"human"}]}"#)], 0, false)
             default:
                 return ([result(#"{"device":"维护者 的 iPhone","packFiles":12,"outputPath":"/out/A"}"#)], 0, false)
@@ -304,7 +304,7 @@ final class EnvironmentAndInstallTests: XCTestCase {
         }
         let provider = S2ArmEngineProvider(client: client(box, runner), xcodeLocator: { nil })
         let first = try await provider.installReadiness(gameId: "0100A")
-        XCTAssertFalse(first.ready)
+        XCTAssertTrue(first.ready)
         XCTAssertEqual(first.items.map(\.id), ["package", "developerMode"])
         XCTAssertEqual(first.items[1].detail, "在 iPhone 上打开")
         XCTAssertEqual(first.device, "维护者 的 iPhone")

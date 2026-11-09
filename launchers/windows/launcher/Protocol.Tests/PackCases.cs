@@ -89,7 +89,8 @@ public static class PackCases
             throw new Exception("accepted " + label);
         }
         RejectChecklist(checklist.Replace("https://github.com", "http://github.com"), "checklist: non-HTTPS link rejected");
-        RejectChecklist(checklist.Replace("\"ready\":false", "\"ready\":true"), "checklist: ready with an open item rejected");
+        using (var doc = JsonDocument.Parse(checklist.Replace("\"ready\":false", "\"ready\":true")))
+            check(InstallReadiness.Parse(doc.RootElement) is { Ready: true } r && r.Items.Any(i => !i.Ok), "checklist: backend ready with advisory open items is accepted");
         RejectChecklist("{}", "checklist: malformed");
         // 11-07 bundled Impactor: the backend asks for a launcher-local step by name only (openImpactor), never a path or an unknown verb
         const string bundledChecklist = """

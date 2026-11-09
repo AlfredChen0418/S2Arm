@@ -190,10 +190,8 @@ public sealed record InstallReadiness(IReadOnlyList<InstallItem> Items, bool Rea
                     i.TryGetProperty("waiting", out var w) && w.GetBoolean(), LibraryJobResult.Text(i, "title"),
                     LibraryJobResult.Text(i, "detail", true), i.TryGetProperty("who", out var who) ? who.GetString() ?? "" : "", url, action));
             }
-            var ready = result.GetProperty("ready").GetBoolean();
-            // ready is the backend's verdict; it can never claim ready while an item is not ok.
-            if (ready && items.Any(i => !i.Ok)) throw new LibraryProtocolException("Checklist claims ready with an open item.");
-            return new(items.AsReadOnly(), ready, LibraryJobResult.Text(result, "device", true), LibraryJobResult.Text(result, "account", true));
+            // ready is the backend's verdict: open items may be advisory (only a missing iPhone package blocks).
+            return new(items.AsReadOnly(), result.GetProperty("ready").GetBoolean(), LibraryJobResult.Text(result, "device", true), LibraryJobResult.Text(result, "account", true));
         }
         catch (Exception error) when (error is KeyNotFoundException or InvalidOperationException)
         { throw new LibraryProtocolException("Invalid install checklist.", error); }

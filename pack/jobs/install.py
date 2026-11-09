@@ -328,7 +328,7 @@ def backup_saves(c, ident, bid, gid, docs="Documents"):
 
 
 def readiness(c):
-    """装机前清单（用户体验线 11-02）：启动器装机页每几秒问一次、AI 代劳也读它，逐项说「好了没有、没好要谁做什么」，全齐了才让点「开始装」。
+    """装机前清单（用户体验线 11-02）：启动器装机页每几秒问一次、AI 代劳也读它，逐项说「好了没有、没好要谁做什么」，只有 iPhone 版没做好才挡（blocking），其余只提示，真失败由 install 给原因。
     只读不改：不申请描述文件、不签名、不碰设备上的 App。每项 {id, ok, title, detail, who}；who = human（只能玩家本人做）/ app（启动器自己能做）。
     文案都是定句（启动器按原句查英文），账号名、设备名另放 account / device。
     设备一项一项判（连上 → 信任 → 开发者模式），前一项没好，后面的标 waiting、不给误导的「没打开」"""
@@ -339,7 +339,7 @@ def readiness(c):
     items = []
     def item(key, ok, title, detail, who="human", waiting=False):
         wait = waiting and not ok
-        items.append(dict(id=key, ok=bool(ok), waiting=wait, title=title, detail="" if ok or wait else detail, who=who))   # 等前一步的不给说明，免得 AI 拿去催玩家
+        items.append(dict(id=key, ok=bool(ok), waiting=wait, blocking=key == "package" and not ok, title=title, detail="" if ok or wait else detail, who=who))   # 等前一步的不给说明，免得 AI 拿去催玩家
     try:
         latest_ipa(c, gid)
         item("package", True, "这款游戏的 iPhone 版已经做好", "")
@@ -367,7 +367,7 @@ def readiness(c):
     dev_mode = paired and one.get("deviceProperties", {}).get("developerModeStatus") == "enabled"
     item("developerMode", dev_mode, "iPhone 已打开开发者模式",
          "在 iPhone 上打开「设置 → 隐私与安全性 → 开发者模式」，按提示重启手机；重启后解锁，这里会自动打勾。", waiting=not paired)
-    return dict(gameId=gid, items=items, ready=all(i["ok"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "")
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "")
 
 
 def linked_sdk(exe):

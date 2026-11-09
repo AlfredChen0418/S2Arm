@@ -59,7 +59,9 @@ public sealed partial class EnvironmentWindow
     // install
     private InstallReadiness? readiness;
     private string? readinessFor;
-    private bool installChecking, installBusy;
+    private bool installChecking, installBusy, installCheckFailed;
+    // A checklist that could not be read must not lock the player out: start and let the install job give the real reason.
+    private bool InstallAllowed => readiness?.Ready == true || (readiness is null && installCheckFailed);
     private string installState = "", installMessage = "", installDiagnostics = "";
     private DateTime lastCheck = DateTime.MinValue;
     private DispatcherTimer? ticker;
@@ -838,7 +840,7 @@ public sealed partial class EnvironmentWindow
         var game = SelectedGame ?? packGame;
         body.Children.Add(Action("export.back", () => Navigate("build"), !installBusy));
         if (game is null || connectedFolder is null || libraryId is null) { body.Children.Add(Label(T("export.no_game"), 18)); return; }
-        if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; _ = CheckInstallAsync(); }
+        if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; installCheckFailed = false; _ = CheckInstallAsync(); }
         body.Children.Add(GameHeader(game));
         body.Children.Add(Label(T("install.title"), 22));
         body.Children.Add(Muted(T("install.description"), 14));
@@ -878,7 +880,7 @@ public sealed partial class EnvironmentWindow
         var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
         var recheck = Action("action.recheck", () => _ = CheckInstallAsync(), !installChecking && !installBusy);
         recheck.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(recheck);
-        var start = Primary(T("install.start"), () => _ = InstallAsync(game), readiness?.Ready == true && !installBusy && !packRunning);
+        var start = Primary(T("install.start"), () => _ = InstallAsync(game), InstallAllowed && !installBusy && !packRunning);
         AutomationId(start, "install.start");
         buttons.Children.Add(start);
         var remove = new Button { Content = T("install.remove_game"), IsEnabled = !installBusy && !packRunning,
@@ -921,19 +923,19 @@ public sealed partial class EnvironmentWindow
             var job = await PackJobClient.RunAsync(PackRequest("installCheck", game.Id), null, CancellationToken.None);
             if (readinessFor == game.Id)
             {
-                if (job.Report.Succeeded) readiness = InstallReadiness.Parse(job.Report.Result);
-                else installDiagnostics = JobDiagnostics(job);
+                if (job.Report.Succeeded) { readiness = InstallReadiness.Parse(job.Report.Result); installCheckFailed = false; }
+                else { installDiagnostics = JobDiagnostics(job); installCheckFailed = true; }
             }
         }
         catch (Exception error) when (error is LibraryProtocolException or IOException or UnauthorizedAccessException or ArgumentException or
             InvalidOperationException or OperationCanceledException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
-        { installDiagnostics = error.Message; }
+        { installDiagnostics = error.Message; installCheckFailed = true; }
         finally { installChecking = false; lastCheck = DateTime.UtcNow; if (page == "install") Render(); }
     }
 
     private async Task InstallAsync(LibraryGame game)
     {
-        if (installBusy || readiness?.Ready != true) return;
+        if (installBusy || !InstallAllowed) return;
         installBusy = true; installState = "running"; installMessage = ""; installDiagnostics = ""; Render();
         try
         {

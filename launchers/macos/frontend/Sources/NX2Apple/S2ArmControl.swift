@@ -103,8 +103,8 @@ import S2ArmAppleAdapter
         case ("POST", "/install"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
-            guard model.installGameID == g.id, model.installReadiness?.ready == true else {
-                return .bad("装机前清单还没齐：先 install-check \(g.id)，全齐了再装")
+            guard model.installAllowed(g.id) else {
+                return .bad("还不能装：先 install-check \(g.id)；这款的 iPhone 版没做好时要先出包")
             }
             model.install(g); return .ok()
         case ("POST", "/uninstall"):
@@ -134,7 +134,7 @@ import S2ArmAppleAdapter
             case ("build", let g?): return blocked(model.export(g, platforms: [.mac]))
             case ("ipa", let g?): return blocked(model.export(g, platforms: [.ios], deviceTarget: deviceTarget))
             case ("install", let g?):
-                guard model.installGameID == g.id, model.installReadiness?.ready == true else { return .bad("先 install-check \(g.id)，全齐了再装") }
+                guard model.installAllowed(g.id) else { return .bad("还不能装：先 install-check \(g.id)；这款的 iPhone 版没做好时要先出包") }
                 model.install(g); return .ok()
             case ("installRemove", let g?): model.removeFromPhone(g); return .ok()
             default: return .bad("这条任务（\(t["operation"] as? String ?? "?")）不能直接重试：照原样再发一次命令（keys / games 带路径）")
@@ -192,7 +192,7 @@ import S2ArmAppleAdapter
         ["POST /ipa {gameId}", "打 iPhone 包（出 IPA + 资源包）；没装 .NET SDK 会先自动装"],
         ["POST /build {gameId, target}", "出包：target = ios（iPhone / iPad，缺省）| mac | android | harmony；安卓、鸿蒙回 409「即将上线，敬请期待」"],
         ["POST /installCheck {gameId}", "装机前清单（只读）：几秒后看 GET /state 的 installReadiness"],
-        ["POST /install {gameId}", "装到 iPhone（清单全齐才能装）"],
+        ["POST /install {gameId}", "装到 iPhone（iPhone 版做好就能装，其余清单项只提示）"],
         ["POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款（备份存档 → 更新容器 → 删数据；其余游戏不动）"],
         ["POST /delete {gameId}", "删除这款游戏：IPA / 资源包 / 出包中间产物 / 缓存全删；存档与原始游戏文件保留"],
         ["POST /target {action:probe} | {productType, os}", "重新检测连接的设备 / 选出包提示用的机型和系统大版本"],

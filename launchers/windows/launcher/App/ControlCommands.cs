@@ -101,7 +101,7 @@ public sealed partial class EnvironmentWindow
     private ControlReply ControlInstall(LibraryGame game)
     {
         if (ControlBusy) return Busy();
-        if (readinessFor != game.Id || readiness?.Ready != true) return ControlReply.Bad($"装机前清单还没齐：先 install-check {game.Id}，全齐了再装");
+        if (readinessFor != game.Id || !InstallAllowed) return ControlReply.Bad($"还不能装：先 install-check {game.Id}；这款的 iPhone 版没做好时要先出包");
         selectedGame = game.Id;
         Navigate("install");
         _ = InstallAsync(game);

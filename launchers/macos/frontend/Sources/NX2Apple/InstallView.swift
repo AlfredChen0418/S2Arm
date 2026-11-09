@@ -1,5 +1,5 @@
 // S2Arm（不是上游文件）：装到 iPhone 前的清单（installCheck 作业：iPhone 版做好了没有、签名团队、连上 / 信任 / 开发者模式），
-// 每几秒重查一次（玩家在手机上点信任、开开发者模式后自动打勾），全齐了才让点「开始装」（install 作业，跑在作业页、可停）。
+// 每几秒重查一次（玩家在手机上点信任、开开发者模式后自动打勾），iPhone 版做好就能点「开始装」，其余项只提示（install 作业，跑在作业页、可停）。
 // 卡片同 NXLauncher（CardGroup / CardRow）。
 import AppKit
 import SwiftUI
@@ -106,8 +106,8 @@ struct InstallView: View {
                         .background(LauncherPalette.cream, in: Capsule())
                 }
                 .buttonStyle(.plain).keyboardShortcut(.defaultAction)
-                .disabled(model.installReadiness?.ready != true || model.busy)
-                .opacity(model.installReadiness?.ready == true && !model.busy ? 1 : 0.45)
+                .disabled(!model.installAllowed(gameID) || model.busy)
+                .opacity(model.installAllowed(gameID) && !model.busy ? 1 : 0.45)
             }
             .padding(.horizontal, 30).padding(.vertical, 16)
             }

@@ -22,7 +22,7 @@ public struct InstallItem: Identifiable, Equatable {
     }
 }
 
-/// 装机前清单：全齐了才让点「开始装」。
+/// 装机前清单：ready 由作业层判定（只有 iPhone 版没做好才挡），其余项只提示。
 public struct InstallReadiness: Equatable {
     public let items: [InstallItem]
     public let ready: Bool
@@ -37,8 +37,7 @@ public struct InstallReadiness: Equatable {
 
     public init(result r: [String: Any]) {
         let items = (r["items"] as? [[String: Any]] ?? []).compactMap(InstallItem.init(json:))
-        // 作业层的 ready 与逐项都要齐：两边不一致时按没齐算
-        self.init(items: items, ready: (r["ready"] as? Bool ?? false) && !items.isEmpty && items.allSatisfy(\.ok),
+        self.init(items: items, ready: r["ready"] as? Bool ?? false,
                   device: r["device"] as? String ?? "", account: r["account"] as? String ?? "")
     }
 }

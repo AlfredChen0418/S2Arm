@@ -256,6 +256,7 @@ class FlowTests(unittest.TestCase):
         gid = "0100535012974000"; self.c.r.update(gameId=gid)   # 没出 iPhone 包
         r, it = self._ready([], teams=())                       # 没登录、没连
         self.assertFalse(r["ready"])
+        self.assertEqual([i["id"] for i in r["items"] if i["blocking"]], ["package"])
         self.assertEqual((it["package"]["ok"], it["package"]["who"]), (False, "app"))
         self.assertFalse(it["appleId"]["ok"]); self.assertIn("Apple Accounts", it["appleId"]["detail"]); self.assertIn("团队列表", it["appleId"]["detail"])
         self.assertFalse(it["connected"]["ok"])
@@ -269,6 +270,13 @@ class FlowTests(unittest.TestCase):
         r, it = self._ready([self._dev(devmode="disabled")])
         self.assertTrue(it["trusted"]["ok"]); self.assertFalse(it["developerMode"]["ok"]); self.assertFalse(it["developerMode"]["waiting"])
         self.assertIn("开发者模式", it["developerMode"]["detail"])
+
+    def test_readiness_only_package_blocks(self):
+        gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)   # 出好了包，但没登录、没连手机
+        r, it = self._ready([], teams=())
+        self.assertTrue(r["ready"])
+        self.assertFalse(it["appleId"]["ok"]); self.assertFalse(it["connected"]["ok"])
+        self.assertEqual([i["id"] for i in r["items"] if i["blocking"]], [])
 
     def test_readiness_device_filtering(self):
         gid = "0100535012974000"; self._fixture(gid); self.c.r.update(gameId=gid)

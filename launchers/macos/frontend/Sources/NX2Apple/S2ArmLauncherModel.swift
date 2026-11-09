@@ -298,6 +298,7 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     /// 这件事的前提没齐：打开环境检查页（还没查过就查一遍），返回 false。
     private func environmentAllows(_ scopes: [String], ignoring: Set<String> = []) -> Bool {
+        if checks.isEmpty, environmentError != nil { return true }   // 环境检查本身失败不挡：作业自己校验并给真实原因
         if scopes.allSatisfy({ provider.environment.ready(for: $0, ignoring: ignoring) }) { return true }
         showEnvironment = true
         if checks.isEmpty { checkEnvironment() }
@@ -359,7 +360,10 @@ public final class S2ArmLauncherModel: ObservableObject {
         if !game.buildable { return .game(Self.requirementsText(game)) }
         if game.needsKeys, provider.library.keysReady == false { return .keys }
         if busy, session?.export == nil { return .busy }   // 别的出包在跑可以排队
-        if checks.isEmpty { return checking ? .checking : .environment }
+        if checks.isEmpty {
+            if checking { return .checking }
+            return environmentError != nil ? nil : .environment   // 环境检查本身失败不挡：作业自己校验并给真实原因
+        }
         if !Self.scopes(platforms).allSatisfy({ provider.environment.ready(for: $0, ignoring: ["installDotnet"]) }) { return .environment }
         return nil
     }
@@ -507,9 +511,13 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
-    /// 装到 iPhone（清单全齐才让点）。
+    /// 能不能开始装：清单说可以，或这次清单读失败（不因探测失败把玩家关在外面，install 作业会给真实原因）。
+    func installAllowed(_ gameID: String) -> Bool {
+        installGameID == gameID && (installReadiness?.ready == true || (installReadiness == nil && installError != nil))
+    }
+
     func install(_ game: GameSummary) {
-        guard !busy, installGameID == game.id, installReadiness?.ready == true else { return }
+        guard !busy, installAllowed(game.id) else { return }
         failAction(nil, game: nil)
         start(.install, game: game, name: game.name) { [weak self] sink in
             _ = try await self?.provider.install(gameId: game.id, events: sink)
