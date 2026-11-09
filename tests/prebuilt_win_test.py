@@ -9,6 +9,7 @@
   ⑤ Yaz0 解码库（graphics/tools/nxfmt.py）：预编 codecs/libyaz0dec_<yaz0dec.c sha256 前 12 位> 在 → 直接回它、不找 cc；没设 → 照旧找 cc
   ⑥ Yaz0 编码器（graphics/widen/scan/ui_lyt.py）：预编 codecs/yaz0enc-<yaz0enc.c sha1 前 12 位> 在 → 用它压（假编码器输出带记号）、CC 指不存在也不退回字面量；没设且编不了 → 照旧只写字面量
   ⑦ 布局阶段起单前核（pack/orch/stages.py _layout_tools）：PATH 上没有 clang、没给 CC：有预编编码器 → 过、交下去的环境不带 CC；没有 → 退 75「编译器未就绪」
+  ⑩ CRI 解压库（graphics/tools/shbake/nxsh_extract.py）：预编 codecs/libcrilayla_<crilayla.c sha256 前 12 位>.dylib 在 → 加载它、一次 subprocess 都不调；没设 → 照旧调 clang
   ⑧ 改写器（pack/rewriter.py）：预编 rewriter/s2a-rewrite + .source = 源码指纹 → bundled / c_path 回它（不找 cmake）；指纹不符 → bundled 回 None
   ⑨ 环境自检（oneclick_win --check）：设了 S2A_PREBUILT_TOOLS → 不出 cmake / clang++ / rewriter-deps 项，clang / spirv-cross / rewriter / prebuilt-dotnet 项核预编件，
      dotnet 项核运行时 10.x；缺 dsx/dsx.dll → clang ❌（哪怕系统有 clang）；运行时只有 8.0 → dotnet ❌；没设 → 照旧有 cmake / clang++ 项"""
@@ -17,10 +18,10 @@ from pathlib import Path
 from unittest import mock
 
 R = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(R)); sys.path.insert(0, str(R / 'translator')); sys.path.insert(0, str(R / 'graphics/tools')); sys.path.insert(0, str(R / 'graphics/widen/scan'))
+sys.path.insert(0, str(R)); sys.path.insert(0, str(R / 'translator')); sys.path.insert(0, str(R / 'graphics/tools')); sys.path.insert(0, str(R / 'graphics/widen/scan')); sys.path.insert(0, str(R / 'graphics/tools/shbake'))
 from pack.orch import oneclick_win, stages   # noqa: E402
 from pack import rewriter   # noqa: E402
-import spvc_inproc, nxfmt, ui_lyt, dsh_batch   # noqa: E402
+import spvc_inproc, nxfmt, ui_lyt, dsh_batch, nxsh_extract   # noqa: E402
 
 EXE = '.exe' if os.name == 'nt' else ''
 
@@ -54,6 +55,7 @@ def make_pre(d, skip=()):
     put('dsx/dsx.dll')
     put('codecs/' + ui_lyt.yaz0enc_name())
     put('codecs/libyaz0dec_' + hashlib.sha256((R / 'graphics/tools/yaz0dec.c').read_bytes()).hexdigest()[:12] + ('.dll' if os.name == 'nt' else '.dylib' if sys.platform == 'darwin' else '.so'))
+    put('codecs/libcrilayla_' + hashlib.sha256((R / 'graphics/tools/shbake/crilayla.c').read_bytes()).hexdigest()[:12] + '.dylib')
     put('spvc/' + spvc_inproc.LIB, spvc_inproc.prebuilt_id())
     put('spvc/cli/bin/' + spvc_inproc.CLI)
     put('rewriter/s2a-rewrite' + EXE)
@@ -176,6 +178,30 @@ class Yaz0(Base):   # ⑤ ⑥ ⑦
         self.assertNotIn('CC', env)
 
 
+class Cri(Base):   # ⑩
+    def load(self):
+        nxsh_extract._cri = None; os.environ.pop('NXSH_CRILAYLA', None)
+        loaded = mock.MagicMock()
+        with mock.patch('ctypes.CDLL', loaded), mock.patch('subprocess.run', side_effect=FileNotFoundError(2, '系统找不到指定的文件')) as run:
+            try: nxsh_extract._cri_lib(); err = None
+            except FileNotFoundError as e: err = e
+        nxsh_extract._cri = None
+        return err, (loaded.call_args[0][0] if loaded.called else None), run.called
+
+    def test_prebuilt(self):
+        pre = make_pre(self.t / 'pre'); os.environ['S2A_PREBUILT_TOOLS'] = str(pre)
+        name = 'libcrilayla_' + hashlib.sha256((R / 'graphics/tools/shbake/crilayla.c').read_bytes()).hexdigest()[:12] + '.dylib'
+        self.assertEqual(self.load(), (None, str(pre / 'codecs' / name), False), '预编件在：加载它、不调编译器')
+
+    def test_no_prebuilt_compiles(self):
+        os.environ.pop('S2A_PREBUILT_TOOLS', None)
+        with tempfile.TemporaryDirectory() as t, mock.patch.object(nxsh_extract, 'cri_lib_name', return_value='no-such-lib.dylib'), \
+                mock.patch.object(nxsh_extract, '__file__', str(Path(t, 'a/b/c/nxsh_extract.py'))):
+            Path(t, 'a/b/c').mkdir(parents=True)
+            err, lib, ran = self.load()
+        self.assertTrue(isinstance(err, FileNotFoundError) and ran and lib is None, '没设：照旧调 clang，缺 clang 就报错')
+
+
 class Rewriter(Base):   # ⑧
     def test_bundled(self):
         pre = make_pre(self.t / 'pre'); os.environ['S2A_PREBUILT_TOOLS'] = str(pre)
@@ -204,6 +230,8 @@ class Check(Base):   # ⑨
     def test_missing_piece_red(self):
         got = self.check(make_pre(self.t / 'pre', skip=('dsx/dsx.dll',)))
         self.assertEqual(got['clang'], '❌', '系统有 clang 也不算：要预编 dsx.dll')
+        cri = 'codecs/libcrilayla_' + hashlib.sha256((R / 'graphics/tools/shbake/crilayla.c').read_bytes()).hexdigest()[:12] + '.dylib'
+        self.assertEqual(self.check(make_pre(self.t / 'pre4', skip=(cri,)))['clang'], '❌', '玩家机没有 clang：缺预编 CRI 库起单前就要红（#95）')
         got = self.check(make_pre(self.t / 'pre2'), runtimes='Microsoft.NETCore.App 8.0.11 [/x]')
         self.assertEqual(got['dotnet'], '❌')
         got = self.check(make_pre(self.t / 'pre3', skip=('dsh_batch/.xfp',)))

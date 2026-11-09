@@ -118,6 +118,10 @@ def bundle(target):
     if not lib:
         raise SystemExit("【红】Yaz0 解码库编不出（graphics/tools/yaz0dec.c，要 cc / clang）")
     shutil.copy2(lib, tools / "codecs" / os.path.basename(lib))
+    sys.path.insert(0, str(ROOT / "graphics/tools/shbake"))
+    import nxsh_extract
+    lib = nxsh_extract.cri_compile()   # 编不出 CalledProcessError / FileNotFoundError 当场红（玩家机器没有编译器）
+    shutil.copy2(lib, tools / "codecs" / os.path.basename(lib))
 
     import spvc_inproc
     (tools / "spvc/cli/bin").mkdir(parents=True)

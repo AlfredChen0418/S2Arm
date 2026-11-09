@@ -693,25 +693,35 @@ def scan_nso_zstd(path, img, rows, blobs, stat):   # 主程序镜像里内嵌字
 #   （NXSH_CRILAYLA 可直接给 .dylib 路径；不进仓库）。按魔数找起点，
 #   头 +8 原长、+12 未压缩头偏移 → 压缩段总长 = 0x10 + 偏移 + 0x100；解开的照普通文件再走一遍 visit
 _cri = None
+def cri_lib_name():   # 按源码摘要命名：现编缓存与预编件同名
+    src = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crilayla.c')
+    return f"libcrilayla_{hashlib.sha256(open(src, 'rb').read()).hexdigest()[:12]}.dylib"
+def cri_prebuilt():
+    """启动器随发版预编的一份（S2A_PREBUILT_TOOLS/codecs/libcrilayla_<摘要>，launchers/windows/bundle_prepare_win.py）：同名在就用，不现编。
+    玩家的 Windows 机器没有 clang：现编报 WinError 2，CRI 压缩的游戏（#95 女神异闻录4）抽取整单红"""
+    tools = os.environ.get('S2A_PREBUILT_TOOLS')
+    lib = os.path.join(tools, 'codecs', cri_lib_name()) if tools else None
+    return lib if lib and os.path.isfile(lib) else None
+def cri_compile():
+    here = os.path.dirname(os.path.abspath(__file__)); src = os.path.join(here, 'crilayla.c')
+    bd = os.path.join(here, '..', '..', '..', 'build', 'shbake'); os.makedirs(bd, exist_ok=True)
+    lib = os.path.join(bd, cri_lib_name())
+    if not os.path.exists(lib):
+        import subprocess
+        tmp = f'{lib}.{os.getpid()}.tmp'; subprocess.run(['clang', '-O2', '-shared', '-o', tmp, src], check=True)
+        # 几个抽取进程同时首次编：库名按源码哈希定、内容相同，谁先换上都一样。Windows 上目标已被别的进程加载时 os.replace 报拒绝访问
+        #   （11-06 Windows 出包机女神异闻录5：WinError 5，整单抽取红）：目标已在就用它、删自己的临时文件
+        try: os.replace(tmp, lib)
+        except OSError:
+            if not os.path.exists(lib): raise
+            try: os.remove(tmp)
+            except OSError: pass
+    return lib
 def _cri_lib():
     import ctypes
     global _cri
     if _cri is None:
-        lib = os.environ.get('NXSH_CRILAYLA')
-        if not lib:
-            here = os.path.dirname(os.path.abspath(__file__)); src = os.path.join(here, 'crilayla.c')
-            h = hashlib.sha256(open(src, 'rb').read()).hexdigest()[:12]; bd = os.path.join(here, '..', '..', '..', 'build', 'shbake'); os.makedirs(bd, exist_ok=True)
-            lib = os.path.join(bd, f'libcrilayla_{h}.dylib')
-            if not os.path.exists(lib):
-                import subprocess
-                tmp = f'{lib}.{os.getpid()}.tmp'; subprocess.run(['clang', '-O2', '-shared', '-o', tmp, src], check=True)
-                # 几个抽取进程同时首次编：库名按源码哈希定、内容相同，谁先换上都一样。Windows 上目标已被别的进程加载时 os.replace 报拒绝访问
-                #   （11-06 Windows 出包机女神异闻录5：WinError 5，整单抽取红）：目标已在就用它、删自己的临时文件
-                try: os.replace(tmp, lib)
-                except OSError:
-                    if not os.path.exists(lib): raise
-                    try: os.remove(tmp)
-                    except OSError: pass
+        lib = os.environ.get('NXSH_CRILAYLA') or cri_prebuilt() or cri_compile()
         _cri = ctypes.CDLL(lib)
         _cri.crilayla_dec.restype = ctypes.c_long; _cri.crilayla_dec.argtypes = [ctypes.c_char_p, ctypes.c_long, ctypes.c_char_p, ctypes.c_long]
     return _cri

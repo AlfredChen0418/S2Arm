@@ -109,10 +109,10 @@ def env_items(target, shell):
         add('dotnet', shutil.which('dotnet'), 'nx_unpack / RomFS 索引 / 直连出库（.NET 10 SDK）')
     add('git-bash', bash_exe(), '直连库脚本 direct_lib.sh 在 Git Bash 下跑（S2A_BASH 可指定）')
     if pre:
-        sys.path.insert(0, str(R / 'graphics/widen/scan')); sys.path.insert(0, str(R / 'graphics/tools')); import ui_lyt, nxfmt
+        sys.path.insert(0, str(R / 'graphics/widen/scan')); sys.path.insert(0, str(R / 'graphics/tools')); sys.path.insert(0, str(R / 'graphics/tools/shbake')); import ui_lyt, nxfmt, nxsh_extract
         miss = [n for n, ok in (('dsx/dsx.dll', prebuilt('dsx/dsx.dll')), ('codecs/' + ui_lyt.yaz0enc_name(), ui_lyt.yaz0enc_prebuilt()),
-                                ('codecs/libyaz0dec', nxfmt.prebuilt_lib())) if not ok]
-        add('clang', not miss, f'预编直连翻译库 dsx / Yaz0 小库（{pre}）' + (f'缺 {"、".join(miss)}' if miss else '齐'))
+                                ('codecs/libyaz0dec', nxfmt.prebuilt_lib()), ('codecs/libcrilayla', nxsh_extract.cri_prebuilt())) if not ok]
+        add('clang', not miss, f'预编直连翻译库 dsx / Yaz0 / CRI 小库（{pre}）' + (f'缺 {"、".join(miss)}' if miss else '齐'))
     else:
         add('clang', os.environ.get('S2A_CLANG') or shutil.which('clang'), '直连翻译库 dsx / Yaz0 小库现编')
     add('metal', (metal_bin() / ('metal.exe' if WIN else 'metal')).is_file() if WIN else True, f'Metal Developer Tools（{metal_bin()}；S2A_METAL_BIN 可改）')
