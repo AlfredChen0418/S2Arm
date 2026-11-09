@@ -124,7 +124,7 @@ def env_cmd(rt):
         'set "S2A_RT=%~dp0"',
         'set "PATH=%S2A_RT%python;%S2A_RT%python\\Scripts;%S2A_RT%dotnet;%S2A_RT%mingit\\cmd;%S2A_RT%git\\usr\\bin;%S2A_RT%zstd;%SystemRoot%\\system32;%SystemRoot%;%SystemRoot%\\System32\\WindowsPowerShell\\v1.0"',
         'set "DOTNET_ROOT=%S2A_RT%dotnet"', 'set "DOTNET_CLI_TELEMETRY_OPTOUT=1"',
-        'set "S2A_BASH=%S2A_RT%git\\usr\\bin\\bash.exe"', 'set "PYTHONUTF8=1"', 'set "PYTHONDONTWRITEBYTECODE=1"',
+        'set "S2A_BASH=%S2A_RT%git\\usr\\bin\\bash.exe"', 'set "PYTHONUTF8=1"', 'set "LC_ALL=C.UTF-8"', 'set "PYTHONDONTWRITEBYTECODE=1"',
         'set "PYTHONHOME=%S2A_RT%python"', 'set "PYTHONNOUSERSITE=1"', 'set "PYTHONPATH="', ""]) ).encode("utf-8"))
 
 

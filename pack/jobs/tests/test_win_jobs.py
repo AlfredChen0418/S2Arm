@@ -27,6 +27,7 @@ class RuntimeEnv(unittest.TestCase):
         self.assertEqual((env["DOTNET_ROOT"], env["S2A_BASH"], env["PYTHONHOME"], env["S2A_PREBUILT_TOOLS"]),
                          (r"D:\S2Arm\Runtime\dotnet", r"D:\S2Arm\Runtime\git\usr\bin\bash.exe",
                           r"D:\S2Arm\Runtime\python", r"D:\S2Arm\Engine\Binaries\Prepare"))
+        self.assertEqual(env["LC_ALL"], "C.UTF-8", "机器上 LANG=C / en_US 时 cygpath 在中文处截断路径（#85）")
 
 
     def test_same_path_as_bundled_env_cmd(self):
@@ -36,6 +37,7 @@ class RuntimeEnv(unittest.TestCase):
         brw = importlib.util.module_from_spec(spec); spec.loader.exec_module(brw)
         with tempfile.TemporaryDirectory() as d:
             brw.env_cmd(Path(d)); text = Path(d, "s2arm_env.cmd").read_text(encoding="utf-8")
+        self.assertIn('set "LC_ALL=C.UTF-8"', text.splitlines())
         line = next(l for l in text.splitlines() if l.startswith('set "PATH='))
         bundled = [x.replace("%S2A_RT%", "") for x in line[len('set "PATH='):-1].split(";") if x.startswith("%S2A_RT%")]
         self.assertEqual(bundled, core.WIN_RUNTIME_PATH)
