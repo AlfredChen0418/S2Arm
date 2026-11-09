@@ -88,8 +88,8 @@ Copyright 2026 S2Arm contributors
 | `services/` | `bash services/gate.sh`；改了跨平台接缝还需 `bash tests/platform_scan_test.sh` |
 | `pack/` | `python3 pack/jobs/applenv.py` + `make test`（pack 相关单测） |
 | `launchers/` | `python3 launchers/macos/prepare_build.py` + `build/venv/bin/python3 launchers/macos/build_app.py` |
-| `android/` | `bash android/build.sh check` |
-| `docs/` 或 `*.md` | `python3 tools/check_links.py .` + `python3 tests/docs_consistency_test.py` |
+| `android/` | `bash android/test.sh`（无设备 CPU 测，见 [安卓平台文档](android/README.md)）；Linux 上另跑 `bash android/linux_ctest.sh` |
+| `docs/` 或 `*.md` | `python3 tests/docs_consistency_test.py`；本地链接可用 `make lint` 自查（自愿工具，见下文「验证改动」） |
 | 任意改动 | `bash tools/contrib_check.sh --base origin/main`（一级自检，提 PR 必跑） |
 
 Linux 暂不支持。跑不了的步骤写清原因和未测范围，不省略。
