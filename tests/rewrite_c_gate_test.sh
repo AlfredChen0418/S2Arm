@@ -11,6 +11,7 @@ PY=${S2A_PY:-$HOME/.s2arm/venv/bin/python3}   # 钉版解释器（lz4：rewrite_
 C=$("$PY" "$H/pack/rewriter.py" c-path 2>/dev/null | tail -1); [ -x "$C" ] || { echo "🔴 取不到出包 C 改写器（pack/rewriter.py c-path）"; exit 1; }
 rc=0
 REW=$C "$PY" "$H/tests/rewrite_c_test.py" || { echo "🔴 rewrite_c_test 没过（上面一行写明是产物差、退出码差还是超时）"; rc=1; }
+REW=$C "$PY" "$H/tests/rewrite_data_in_text_test.py" || { echo "🔴 rewrite_data_in_text_test：代码段内嵌数据判定不符"; rc=1; }
 REW=$C "$PY" "$H/tests/rewrite_front_synth_test.py" || { echo "🔴 rewrite_front_synth_test：C 的 FAR 容量重选与金样不符"; rc=1; }
 DEPS=$("$PY" "$H/pack/rewriter.py" deps-path) || { echo "🔴 取不到 C 改写器固定依赖（pack/rewriter.py deps-path）"; exit 1; }
 AB="$H/build/rewriter-api-test"

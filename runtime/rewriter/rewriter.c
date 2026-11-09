@@ -144,6 +144,7 @@ typedef struct {
   VEC(SpinSite) spins;
   AV starts, bounds, consumed;
   VEC(Pair) cov;
+  uint8_t* codemap;   /* 非空 = 代码段混有内嵌数据，按字（4 字节）记真实代码范围（data_in_text） */
   size_t fixrefs;
   Alloc* allocs;
   /* 布局重选（同 patch_nso.py #290）：retry_front 非 0 = 本轮是容量不足后的重做；req / now = 上一轮 / 本轮成功的自旋回边 (头, 回边) */
@@ -1532,12 +1533,111 @@ static const char* sys_differs(uint32_t w, char* buf, size_t n) {
            w, op0, o1, nn, m, o2);
   return buf;
 }
+static void scan(void);
+#define DATA_MIN_EXC 64   /* 至少这么多 hvc/smc/dcps（苹果和 Horizon 用户态都不会执行）才算「代码段里有数据」的证据 */
+static int in_code(A a) {
+  size_t w = (size_t)a / 4;
+  return !g->codemap || (g->codemap[w / 8] >> (w % 8)) & 1;
+}
+static void mark_code(A a) {
+  size_t w = (size_t)a / 4;
+  g->codemap[w / 8] |= (uint8_t)(1 << (w % 8));
+}
+/* 直接分支目标；不是分支返回 -1 */
+static A branch_target(uint32_t w, A a) {
+  if ((w & 0x7c000000) == 0x14000000) {   /* b / bl */
+    int64_t imm = w & 0x3ffffff;
+    return a + (imm - ((imm >> 25) << 26)) * 4;
+  }
+  if ((w & 0xff000010) == 0x54000000 || (w & 0x7e000000) == 0x34000000) {   /* b.cond / cbz / cbnz */
+    int64_t imm = (w >> 5) & 0x7ffff;
+    return a + (imm - ((imm >> 18) << 19)) * 4;
+  }
+  if ((w & 0x7e000000) == 0x36000000) {   /* tbz / tbnz */
+    int64_t imm = (w >> 5) & 0x3fff;
+    return a + (imm - ((imm >> 13) << 14)) * 4;
+  }
+  return -1;
+}
+static int code_ends(uint32_t w) {   /* 顺序执行到此为止：b / ret / br */
+  return (w & 0xfc000000) == 0x14000000 || (w & 0xfffffc1f) == 0xd65f0000 || (w & 0xfffffc1f) == 0xd61f0000;
+}
+/* #108：有的游戏把大量数据放进代码段（Spelunky 2 约 338 MB，31 万条 hvc/smc/dcps、均匀分布），线性扫描把数据当指令，全成缺口，还会误改数据。
+ * 只有出现足够多「不可能是代码」的指令才启用：真实代码 = .eh_frame 的函数范围 + 动态符号的函数 + 从它们出发的直接分支闭包，范围外是数据，不改写也不算缺口。
+ * 没有这些指令的模块（gaps 为 0 或只有别的缺口）不进这里，产物逐字节不变 */
+static void data_in_text(void) {
+  size_t exc = 0;
+  for (size_t i = 0; i < g->gaps.n; i++)
+    exc += !!strstr(g->gaps.v[i].why, "异常类指令");
+  if (exc < DATA_MIN_EXC || !g->cov.n) {
+    if (exc) msg("%s 内嵌数据判定：不启用（异常类指令 %zu 条，门槛 %d；函数范围 %zu 段）\n", g->r.module, exc, DATA_MIN_EXC, g->cov.n);
+    return;
+  }
+  size_t bytes = (size_t)g->text / 32 + 1;
+  uint8_t* map = resize(NULL, bytes);
+  memset(map, 0, bytes);
+  uint8_t* old = g->codemap;
+  g->codemap = map;
+  AV seeds = {0};
+  size_t fde = 0, syms = 0;
+  for (size_t i = 0; i < g->cov.n; i++)
+    for (A a = g->cov.v[i].a; a < g->cov.v[i].b && a + 4 <= (A)g->text; a += 4) {
+      if (a >= 0) { mark_code(a); fde += 4; }
+    }
+  A m0 = iw(4), dyn = m0 + si(m0 + 4), st = -1, sy = -1;
+  if (dyn >= 0 && (uint64_t)dyn + 16 <= g->len)
+    for (A at = dyn, end = MIN(dyn + 0x400 * 16, (A)g->len - 16); at < end; at += 16) {
+      uint64_t tag = iu64(at), v = iu64(at + 8);
+      if (!tag) break;
+      if (v <= g->len && tag == 5 && st < 0) st = (A)v;
+      if (v <= g->len && tag == 6 && sy < 0) sy = (A)v;
+    }
+  if (st >= 0 && sy >= 0 && sy < st)
+    for (A at = sy; at + 24 <= st && (uint64_t)at + 24 <= g->len; at += 24) {
+      uint64_t val = iu64(at + 8);
+      if ((g->img[at + 4] & 15) == 2 && val && val < g->text && !(val & 3)) { PUSH(seeds, (A)val); syms++; }   /* STT_FUNC */
+    }
+  for (size_t i = 0; i < g->cov.n; i++)
+    for (A a = g->cov.v[i].a; a < g->cov.v[i].b && a + 4 <= (A)g->text; a += 4) {
+      A t = a >= 0 ? branch_target(iw(a), a) : -1;
+      if (t >= 0 && t < (A)g->text && !(t & 3) && !in_code(t)) PUSH(seeds, t);
+    }
+  size_t walked = 0;
+  while (seeds.n) {
+    A a = seeds.v[--seeds.n];
+    for (int n = 0; n < 1 << 16 && a >= 0 && a + 4 <= (A)g->text && !in_code(a); n++, a += 4) {
+      Ins x;
+      uint32_t w = iw(a);
+      if (!decode(w, a, &x)) break;
+      mark_code(a); walked += 4;
+      A t = branch_target(w, a);
+      if (t >= 0 && t < (A)g->text && !(t & 3) && !in_code(t)) PUSH(seeds, t);
+      if (code_ends(w)) break;
+    }
+  }
+  size_t outside = 0;
+  for (size_t i = 0; i < g->gaps.n; i++)
+    outside += strstr(g->gaps.v[i].why, "异常类指令") && !in_code(g->gaps.v[i].at);
+  size_t code = 0;
+  for (A a = 0; a + 4 <= (A)g->text; a += 4) code += in_code(a) ? 4 : 0;
+  if (outside * 10 < exc * 9) {   /* 这些指令大多在函数范围内：范围本身不可信，不排除，缺口照报 */
+    msg("%s 内嵌数据判定：不启用（异常类指令 %zu 条，范围外只有 %zu 条）\n", g->r.module, exc, outside);
+    g->codemap = old;
+    return;
+  }
+  size_t gaps0 = g->gaps.n, sites0 = g->sites.n;
+  g->gaps.n = g->sites.n = 0;
+  scan();
+  msg("%s 内嵌数据判定：启用；代码段 %zu 字节，真实代码 %zu（函数范围 %zu、动态符号 %zu 个、分支闭包 %zu），排除 %zu 字节；异常类指令 %zu 条（范围外 %zu）；缺口 %zu → %zu，改写点 %zu → %zu\n",
+      g->r.module, (size_t)g->text, code, fde, syms, walked, (size_t)g->text - code, exc, outside, gaps0, g->gaps.n, sites0, g->sites.n);
+}
 static void scan(void) {
   /* NRO（romfs 里 nn::ro 装的模块，runtime/rewriter/nro_to_nso.py 转来）：text 段开头 [4, 0x80) 是 NRO 头（MOD0 偏移、
      'NRO0'、大小、段表、构建号），是数据不是指令，不扫（构建号字节会被认成 hvc 等缺口）；NSO 没有这个标记，扫描范围不变（与 patch_nso.py 同口径） */
   const A hdr = g->text >= 0x80 && !memcmp(g->img + 0x10, "NRO0", 4) ? 0x80 : 0;
   for (A a = 0; a < (A)g->text; a += 4) {
     if (a >= 4 && a < hdr) continue;
+    if (!in_code(a)) continue;
     uint32_t w = iw(a);
     const char* k = NULL;
     int arg = 0;
@@ -3780,6 +3880,7 @@ static void spins(void) {
   AV heads = {0};
   VEC(Pair) backedges = {0};
   for (A a = 0; a < (A)g->text; a += 4) {
+    if (!in_code(a)) continue;
     uint32_t w = u32(g->orig + a);
     int top = w >> 24;
     if (!(top == 0x16 || top == 0x17 || top == 0x54 || top == 0x34 || top == 0x35 || top == 0xb4 ||
@@ -4389,6 +4490,7 @@ static int attempt(const s2a_rewrite_request* r, const s2a_rewrite_options* opti
     sdk_addr_cut();
     boundaries();
     scan();
+    data_in_text();
     analyze();
     generate();
     sdk_aregion();
