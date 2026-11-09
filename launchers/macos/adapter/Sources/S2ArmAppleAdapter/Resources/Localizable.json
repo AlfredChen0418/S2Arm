@@ -5900,6 +5900,10 @@
   "en": "Run S2Arm on a 64-bit Windows computer, then click Recheck."
  },
  {
+  "source": "检查网络后重试；还是不行就到下载页下载新版覆盖安装，当前版本和存档不受影响。",
+  "en": "Check your network and try again. If it still fails, download the new version from the download page and install it over this one. Your current version and saves are not affected."
+ },
+ {
   "source": "这款游戏有一处程序代码暂不支持，建议反馈让我们补上：点「复制错误摘要」并发给我们。",
   "en": "This game has a code pattern that is not yet supported. We recommend reporting this: click Copy error summary and send it to us."
  },

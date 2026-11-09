@@ -18,7 +18,7 @@ cat build/macos/tests/swift-execution.log
 python3 launchers/macos/check_xctest.py build/macos/tests/swift-discovery.log build/macos/tests/swift-execution.log
 [ "$swift_rc" = 0 ] || exit "$swift_rc"
 xcrun clang -fobjc-arc -O2 -Wall -Wextra -Wno-unused-parameter -Iruntime/include -Iios \
-  launchers/macos/Tests/input_test.m runtime/src/input_config.c ios/input_config.m -o build/macos/tests/input \
+  launchers/macos/Tests/input_test.m runtime/src/input_config.c runtime/src/pad.c ios/input_config.m -o build/macos/tests/input \
   -framework AppKit -framework CoreGraphics -framework GameController -framework QuartzCore
 build/macos/tests/input
 # 系统键盘桥接 Mac 端（textinput_mac.m + runtime/src/text_input.c）：真起 AppKit 表单，程序代填字 / 点按钮核回调
