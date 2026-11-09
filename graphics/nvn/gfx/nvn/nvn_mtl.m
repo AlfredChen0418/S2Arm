@@ -7986,7 +7986,7 @@ enum { SHQ_MAX = 8 };
 typedef struct { dispatch_queue_t q[SHQ_MAX]; int n; } shq_t;
 static int shq_width(void) {
     static int w; if (!w) { NSUInteger c = NSProcessInfo.processInfo.activeProcessorCount / 2, m = 2;
-        if (@available(macOS 13.3, iOS 26.0, *)) { if (g_dev) m = g_dev.maximumConcurrentCompilationTaskCount; }
+        if (@available(macOS 13.3, iOS 26.0, *)) { if (g_dev && [g_dev respondsToSelector:@selector(maximumConcurrentCompilationTaskCount)]) m = g_dev.maximumConcurrentCompilationTaskCount; }   // iOS 26.0 真机上系统版本判断为真、方法却不存在，直接调用抛 NSInvalidArgumentException 闪退（#85）
         NSUInteger x = c < m ? c : m; w = x < 2 ? 2 : x > SHQ_MAX ? SHQ_MAX : (int)x;
         MLOG("shader load lanes: %d (cores %lu, device compiles at once %lu)", w, (unsigned long)NSProcessInfo.processInfo.activeProcessorCount, (unsigned long)m); }
     return w;
