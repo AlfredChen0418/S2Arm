@@ -15,7 +15,7 @@ REPO = Path(__file__).resolve().parents[3]
 
 class Ctx:
     def __init__(self, root):
-        self.library, self.engine, self.r = root / "lib", root / "engine", {"gameId": GID}
+        self.library, self.engine, self.private, self.r = root / "lib", root / "engine", root / "priv", {"gameId": GID}
         table = self.engine / community.SETTINGS_TABLE   # 定义表用仓库里的真表
         table.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(REPO / community.SETTINGS_TABLE, table)
     def begin(self, *a): pass
@@ -110,7 +110,7 @@ class MacDisplayTests(unittest.TestCase):
     def test_every_mac_item_of_the_table_is_on_the_page(self):
         # 定义表里 platforms 含 mac 的 bool / choice 项 = enhance fps60 widescreen widenForce docked rumble rumbleLevel motion hud
         self.caps()
-        self.assertEqual(sorted(self.mac()), sorted(["enhance", "fps60", "widescreen", "widenForce", "docked", "rumble", "rumbleLevel", "motion", "hud"]))
+        self.assertEqual(sorted(self.mac()), sorted(["enhance", "fps60", "widescreen", "widenForce", "docked", "rumble", "rumbleLevel", "motion", "padFace", "hud"]))
 
     def test_game_without_a_mac_build_says_why(self):
         m = self.mac()
@@ -163,6 +163,21 @@ class MacDisplayTests(unittest.TestCase):
         self.caps()
         self.save(docked="handheld", hud=True, rumble=False, rumbleLevel="4", motion=False)
         self.assertEqual(community.launch_env(self.c, GID), {"S2A_DOCKED": "0", "S2A_HUD": "1", "S2A_RUMBLE": "0", "S2A_RUMBLE_SCALE": "1.8", "S2A_MOTION": "0"})
+
+    def test_pad_face_is_shared_by_every_game(self):
+        # 全游戏共用：存数据目录 game-settings.json、不进这款 launch.json；另一款（没有 Mac 版）也读到「按位置」；起局转 S2A_PAD_FACE=position
+        self.caps()
+        self.save(padFace="position")
+        self.assertEqual(json.loads((self.c.private / "game-settings.json").read_text())["settings"], {"padFace": "position"})
+        self.assertEqual(self.launch_file()["settings"], {})
+        self.assertEqual(community.launch_env(self.c, GID), {"S2A_PAD_FACE": "position"})
+        other = "0100000000000001"
+        write(self.c.library / "catalog.json", json.dumps({"games": [{"id": GID, "packages": []}, {"id": other, "packages": []}]}))
+        m = community.mac_settings(self.c, other)
+        self.assertEqual((m["padFace"]["available"], m["padFace"]["value"]), (True, "position"))
+        self.assertEqual(community.launch_env(self.c, other), {"S2A_PAD_FACE": "position"})
+        self.save(padFace=None)   # 回缺省「按字母」：不设环境变量
+        self.assertEqual(community.launch_env(self.c, GID), {})
 
     def test_bad_key_or_value_is_refused_and_file_unchanged(self):
         self.caps()

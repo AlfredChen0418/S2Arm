@@ -118,6 +118,20 @@ def load_launch(c, gid):
     return dict(schema=1, settings=settings, patches={str(k): bool(v) for k, v in patches.items()})
 
 
+def app_path(c):
+    """全游戏共用的设置（定义表 scope=app，如手柄按键对应）：数据目录 game-settings.json，格式同 launch.json"""
+    return c.private / "game-settings.json"
+
+
+def load_app(c):
+    try:
+        data = json.loads(app_path(c).read_text())
+    except (OSError, ValueError):
+        data = {}
+    settings = data.get("settings") if isinstance(data, dict) and isinstance(data.get("settings"), dict) else {}
+    return dict(schema=1, settings=settings)
+
+
 def _valid(item, value):
     if item["type"] == "bool":
         return isinstance(value, bool)
@@ -127,9 +141,12 @@ def _valid(item, value):
 
 
 def chosen(c, gid, table=None):
-    """玩家明确选过、且仍合定义表的设置：{id: 值}（定义表改了、旧值不合法的当没选）"""
+    """玩家明确选过、且仍合定义表的设置：{id: 值}——按款的从 launch.json、全游戏共用的从 game-settings.json，各认各的 scope
+    （定义表改了、旧值不合法的当没选）"""
     table = table or settings_table(c)
-    return {k: v for k, v in load_launch(c, gid)["settings"].items() if k in table and _valid(table[k], v)}
+    picked = {k: v for k, v in load_launch(c, gid)["settings"].items() if k in table and table[k].get("scope") == "game" and _valid(table[k], v)}
+    picked.update({k: v for k, v in load_app(c)["settings"].items() if k in table and table[k].get("scope") == "app" and _valid(table[k], v)})
+    return picked
 
 
 def runtime_caps(c, gid):
@@ -166,7 +183,7 @@ def mac_settings(c, gid):
     for key, item in table.items():
         if "mac" not in item.get("platforms", []) or item["type"] not in ("bool", "choice"):
             continue
-        ok, why = need.get(key, (bool(caps), ""))
+        ok, why = need.get(key, (bool(caps) or item.get("scope") == "app", ""))   # 全游戏共用的项不看这款有没有 Mac 版
         value = picked.get(key, _default(item, caps))
         out[key] = dict(available=ok, value=value if ok else _default(item, caps), reason="" if ok else (NO_RUNTIME if not caps else why))
     return out
@@ -234,14 +251,16 @@ def save(c):
     want = c.r.get("settings") or {}
     if not isinstance(want, dict):
         raise Failure("启动设置格式不对。", code="job_failed")
+    shared = load_app(c)
     for key, value in want.items():
         item = table.get(key)
-        if item is None or item.get("scope") != "game" or item["type"] not in ("bool", "choice"):
+        if item is None or item.get("scope") not in ("game", "app") or item["type"] not in ("bool", "choice"):
             raise Failure("没有这个启动设置：%s。" % key, code="job_failed")
+        target = shared if item["scope"] == "app" else data
         if value is None:
-            data["settings"].pop(key, None)
+            target["settings"].pop(key, None)
         elif _valid(item, value):
-            data["settings"][key] = value
+            target["settings"][key] = value
         else:
             raise Failure("启动设置 %s 的取值不对。" % key, code="job_failed")
     graphics = c.r.get("graphics") or {}
@@ -259,6 +278,8 @@ def save(c):
                     if other["exclusive"] == it["exclusive"] and other["id"] != key:
                         data["patches"][other["id"]] = False
     atomic(launch_path(c, game["id"]), data)
+    if any(table[k]["scope"] == "app" for k in want):
+        atomic(app_path(c), shared)
     return describe_game(c, game)
 
 
@@ -285,6 +306,8 @@ def launch_env(c, gid):
         env["S2A_RUMBLE"] = "0"           # 手柄震动关（macos/front_mac.m）
     if "rumbleLevel" in s:
         env["S2A_RUMBLE_SCALE"] = str(table["rumbleLevel"]["scale"][s["rumbleLevel"]])
+    if s.get("padFace") == "position":
+        env["S2A_PAD_FACE"] = "position"  # 手柄按键对应：按 Switch 的按键位置（缺省按字母；宿主口径见主线线 fix/pad-xbox-1109）
     if s.get("motion") is False:
         env["S2A_MOTION"] = "0"           # 体感关：不开手柄六轴（macos/front_mac.m）
     return env
