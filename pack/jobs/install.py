@@ -76,19 +76,73 @@ def profile_teams(env=None):
 #   判据是团队号真的出现，不是账号存在
 ACCOUNT_NONE = ("还没有登录 Apple ID：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，点 + 添加你的 Apple ID（免费的就行），"
                 "选中账号，等团队列表显示出来，再回来重新检查。装了多个 Xcode 也只要登一个，账号是共用的。")
-TEAM_PENDING = ("Apple ID 已经登录，团队还没同步下来：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，"
-                "等团队列表显示出来，再回来重新检查。")
+TEAM_PENDING = ("Apple ID 已经登录，但这台 Mac 还没有签名团队：点「解决办法」打开现成的引导项目，在 Xcode 里选 Personal Team，"
+                "连上手机点运行一次，回来会自动打勾。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。")
+
+
+def _security_text(args, env):
+    try:
+        p = subprocess.run(["security", *args], capture_output=True, text=True, env=env, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return p.stdout if p.returncode == 0 else ""
+
+
+def development_identities(env=None):
+    """钥匙串里带私钥、能用的开发证书的 SHA-1。"""
+    text = _security_text(["find-identity", "-v", "-p", "codesigning"], env)
+    return {h.upper() for h in re.findall(r'\b([0-9A-Fa-f]{40})\s+"(?:Apple Development|iPhone Developer):', text)}
+
+
+def keychain_teams(env=None):
+    """钥匙串开发证书的 OU 就是团队号，不依赖 Xcode 偏好缓存。证书看不出是否付费，按免费处理（只影响到期提示）；最终权限由 Xcode 签名验证。"""
+    identities = development_identities(env)
+    if not identities:
+        return []
+    text = _security_text(["find-certificate", "-a", "-Z", "-p"], env)
+    out, seen = [], set()
+    for sha, pem in re.findall(r"SHA-1 hash: ([0-9A-Fa-f]{40})\s+(-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----)", text, re.S):
+        if sha.upper() not in identities:
+            continue
+        try:
+            subject = subprocess.run(["/usr/bin/openssl", "x509", "-noout", "-subject"], input=pem, capture_output=True, text=True, env=env, timeout=5).stdout
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        match = re.search(r"\bOU\s*=\s*([A-Z0-9]{10})\b", subject)
+        if match and match[1] not in seen:
+            seen.add(match[1])
+            out.append(dict(id=match[1], name="", free=True))
+    return out
+
+
+def _xcode_prefs(env):
+    p = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True, env=env, timeout=20)
+    try:
+        return plistlib.loads(p.stdout) if p.returncode == 0 else {}
+    except Exception:
+        return {}
+
+
+def signing_summary(env=None):
+    """给诊断用的签名现状：只有版本和数量，不含账号和团队名。"""
+    if os.name == "nt":
+        return ""
+    try:
+        prefs = _xcode_prefs(env)
+        version = subprocess.run(["xcodebuild", "-version"], capture_output=True, text=True, env=env, timeout=20).stdout.splitlines()[:1]
+    except (OSError, subprocess.TimeoutExpired):
+        prefs, version = {}, []
+    accounts = prefs.get("DVTDeveloperAccountManagerAppleIDLists") or {}
+    count = sum(len(xs) for xs in accounts.values() if isinstance(xs, list)) if isinstance(accounts, dict) else 0
+    return (f"{version[0] if version else 'Xcode 未知'}；账号 {count} 个；团队缓存键{'有' if 'IDEProvisioningTeamByIdentifier' in prefs else '无'}；"
+            f"可用团队 {len(xcode_account(env)[1])} 个；开发证书 {len(development_identities(env))} 张")
 
 
 def xcode_account(env=None):
-    """(有没有登录 Apple ID, 团队列表)：团队优先 Xcode 团队缓存，账号存在但缓存缺失时核本机签名材料。"""
+    """(有没有登录 Apple ID, 团队列表)：依次看 Xcode 团队缓存、本机描述文件、钥匙串开发证书，定位不到才算没有。"""
     if os.name == "nt":   # Windows 没有 Xcode 账号（也没有 defaults 命令）：签名走 Impactor
         return False, []
-    p = subprocess.run(["defaults", "export", "com.apple.dt.Xcode", "-"], capture_output=True, env=env, timeout=20)
-    try:
-        prefs = plistlib.loads(p.stdout) if p.returncode == 0 else {}
-    except Exception:
-        prefs = {}
+    prefs = _xcode_prefs(env)
     out, seen = [], set()
     for teams in (prefs.get("IDEProvisioningTeamByIdentifier") or {}).values():
         for t in teams or []:
@@ -98,7 +152,42 @@ def xcode_account(env=None):
                 out.append(dict(id=tid, name=t.get("teamName") or "", free=bool(t.get("isFreeProvisioningTeam"))))
     accounts = prefs.get("DVTDeveloperAccountManagerAppleIDLists") or {}
     logged_in = isinstance(accounts, dict) and any(isinstance(xs, list) and any(isinstance(a, dict) and a.get("identifier") for a in xs) for xs in accounts.values())
-    return logged_in, out or (profile_teams(env) if logged_in else [])
+    return logged_in, out or (profile_teams(env) if logged_in else []) or keychain_teams(env)
+
+
+SIGNING_PBXPROJ = """// !$*UTF8*$!
+{ archiveVersion = 1; classes = {}; objectVersion = 56; objects = {
+A1000000000000000000000A = {isa = PBXBuildFile; fileRef = A1000000000000000000000B; };
+A1000000000000000000000B = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = App.swift; sourceTree = "<group>"; };
+A1000000000000000000000C = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = S2ArmSigning.app; sourceTree = BUILT_PRODUCTS_DIR; };
+A1000000000000000000000D = {isa = PBXGroup; children = (A1000000000000000000000B, A1000000000000000000000E); sourceTree = "<group>"; };
+A1000000000000000000000E = {isa = PBXGroup; children = (A1000000000000000000000C); name = Products; sourceTree = "<group>"; };
+A1000000000000000000000F = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A1000000000000000000000A); runOnlyForDeploymentPostprocessing = 0; };
+A10000000000000000000010 = {isa = PBXNativeTarget; buildConfigurationList = A10000000000000000000013; buildPhases = (A1000000000000000000000F); buildRules = (); dependencies = (); name = S2ArmSigning; productName = S2ArmSigning; productReference = A1000000000000000000000C; productType = "com.apple.product-type.application"; };
+A10000000000000000000011 = {isa = PBXProject; buildConfigurationList = A10000000000000000000012; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A1000000000000000000000D; productRefGroup = A1000000000000000000000E; projectDirPath = ""; projectRoot = ""; targets = (A10000000000000000000010); };
+A10000000000000000000012 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000014); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A10000000000000000000013 = {isa = XCConfigurationList; buildConfigurations = (A10000000000000000000015); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
+A10000000000000000000014 = {isa = XCBuildConfiguration; buildSettings = {IPHONEOS_DEPLOYMENT_TARGET = 16.0; SDKROOT = iphoneos; SWIFT_VERSION = 5.0; ONLY_ACTIVE_ARCH = YES; }; name = Debug; };
+A10000000000000000000015 = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGN_STYLE = Automatic; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; PRODUCT_BUNDLE_IDENTIFIER = "@BUNDLE@"; PRODUCT_NAME = "$(TARGET_NAME)"; TARGETED_DEVICE_FAMILY = "1,2"; }; name = Debug; };
+}; rootObject = A10000000000000000000011; }
+"""
+SIGNING_APP = """import SwiftUI
+
+@main struct S2ArmSigningApp: App {
+    var body: some Scene { WindowGroup { Text("S2Arm 签名已就绪，可以回到电脑继续") } }
+}
+"""
+
+
+def signing_project(c):
+    """没有团队的玩家用的引导项目：放在私有目录，玩家在 Xcode 选 Personal Team、连手机运行一次，Xcode 就会生成证书和描述文件。"""
+    root = c.private / "signing-helper"
+    project = root / "S2ArmSigning.xcodeproj"
+    project.mkdir(parents=True, exist_ok=True)
+    bundle = "io.s2arm.signing.h" + hashlib.sha256(str(c.private).encode()).hexdigest()[:10]   # 免费账号的包名要全局唯一：按这台机的数据目录算，重开不变
+    (project / "project.pbxproj").write_text(SIGNING_PBXPROJ.replace("@BUNDLE@", bundle), encoding="utf-8")
+    (root / "App.swift").write_text(SIGNING_APP, encoding="utf-8")
+    return dict(path=str(project))
 
 
 def xcode_teams(env=None):
@@ -113,9 +202,11 @@ def no_team_failure(env=None):
 def pick_team(teams, want=None):
     if want:
         t = next((t for t in teams if t["id"] == want), None)
-        if not t:
-            raise Failure(f"Xcode 里没有登录团队 {want}。", code="xcode_account_missing")
-        return t
+        if t:
+            return t
+        if not re.fullmatch(r"[A-Z0-9]{10}", want):
+            raise Failure("Team ID 要是 10 位大写字母或数字，可以在 Xcode 的账户页或 Apple 开发者网站查到。", code="xcode_account_missing")
+        return dict(id=want, name="", free=True)   # 玩家手填的：本机查不到也试，能不能用由 Xcode 签名给真实结果
     if not teams:
         raise no_team_failure()
     paid = [t for t in teams if not t["free"]]
@@ -368,7 +459,7 @@ def readiness(c):
     dev_mode = paired and one.get("deviceProperties", {}).get("developerModeStatus") == "enabled"
     item("developerMode", dev_mode, "iPhone 已打开开发者模式",
          "在 iPhone 上打开「设置 → 隐私与安全性 → 开发者模式」，按提示重启手机；重启后解锁，这里会自动打勾。", waiting=not paired)
-    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "", ipaPath=ipa_path)
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=name, account=(team["name"] or team["id"]) if team else "", ipaPath=ipa_path, signing=signing_summary(c.env()))
 
 
 def linked_sdk(exe):

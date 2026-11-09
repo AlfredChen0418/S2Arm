@@ -6468,12 +6468,12 @@
   "en": "You're not signed in to an Apple ID. Open Xcode, choose Xcode › Settings › Apple Accounts, click + and add your Apple ID (a free one is fine), select it, wait for the team list to appear, then check again. With several Xcode versions, signing in to one is enough."
  },
  {
-  "source": "Apple ID 已经登录，团队还没同步下来：打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，等团队列表显示出来，再回来重新检查。",
-  "en": "Your Apple ID is signed in but its team hasn't synced. Open Xcode, choose Xcode › Settings › Apple Accounts, select your account, wait for the team list to appear, then check again."
+  "source": "Apple ID 已经登录，但这台 Mac 还没有签名团队：点「解决办法」打开现成的引导项目，在 Xcode 里选 Personal Team，连上手机点运行一次，回来会自动打勾。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。",
+  "en": "Your Apple ID is signed in, but this Mac has no signing team yet. Click How to fix to open the ready-made helper project, choose Personal Team in Xcode, connect your phone and run it once; this page updates by itself. You can also check whether the team list appears under Xcode › Settings › Apple Accounts."
  },
  {
-  "source": "打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中你的账号，等团队列表显示出来，再点一次「装到 iPhone」。",
-  "en": "Open Xcode, choose Xcode › Settings › Apple Accounts, select your account, wait for the team list to appear, then install again."
+  "source": "在装机页点「解决办法」打开引导项目，在 Xcode 里选 Personal Team，连上手机点运行一次，再点一次「装到 iPhone」。也可以先到 Xcode › Settings › Apple Accounts 看团队列表有没有显示。",
+  "en": "On the install page, click How to fix to open the helper project, choose Personal Team in Xcode, connect your phone and run it once, then install again. You can also check whether the team list appears under Xcode › Settings › Apple Accounts."
  },
  {
   "source": "打开 Xcode，点菜单 Xcode › Settings › Apple Accounts，选中账号后点 Manage Certificates，点 + 选 Apple Development，再点一次「装到 iPhone」。",

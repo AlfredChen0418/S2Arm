@@ -518,11 +518,19 @@ public final class S2ArmLauncherModel: ObservableObject {
         installGameID == gameID && (installReadiness?.ready == true || (installReadiness == nil && installError != nil))
     }
 
-    func install(_ game: GameSummary) {
+    /// 在 Xcode 打开引导项目；玩家运行一次后，装机页每 5 秒的重查会自动打勾。
+    func openSigningProject() {
+        Task {
+            do { NSWorkspace.shared.open(URL(fileURLWithPath: try await provider.signingProject())) }
+            catch { installError = error.localizedDescription }
+        }
+    }
+
+    func install(_ game: GameSummary, teamId: String? = nil) {
         guard !busy, installAllowed(game.id) else { return }
         failAction(nil, game: nil)
         start(.install, game: game, name: game.name) { [weak self] sink in
-            _ = try await self?.provider.install(gameId: game.id, events: sink)
+            _ = try await self?.provider.install(gameId: game.id, teamId: teamId, events: sink)
             return nil
         }
     }

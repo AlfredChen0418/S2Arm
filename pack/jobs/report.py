@@ -170,6 +170,12 @@ def build(private, task, extra=None):
     for label, key in (("Xcode", "xcode"), ("目标设备", "device")):
         if extra.get(key):
             lines.append(f"{label}：{extra[key]}")
+    if sys.platform == "darwin":
+        try:
+            from install import signing_summary
+            lines.append("Xcode 签名：" + signing_summary())
+        except Exception:
+            pass   # 诊断附带信息，取不到不影响摘要
     lines.append("密钥：" + ("已放入" if (Path(private) / "keys/prod.keys").is_file() else "没有"))
     checks = [c for c in extra.get("checks") or [] if isinstance(c, dict)]
     if checks:

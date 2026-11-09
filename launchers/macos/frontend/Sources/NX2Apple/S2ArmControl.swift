@@ -107,7 +107,9 @@ import S2ArmAppleAdapter
             guard model.installAllowed(g.id) else {
                 return .bad("还不能装：先 install-check \(g.id)；这款的 iPhone 版没做好时要先出包")
             }
-            model.install(g); return .ok()
+            model.install(g, teamId: str("teamId")); return .ok()
+        case ("POST", "/signingProject"):
+            model.openSigningProject(); return .ok()
         case ("POST", "/uninstall"):
             guard let g = game() else { return .bad("没有这个 gameId") }
             if let b = busy() { return b }
@@ -218,7 +220,7 @@ import S2ArmAppleAdapter
         let privateRoot = m.provider.client.environment.privateRoot
         let keys = m.keysReady
         let rd: Any = m.installReadiness.map { r -> [String: Any] in
-            ["gameId": m.installGameID ?? "", "ready": r.ready, "device": r.device, "account": r.account,
+            ["gameId": m.installGameID ?? "", "ready": r.ready, "device": r.device, "account": r.account, "signing": r.signing,
              "items": r.items.map { ["id": $0.id, "ok": $0.ok, "waiting": $0.waiting, "title": $0.title, "detail": $0.detail, "who": $0.who] }]
         } ?? NSNull()
         let session: Any = m.session.map { s -> [String: Any] in

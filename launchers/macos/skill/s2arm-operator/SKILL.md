@@ -132,7 +132,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 | 现象 / 错误码 | 谁 | 怎么办 |
 |---|---|---|
 | 第一次装机卡在签名 | human | Mac 弹了钥匙串授权框：请玩家输入 Mac 登录密码，点「始终允许」（不点会 10 分钟超时）。开发证书和描述文件由 Xcode 自动建，不用手动建 |
-| `xcode_team_pending` | human | Apple ID 登录了但团队没同步：请玩家打开 Xcode → Settings → Apple Accounts，选中账号，等团队列表显示出来 |
+| `xcode_team_pending` | human | Apple ID 登录了但这台 Mac 没有签名团队：`s2armctl signing-project` 打开引导项目，请玩家在 Xcode 选 Personal Team，连手机点运行一次；已知 Team ID 时可用 `install <游戏号> --team <10 位>` |
 | `signing_certificate_missing` | human | 请玩家在 Apple Accounts 里选中账号 → Manage Certificates → + → Apple Development |
 | `xcode_account_missing` | human | 请玩家打开 Xcode →「设置」→「账户」，点「+」登录 Apple ID（要输密码，你不代做） |
 | `device_not_connected` / 连着不止一台 | ask | 请玩家用数据线只连要装的那台、解锁、在手机上点「信任」 |

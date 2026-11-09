@@ -1338,6 +1338,14 @@ def save_input(c):
     return {}
 
 
+def signing_status():
+    try:
+        from install import signing_summary
+        return signing_summary()
+    except Exception as error:
+        return {"error": type(error).__name__}
+
+
 def diagnostics(c):
     # Keep one path/rule engine, with UI truncation disabled for exported files.
     import platform
@@ -1474,7 +1482,8 @@ def diagnostics(c):
                 manifest = dict(launcher_version=launcher_version(),
                                 macos_version=platform.mac_ver()[0] or {"error": "macOS 版本不可用"},
                                 xcode_version=probe(["/usr/bin/xcodebuild", "-version"]),
-                                mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]))
+                                mac_model=probe(["/usr/sbin/sysctl", "-n", "hw.model"]),
+                                xcode_signing=signing_status())
                 manifest = redact_fields(manifest)
                 # These names have already been sanitized; redacting them again
                 # would hide task UUIDs and break the archive index.

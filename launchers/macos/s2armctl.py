@@ -478,6 +478,7 @@ def install_check(gid, as_json, limit=40):
             for i in rd['items']:
                 mark = '✓' if i['ok'] else ('…' if i['waiting'] else '✗')
                 print(f'{mark} {i["title"]}' + (f'\n    {"玩家本人做" if i["who"] == "human" else "启动器做"}：{i["detail"]}' if not i['ok'] and not i['waiting'] else ''))
+            if rd.get('signing'): print('Xcode 签名：' + rd['signing'])
             print('可以装：s2armctl install ' + gid + '（✗ 的项先告诉玩家；失败时按错误提示处理）' if rd['ready'] else '这款的 iPhone 版还没做好：先出包，再 s2armctl install-check ' + gid)
             sys.exit(0 if rd['ready'] else 2)
         time.sleep(1)
@@ -526,6 +527,8 @@ def main():
         if '--reset-cover' in rest: body['coverPath'] = ''
         if len(body) == 1: sys.exit('要给 --name、--cover、--reset-name 或 --reset-cover')
         print(json.dumps(call('POST', '/customize', body), ensure_ascii=False)); return
+    if cmd == 'signing-project':
+        print(json.dumps(call('POST', '/signingProject', {}), ensure_ascii=False)); return
     if cmd == 'delete':
         before = {t['id'] for t in call('GET', '/state')['tasks']}
         call('POST', '/delete', {'gameId': rest[0]}); wait_op('delete', before); return
@@ -579,7 +582,7 @@ def main():
         wait(rest[0], op, lim); return
     simple = {
               'fonts': ('/fonts', lambda r: {'path': os.path.abspath(r[0]) if r and r[0] else ''}),
-              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: {'gameId': r[0]}), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
+              'prepare': ('/prepare', lambda r: {'gameId': r[0], **space_flag(r)}), 'ipa': ('/ipa', lambda r: {'gameId': r[0], **space_flag(r)}), 'install': ('/install', lambda r: {'gameId': r[0], **({'teamId': r[r.index('--team') + 1]} if '--team' in r else {})}), 'uninstall': ('/uninstall', lambda r: {'gameId': r[0]}), 'launch': ('/launch', lambda r: {'gameId': r[0]}),
               'cancel': ('/cancel', lambda r: {'taskId': r[0]}), 'retry': ('/retry', lambda r: {'taskId': r[0]}),
               'select': ('/select', lambda r: {'selection': r[0], **({'gameId': r[1]} if len(r) > 1 else {})}),
               'onboarding': ('/onboarding', lambda r: {'action': r[0], **({'step': int(r[1])} if len(r) > 1 else {})}),
