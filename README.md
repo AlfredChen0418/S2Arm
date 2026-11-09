@@ -111,6 +111,10 @@ S2Arm stands on the shoulders of its community.
 
 Versions, full license texts and what each component does are in [NOTICE](NOTICE) and the [third-party license list](THIRD_PARTY_LICENSES.md).
 
+## Star History
+
+<a href="https://star-history.com/#jhaizhou-ops/S2Arm&Date"><picture><source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=jhaizhou-ops/S2Arm&type=Date&theme=dark" /><img alt="Star History" src="https://api.star-history.com/svg?repos=jhaizhou-ops/S2Arm&type=Date" /></picture></a>
+
 ## License and legal
 
 S2Arm is open source under the [Apache License 2.0](LICENSE). The project ships no games and no keys; obtain your own game files legally. S2Arm is not affiliated with or endorsed by Nintendo, and game titles and trademarks belong to their respective owners.
