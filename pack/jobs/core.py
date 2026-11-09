@@ -55,6 +55,20 @@ def read(path, default=None):
         return default
 
 
+# Windows：目标被别的进程打开且没带共享删除时，替换报 PermissionError（#130：Python 读方 open() 不带 FILE_SHARE_DELETE，杀毒 / 索引也会短暂占用）
+WIN_REPLACE_RETRIES = (0.02, 0.05, 0.1, 0.2, 0.4, 0.8)
+
+
+def replace_retrying(tmp, path):
+    for delay in (*WIN_REPLACE_RETRIES, None) if os.name == "nt" else (None,):
+        try:
+            return os.replace(tmp, path)
+        except PermissionError:
+            if delay is None:
+                raise
+            time.sleep(delay)
+
+
 def atomic(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -64,7 +78,7 @@ def atomic(path, value):
             json.dump(value, f, ensure_ascii=False, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, path)
+        replace_retrying(tmp, path)
     finally:
         tmp.unlink(missing_ok=True)
 
