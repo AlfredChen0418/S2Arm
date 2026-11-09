@@ -8,6 +8,11 @@ import NXLauncher
 import S2ArmAppleAdapter
 
 /// 游戏封面；没有封面放 S2Arm 图标。
+/// 没封面时的透明底白字字标（只放深色底，启动器固定深色）。
+enum BrandArt {
+    static let wordmark: NSImage = Bundle.main.url(forResource: "wordmark-transparent", withExtension: "png").flatMap(NSImage.init(contentsOf:)) ?? NSImage()
+}
+
 struct GameArtwork: View {
     @ObservedObject var covers: CoverCache
     let cover: String?
@@ -18,8 +23,8 @@ struct GameArtwork: View {
             } else {
                 LauncherPalette.surface
                 GeometryReader { g in
-                    Image(nsImage: NSApp.applicationIconImage).resizable().interpolation(.high).scaledToFit()
-                        .frame(width: min(g.size.width, g.size.height) * 0.62, height: min(g.size.width, g.size.height) * 0.62)
+                    Image(nsImage: BrandArt.wordmark).resizable().interpolation(.high).scaledToFit()
+                        .frame(width: g.size.width * 0.68, height: g.size.height * 0.68)
                         .frame(width: g.size.width, height: g.size.height)
                 }
             }

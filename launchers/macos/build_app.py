@@ -164,7 +164,8 @@ def main():
     (resources / "s2armctl").chmod(0o755)
     # 内置 Python 一律带 -B：-I 会忽略 PYTHONDONTWRITEBYTECODE，不带 -B 就往 App 包里写 __pycache__，签名封存被破坏（11-02 beta.4 走查：
     #   AI 用 s2armctl 后 codesign 报「a sealed resource is missing or invalid」，系统按新身份看待 App，文件访问授权可能失效）
-    # App 图标（#882 定稿 D「交错双柄」）：界面里的标志（BrandMark）也读这个文件
+    shutil.copy2(ROOT / "launchers/macos/Branding/wordmark-transparent.png", resources / "wordmark-transparent.png")   # 没封面时的字标
+    # App 图标（#882 定稿 D「交错双柄」）
     subprocess.run(["bash", str(ROOT / "launchers/macos/make_icns.sh"), str(resources / "S2Arm.icns")], check=True)
     # 开源替代共享字体随应用分发（维护者 10-23：玩家不用找字体、不作检测项）：pack/fonts/make_open_fonts.py 生成（来源钉版本 + sha256，产物可重现），
     #   生成器依赖 fonttools / skia-pathops，默认使用当前构建 Python，可用 S2A_FONTS_PY 覆盖；生成器没变就复用上次产物

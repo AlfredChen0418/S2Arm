@@ -79,20 +79,20 @@ public sealed partial class EnvironmentWindow
         }
         catch (Exception error) when (error is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException) { }
         return new Border { Width = size, Height = size, CornerRadius = new CornerRadius(8),
-            Background = Brush.Parse("#303035"), Padding = new Thickness(size / 6),
+            Background = Brush.Parse("#303035"), Padding = new Thickness(size / 8),
             Child = new Image
             {
-                Source = LoadAppIcon(),
+                Source = LoadWordmark(),
                 Stretch = Stretch.Uniform
             } };
     }
 
-    private Bitmap? appIconBitmap;
-    private Bitmap LoadAppIcon()
+    private Bitmap? wordmarkBitmap;
+    private Bitmap LoadWordmark()
     {
-        if (appIconBitmap is not null) return appIconBitmap;
-        using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://S2Arm/Assets/AppIcon.png"));
-        return appIconBitmap = Bitmap.DecodeToWidth(stream, 480);
+        if (wordmarkBitmap is not null) return wordmarkBitmap;
+        using var stream = Avalonia.Platform.AssetLoader.Open(new Uri("avares://S2Arm/Assets/Wordmark.png"));
+        return wordmarkBitmap = Bitmap.DecodeToWidth(stream, 480);
     }
 
     private void RenderLibrary(StackPanel body)

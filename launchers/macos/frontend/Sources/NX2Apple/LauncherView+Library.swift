@@ -55,7 +55,7 @@ extension LauncherView {
                 CoverFill(image: image).frame(width: width, height: height).clipped()
             } else {
                 LauncherPalette.surface
-                Image(nsImage: NSApp.applicationIconImage).resizable().interpolation(.high).frame(width: 190, height: 190)
+                Image(nsImage: BrandArt.wordmark).resizable().interpolation(.high).scaledToFit().frame(width: 300, height: 78)
                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing).padding(54)
             }
             LinearGradient(stops: [.init(color: .clear, location: 0.25),

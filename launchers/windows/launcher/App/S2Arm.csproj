@@ -20,6 +20,7 @@
     <AvaloniaResource Include="Assets/Fonts/*.ttf" />
     <AvaloniaResource Include="Assets/S2Arm.ico" />
     <AvaloniaResource Include="../../../macos/Branding/AppIcon-1024.png" Link="Assets/AppIcon.png" />
+    <AvaloniaResource Include="../../../macos/Branding/wordmark-transparent.png" Link="Assets/Wordmark.png" />
     <None Update="Assets/Fonts/OFL.txt" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" TargetPath="licenses/Manrope-OFL.txt" />
   </ItemGroup>
 </Project>
