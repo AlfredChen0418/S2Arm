@@ -883,7 +883,7 @@ def direct_transients(c, direct):
             out.append(path)
         except (PermissionError, OverflowError):
             pass  # unknown/live process: retain its in-progress stage
-    # Never pass a transient symlink to _rm: its contained() resolves links.
+    # Retain links: only real, producer-owned transient directories are eligible.
     safe = []
     for path in out:
         try:
@@ -953,8 +953,26 @@ def _rmtree(p):
 
 
 def _rm(c, root, p):
-    p = contained(root, p)
-    if p.is_dir() and not p.is_symlink():
+    # Check the entry before resolving it: a link into saves/ is not disposable.
+    root, p = Path(os.path.abspath(root)), Path(os.path.abspath(p))
+    try:
+        relative = p.relative_to(root)
+    except ValueError:
+        raise Failure("操作路径不属于托管目录。") from None
+    if not relative.parts:
+        raise Failure("操作路径不属于托管目录。")
+    parent = root
+    for part in relative.parts[:-1]:
+        parent = parent / part
+        if _is_link(parent):
+            raise Failure("清理路径包含目录链接，已停止操作。")
+    if _is_link(p):
+        # A Windows junction is removed with rmdir, a symlink with unlink.
+        if p.is_symlink():
+            p.unlink()
+        else:
+            p.rmdir()
+    elif p.is_dir():
         _rmtree(p)
     else:
         p.unlink(missing_ok=True)
@@ -967,11 +985,7 @@ def _is_link(p):
 
 def _rm_entry(c, p):
     """链接只删链接本身、不进指向；其余同 _rm"""
-    if _is_link(p):
-        contained(c.library, p.parent)   # contained 会顺着链接解析到指向处：核链接所在目录，删的是链接本身
-        os.unlink(p)
-    else:
-        _rm(c, c.library, p)
+    _rm(c, c.library, p)
 
 
 def _prune_roots(c, d):
