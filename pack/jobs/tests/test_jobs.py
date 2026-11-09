@@ -1478,10 +1478,29 @@ class JobsTests(unittest.TestCase):
             self.assertFalse(any("link" in name or "pipe" in name or "outside" in name for name in archive.namelist()))
             self.assertNotIn("OUTSIDE_BOUNDARY_SENTINEL", "".join(archive.read(name).decode() for name in archive.namelist()))
 
+    def test_diagnostic_log_keeps_head_heartbeats_and_tail(self):
+        import io
+        short = b"a" * 32000
+        self.assertEqual(library.diagnostic_log_excerpt(io.BytesIO(short), len(short)), short)
+        beat = "[心跳] 帧 {} 热状态 0\n".format
+        head = b"HEAD_MARK\n" + b"h" * 16000
+        noise = b"NOISE_LINE padding padding\n" * 80000   # 约 2.2 MB，心跳行跨 1 MiB 分块
+        body = head + noise + beat(1).encode() + noise + beat(2).encode() + noise + b"t" * 16000 + b"\nTAIL_MARK\n"
+        out = library.diagnostic_log_excerpt(io.BytesIO(body), len(body))
+        self.assertTrue(out.startswith(b"HEAD_MARK")); self.assertTrue(out.endswith(b"TAIL_MARK\n"))
+        self.assertIn(beat(1).strip().encode(), out); self.assertIn(beat(2).strip().encode(), out)
+        self.assertLess(out.count(b"NOISE_LINE"), 1200)   # 只有开头 / 结尾 16 KB 内可能带到
+        # 心跳太多：只留最新的，总量有界
+        many = b"".join(beat(i).encode() for i in range(20000))
+        body = b"h" * 16000 + many + b"t" * 16000
+        out = library.diagnostic_log_excerpt(io.BytesIO(body), len(body))
+        self.assertIn(beat(19999).strip().encode(), out); self.assertNotIn(beat(0).strip().encode(), out)
+        self.assertLessEqual(len(out), 16000 * 2 + 64000 + 200)
+
     def test_diagnostic_bounded_reads_and_atomic_publication(self):
         import unittest.mock as um
         logs = self.c.private / "logs"; logs.mkdir()
-        log = logs / "tail.log"; log.write_bytes(b"x" * 20000 + b"tail")
+        log = logs / "tail.log"; log.write_bytes(b"x" * 40000 + b"tail")
         destination = self.root / "diagnostics.zip"; destination.write_bytes(b"old target")
         self.c.r["path"] = str(destination)
         marker = self.root / "outside-marker"; marker.write_bytes(b"unchanged marker")
@@ -1507,7 +1526,7 @@ class JobsTests(unittest.TestCase):
             library.diagnostics(self.c)
         self.assertTrue(all(output.closed for output in outputs))
         self.assertIn((log.stat().st_ino, log.stat().st_size - 16000, 16000), reads)
-        self.assertTrue(all(size in (16000, (4 << 20) + 1) for _, _, size in reads))
+        self.assertTrue(all(size <= 1 << 20 or size == (4 << 20) + 1 for _, _, size in reads))
         self.assertEqual(marker.read_bytes(), b"unchanged marker")
         self.assertTrue(predictable.is_symlink()); self.assertFalse(destination.is_symlink())
         previous = destination.read_bytes()

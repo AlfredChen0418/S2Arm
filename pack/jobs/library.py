@@ -3,6 +3,7 @@
 Storage/interaction helpers adapted from LumaDock under MIT.
 """
 from __future__ import annotations
+import collections
 import errno
 import hashlib
 import json
@@ -20,6 +21,42 @@ import zipfile
 from core import Failure, atomic, contained, digest, prune_jobs, read
 import toolchain
 import winproc
+
+DIAGNOSTIC_LOG_EDGE = 16000          # 长日志保留的开头、结尾字节数
+DIAGNOSTIC_LOG_BEATS = 64000         # 中间心跳行最多保留这么多字节（10 秒一行，约一小时）
+DIAGNOSTIC_LOG_SCAN = 64 << 20       # 只在结尾前这么大的范围里找心跳行
+DIAGNOSTIC_LOG_CHUNK = 1 << 20
+
+
+def diagnostic_log_excerpt(source, size):
+    """诊断包里的日志：短的整份；长的留开头（起局配置）+ 中间的心跳行（卡顿、内存走势）+ 结尾。总量有界。"""
+    edge = DIAGNOSTIC_LOG_EDGE
+    if size <= 2 * edge:
+        return source.read(2 * edge)
+    head = source.read(edge)
+    start = max(edge, size - edge - DIAGNOSTIC_LOG_SCAN)
+    source.seek(start)
+    beats, used, partial, left = collections.deque(), 0, b"", size - edge - start
+    while left > 0:
+        chunk = source.read(min(DIAGNOSTIC_LOG_CHUNK, left))
+        if not chunk:
+            break
+        left -= len(chunk)
+        lines = (partial + chunk).split(b"\n")
+        partial = lines.pop()
+        if len(partial) > DIAGNOSTIC_LOG_CHUNK:   # 没有换行的超长段不是心跳行，也别让它占内存
+            partial = b""
+        for line in lines:
+            if "[心跳]".encode() in line and len(line) < 4096:
+                beats.append(line)
+                used += len(line) + 1
+                while used > DIAGNOSTIC_LOG_BEATS:
+                    used -= len(beats.popleft()) + 1
+    source.seek(size - edge)
+    tail = source.read(edge)
+    gap = lambda text: f"\n…（{text}）…\n".encode()
+    return head + gap(f"日志共 {size} 字节，中间只保留 {len(beats)} 行心跳") + b"\n".join(beats) + gap("以下是日志结尾") + tail
+
 
 DIAGNOSTIC_JOB_LIMIT = 4 << 20
 
@@ -1299,8 +1336,7 @@ def diagnostics(c):
                             if len(data) > limit:
                                 raise Failure("诊断任务文件超过 4 MiB 上限，未生成诊断包。")
                         else:
-                            source.seek(max(0, opened.st_size - 16000))
-                            data = source.read(16000)
+                            data = diagnostic_log_excerpt(source, opened.st_size)
                     stem, suffix = os.path.splitext(member)
                     # Archive separators are known structure, not email local-part characters.
                     public_member = "/".join(redact_member_component(part) for part in stem.split("/")) + suffix
