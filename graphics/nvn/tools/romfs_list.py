@@ -147,6 +147,8 @@ def scan(top, stat_entries=True):
                     kind |= FILE
             except OSError:
                 pass
+            if not kind & DIR and (c.name == ".DS_Store" or c.name.startswith("._")):
+                continue   # macOS 垃圾（同 pack/pack.py：不进资源包，也就不能进索引，否则游戏枚举到就读不到）
             st = st_err = None
             if stat_entries:
                 try:

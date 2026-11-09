@@ -55,6 +55,7 @@ namespace S2A.Services
             {
                 foreach (string f in Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories))
                 {
+                    if (IsHostJunk(f)) continue;
                     rel.Add(Path.GetRelativePath(root, f).Replace('\\', '/'));
                 }
             }
@@ -175,6 +176,13 @@ namespace S2A.Services
         public static IStorage Open(string romfsDir, string indexPath, string overlayDir = null) =>
             new IndexedStorage(Path.GetFullPath(romfsDir), File.ReadAllBytes(indexPath), indexPath, OverlayFiles(overlayDir));
 
+        // macOS 垃圾（同 pack/pack.py、graphics/nvn/tools/romfs_list.py）：不进资源包，也就不能进镜像，否则游戏枚举到就读不到
+        internal static bool IsHostJunk(string path)
+        {
+            string name = Path.GetFileName(path);
+            return name == ".DS_Store" || name.StartsWith("._", StringComparison.Ordinal);
+        }
+
         // 界面布局覆盖层 <产物根>/ui_overlay/romfs/（Windows 编排 uilayout，pack/orch/stages.py）：读方覆盖层优先——
         //   同相对路径的文件读覆盖层那份（索引里的长度本就按覆盖层算）。只有几十个文件，起局一次盘点成表；没有覆盖层 → null
         internal static Dictionary<string, string> OverlayFiles(string overlayDir)
@@ -184,6 +192,7 @@ namespace S2A.Services
             Dictionary<string, string> map = new(StringComparer.Ordinal);
             foreach (string f in Directory.EnumerateFiles(full, "*", SearchOption.AllDirectories))
             {
+                if (IsHostJunk(f)) continue;
                 map[Path.GetRelativePath(full, f).Replace('\\', '/')] = f;
             }
             return map.Count == 0 ? null : map;

@@ -168,6 +168,23 @@ class Walk(unittest.TestCase):
         self.assertNotEqual(run("files0", str(self.base / "nope")).returncode, 0)
 
 
+class HostJunk(unittest.TestCase):   # macOS 垃圾进索引却不进资源包：游戏枚举到就读不到（万缕千丝 Movie/.DS_Store，播片后闪退）
+    def test_junk_is_not_inventoried_but_game_dotfiles_are(self):
+        with tempfile.TemporaryDirectory() as d:
+            t = Path(d); (t / "Movie").mkdir(); (t / "._dir").mkdir()
+            for rel in (".DS_Store", "Movie/.DS_Store", "Movie/._a.mp4", "Movie/a.mp4", ".build.config", "._dir/b.bin"): (t / rel).write_bytes(b"x")
+            want = sorted([".build.config", "._dir/b.bin", "Movie/a.mp4"])
+            self.assertEqual(sorted(e.rel for e in romfs_list.scan(t).files()), want)
+            walked = sorted(os.path.relpath(os.path.join(a, f), t).replace(os.sep, "/") for a, _, fs in romfs_list.walk(str(t)) for f in fs)
+            self.assertEqual(walked, want)
+            out = t.parent / (t.name + ".sizes")
+            try:
+                self.assertEqual(romfs_list.main(["sizes", str(t), str(out)]), 0)
+                self.assertEqual(sorted(l.split("\t")[1] for l in out.read_text(encoding="utf-8").splitlines()), want)
+            finally:
+                out.unlink(missing_ok=True)
+
+
 class CrossTagReuse(unittest.TestCase):   # 11-06：同身份、别的标签的清单也认（解包目录读过的头，播种搬进产物根后不再冷读）
     def test_same_identity_other_tag_loads_without_reading(self):
         with tempfile.TemporaryDirectory() as t:
