@@ -1,4 +1,4 @@
-// S2Arm 内部分辨率（S2A_RES_SCALE < 1，10-30 帧率能耗线；语义照 Ryujinx 分辨率缩放，MIT）：可缩的渲染目标的 Metal 存储按比例 s 缩小，游戏看不见（贴图查询、
+// S2Arm 内部分辨率（S2A_RES_SCALE：iOS < 1，Mac 0.25–2，10-30 帧率能耗线；语义照 Ryujinx 分辨率缩放，MIT）：可缩的渲染目标的 Metal 存储按比例 s 缩小，游戏看不见（贴图查询、
 //   游戏常量、游戏坐标都是原尺寸），换算只在回放层碰 Metal 的地方做：视口 / 裁剪 / 清除区域、片元坐标与取图倍率（支持缓冲 render_scale / render_scale_y）、
 //   拷贝区域、CPU 读写、上屏裁剪。比例为 1（缺省）时这里每个入口第一句就返回，行为与没有本文件时逐字节相同。
 // 单位：游戏坐标 →（宽屏层换算）→ 画布坐标 →（× s）→ 存储坐标。画布 = 不缩时这张存储该有的尺寸（宽屏放宽过的就是放宽尺寸），存储 = ⌈画布 × s⌉（Ryujinx GetCreateInfo 取整）。
@@ -16,14 +16,18 @@ static double rs_setting(void) {
     if (g_rs < 0) {
         const char *e = getenv("S2A_RES_SCALE"); double v = e && *e ? atof(e) : 1.0;
         if (!(v > 0)) v = 1.0;
-        if (v > 1.0) { MLOG("内部分辨率：S2A_RES_SCALE=%s 大于 1，直连只缩小不放大，按 1", e); v = 1.0; }
+#if TARGET_OS_IPHONE
+        if (v > 1.0) { MLOG("内部分辨率：S2A_RES_SCALE=%s 大于 1，iOS 只缩小不放大，按 1", e); v = 1.0; }
+#else
+        if (v > 2.0) { MLOG("内部分辨率：S2A_RES_SCALE=%s 大于 2，按 2", e); v = 2.0; }
+#endif
         if (v < 0.25) { MLOG("内部分辨率：S2A_RES_SCALE=%s 小于 0.25，按 0.25", e); v = 0.25; }
         g_rs = v;
-        if (v < 1.0) MLOG("内部分辨率：可缩的渲染目标按 %.3f 画（S2A_RES_SCALE；游戏看不见，上屏放大回来）", v);
+        if (v != 1.0) MLOG("内部分辨率：可缩的渲染目标按 %.3f 画（S2A_RES_SCALE；游戏看不见，上屏缩放回窗口）", v);
     }
     return g_rs;
 }
-static inline int rs_on(void) { return (g_rs < 0 ? rs_setting() : g_rs) < 1.0; }
+static inline int rs_on(void) { return (g_rs < 0 ? rs_setting() : g_rs) != 1.0; }
 
 // 每份存储的缩放记录挂在 Metal 根贴图上（关联对象：存储释放时一起走，地址复用不会认错）
 enum { RS_NONE = 0, RS_SCALED = 1, RS_BLACK = 2 };
