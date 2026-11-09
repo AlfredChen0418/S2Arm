@@ -291,6 +291,19 @@ raise SystemExit(main.main())
         self.assertNotIn(value, text)
         self.assertIn(nca_id, text)
 
+    def test_rewrite_failure_saves_gap_digest_into_diagnostics(self):   # #108：明细在产物根 .failed/，诊断包要带上摘要
+        import zipfile
+        log = self.root / "failed_main.log"
+        log.write_text("main 自旋区 105 个\n" + "GAP\tmain\t0x100\tsys: 异常类指令 d46f9025（hvc / smc / dcps）苹果用户态不可用\n" * 3
+                       + "GAP\tmain\t0x200\tsys: mrs 系统寄存器 S3_6_C9_C13_6：不在白名单\n", encoding="utf-8")
+        self.c.report_failure(Failure(f"【红】t0100 改写 main 失败（rc=3：PFRW mod=main need=9 gaps=4 fatal=0；日志 {log}）", code="rewrite_gap"))
+        destination = self.root / "diag.zip"
+        self.c.finish("failed", "x"); self.c.r["path"] = str(destination); library.diagnostics(self.c)
+        with zipfile.ZipFile(destination) as archive:
+            member = next(n for n in archive.namelist() if n.endswith("-rewrite-gaps.log"))
+            text = archive.read(member).decode()
+        self.assertIn("改写缺口共 4 条", text); self.assertIn("3\tsys: 异常类指令", text); self.assertIn("main 自旋区 105 个", text)
+
     def test_target_failures_keep_specific_codes_through_ipa_adapter(self):
         for arch, osv, sdk, code in (("applegpu_g12p", 26, 27, "target_unsupported"),
                                     ("applegpu_g17p", 17, 27, "target_unsupported")):   # 系统下限 iOS 18（10-26）：17 拒
