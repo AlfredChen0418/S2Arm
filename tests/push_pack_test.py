@@ -212,6 +212,35 @@ class ContainerDocs(Base):
         self.assertEqual((d.docs, d.ctx), ("Documents", None))   # 单款缺省不变
 
 
+class SpaceNeed(Base):
+    def batches(self, *sizes):
+        for i, rows in enumerate(sizes):
+            (self.w / f"push_{i:03d}.tsv").write_text("".join(f"f{i}_{k}\t{n}\tsha\n" for k, n in enumerate(rows)))
+
+    def test_peak_not_double(self):   # 手算：10 GB 分两批（6、4 GB）、3 个文件 → 10 + 6 GB + 3 × 4096 + 余量 1 GiB
+        self.batches([6 * 10**9], [3 * 10**9, 10**9])
+        self.assertEqual(push.need_bytes(self.w, 10**10, {}), 10**10 + 6 * 10**9 + 3 * 4096 + (1 << 30))
+        self.assertEqual(push.need_bytes(self.w, 10**10, {"S2A_PUSH_SPARE_GB": "0"}), 10**10 + 6 * 10**9 + 3 * 4096)
+
+    def run_with_free(self, free):
+        self.dev = Fake({})
+        self.dev.free = lambda: free
+        return push.run(self.dev, self.pk, self.w, full=True, say=self.log.append, env={"S2A_PUSH_SPARE_GB": "0"})
+
+    # 手算：两个文件共 3 字节，一批 → 3 + 3 + 2 × 4096 = 8198
+    def test_exact_need_passes(self):
+        self.assertEqual(self.run_with_free(8198)[2], 3)
+
+    def test_one_byte_short_reports(self):
+        with self.assertRaises(push.Fail) as e: self.run_with_free(8197)
+        self.assertIn("空间不足", str(e.exception)); self.assertEqual(self.dev.puts, [])
+
+    def test_devpush_free_parses_or_none(self):
+        d = push.Devpush("exe", "U", "b", self.w)
+        d.call = lambda *a: (0, "1234\n"); self.assertEqual(d.free(), 1234)
+        d.call = lambda *a: (1, "不认识的操作 free"); self.assertIsNone(d.free())
+
+
 class SendFail(Base):
     def test_nospc(self):
         with self.assertRaises(push.Fail) as e: self.go({}, full_disk=True)
