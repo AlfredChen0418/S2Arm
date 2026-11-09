@@ -21,6 +21,10 @@ import time
 import traceback
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+if os.name == "nt":   # 作业主程序自己也要长路径处理：子 Python 进程靠 sitecustomize 装，主进程没人装（注册表 LongPathsEnabled 关着时，数据目录 ~200 字符起启动器后端就起不来）
+    sys.path.insert(1, str(Path(__file__).resolve().parents[2]))
+    from pack.orch import winlong as _winlong
+    _winlong.install()
 import community
 import diag
 import embedded
