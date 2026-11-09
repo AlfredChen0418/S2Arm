@@ -239,7 +239,7 @@ import S2ArmAppleAdapter
                 ["id": g.id, "name": g.name, "display": g.display, "compatibility": g.compatibility, "ready": g.playable,
                  "needsPreparation": g.needsPreparation, "needsKeys": g.needsKeys, "buildable": g.buildable, "missing": g.missing,
                  "baseBytes": g.packages.filter { $0.type == "base" }.reduce(Int64(0)) { $0 + $1.size }, "bytes": g.totalBytes] },
-            "session": session,
+            "session": session, "busy": m.busy,
             "tasks": ControlJournal.tasks(privateRoot: privateRoot), "queue": [String](), "executionTask": NSNull(),
             "notice": NSNull(),
             "error": (m.actionError ?? (m.libraryError == LibraryProvider.noLibraryMessage ? nil : m.libraryError) ?? m.environmentError ?? m.installError ?? m.aiControlError).map { $0 as Any } ?? NSNull(),
