@@ -18,6 +18,11 @@ uint32_t s2a_pad_read(int32_t axes[4], s2a_pad_source *source);
 //   按着时返回当前序号，没按着返回 0。iOS 记下新序号、1.5 秒后再问一次仍是它 = 一直按着没松，开菜单（ios/controller.m）
 uint64_t s2a_pad_plus_press(void);
 void s2a_pad_stick(float x, float y, int32_t axes[2]);
+// 系统手柄的 ABXY：多数手柄按物理方位上报（buttonA 在南侧），任天堂手柄（Pro、Joy-Con）按键帽字母上报（印 A 的右键 = buttonA）。
+// category / vendor 取 GCController 的 productCategory / vendorName，可为 NULL。iOS 与 Mac 共用这一个判断（#40）。
+int s2a_pad_labels_abxy(const char *category, const char *vendor);
+// 把系统的 buttonA/B/X/Y（下标 0/1/2/3）排成 Nintendo 位序 A、B、X、Y：out[i] = 第 i 位该读系统的哪个键
+void s2a_pad_abxy_order(int labelled, int out[4]);
 
 // 原子快照，固定 56 字节。epoch 在切源/前后台切换时变化，旧短按不得跨 epoch 回放。
 typedef struct {

@@ -93,7 +93,22 @@ static void *writer(void *unused) {
     }
     atomic_store(&finished, 1); return NULL;
 }
+// #40：任天堂手柄按键帽字母上报，其他手柄按物理方位（期望手写）
+static void face_buttons(void) {
+    assert(s2a_pad_labels_abxy("Switch Pro Controller", NULL));
+    assert(s2a_pad_labels_abxy("Pro Controller", "Nintendo"));
+    assert(s2a_pad_labels_abxy("Joy-Con (L/R)", NULL));
+    assert(s2a_pad_labels_abxy(NULL, "Nintendo Switch JOYCON"));
+    assert(!s2a_pad_labels_abxy("Xbox Wireless Controller", "Xbox"));
+    assert(!s2a_pad_labels_abxy("DualSense", "Sony"));
+    assert(!s2a_pad_labels_abxy(NULL, NULL));
+    int o[4];
+    s2a_pad_abxy_order(1, o); assert(o[0] == 0 && o[1] == 1 && o[2] == 2 && o[3] == 3);   // 任天堂：A/B/X/Y 对系统 A/B/X/Y
+    s2a_pad_abxy_order(0, o); assert(o[0] == 1 && o[1] == 0 && o[2] == 3 && o[3] == 2);   // 物理方位：对系统 B/A/Y/X
+}
+
 int main(void) {
+    face_buttons();
     touch_only();
     session_reset();
     s2a_pad_set_active(1);

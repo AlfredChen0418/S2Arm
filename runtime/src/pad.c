@@ -8,6 +8,7 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <time.h>
 
 #define PAD_EXPORT __attribute__((visibility("default"), used))
@@ -178,6 +179,18 @@ PAD_EXPORT void s2a_pad_get_latency(s2a_pad_latency *out, int reset) {
     lock(); *out = latency;
     if (reset) memset(&latency, 0, sizeof latency);
     pthread_mutex_unlock(&pad_mu);
+}
+int s2a_pad_labels_abxy(const char *category, const char *vendor) {
+    static const char *const names[] = {"switch pro", "pro controller", "joy-con", "joycon"};
+    const char *both[2] = {category, vendor};
+    for (int i = 0; i < 2; i++)
+        for (size_t n = 0; both[i] && n < sizeof names / sizeof *names; n++)
+            if (strcasestr(both[i], names[n])) return 1;
+    return 0;
+}
+void s2a_pad_abxy_order(int labelled, int out[4]) {
+    static const int order[2][4] = {{1, 0, 3, 2}, {0, 1, 2, 3}};   // 物理方位：Nintendo A/B/X/Y 在东/南/北/西 = 系统 B/A/Y/X
+    memcpy(out, order[!!labelled], sizeof order[0]);
 }
 void s2a_pad_stick(float x, float y, int32_t axes[2]) {
     float radius = hypotf(x, y);

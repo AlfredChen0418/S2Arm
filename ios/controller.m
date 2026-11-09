@@ -417,10 +417,12 @@ static void ble_status(ns2_status status, const char *message, void *context) {
     _touchEnabled(_foreground && !external);
 }
 - (void)publishSystem:(GCExtendedGamepad *)pad {
-    // GameController 的 ABXY 按物理方位定义：南/东/西/北 → Nintendo B/A/Y/X。
+    // GameController 的 ABXY 通常按物理方位定义（南/东/西/北 → Nintendo B/A/Y/X）；任天堂手柄按键帽字母上报（#40），判断同 Mac 侧 front_mac.m。
     // buttonOptions（「-」）在部分手柄上为 nil；位序不能动，bit11 留给它，nil 时该位恒 0（与 Mac 侧 front_mac.m 一致）。
     GCControllerButtonInput *options = pad.buttonOptions;
-    GCControllerButtonInput *keys[16] = {pad.buttonB, pad.buttonA, pad.buttonY, pad.buttonX,
+    GCControllerButtonInput *face[4] = {pad.buttonA, pad.buttonB, pad.buttonX, pad.buttonY};
+    int order[4]; s2a_pad_abxy_order(s2a_pad_labels_abxy(pad.controller.productCategory.UTF8String, pad.controller.vendorName.UTF8String), order);
+    GCControllerButtonInput *keys[16] = {face[order[0]], face[order[1]], face[order[2]], face[order[3]],
         pad.leftThumbstickButton, pad.rightThumbstickButton, pad.leftShoulder, pad.rightShoulder,
         pad.leftTrigger, pad.rightTrigger, pad.buttonMenu, options,
         pad.dpad.left, pad.dpad.up, pad.dpad.right, pad.dpad.down};

@@ -5,6 +5,7 @@
 #import <CoreGraphics/CoreGraphics.h>
 #import <GameController/GameController.h>
 #import <QuartzCore/CAMetalLayer.h>
+#include "../runtime/include/s2a_pad.h"
 #import "input_guide.h"
 #include <stdatomic.h>
 #include <stdint.h>
@@ -329,8 +330,7 @@ static void sample_input(void) {
     GCExtendedGamepad *pad = active_pad(GCController.controllers);
     if (pad) {
         // GameController 通常按物理方位上报（buttonA 在南侧）；Switch Pro 手柄在 macOS 上按键面字母上报（A 在东侧、X 在北侧）
-        NSString *pad_name = [NSString stringWithFormat:@"%@ %@", pad.controller.productCategory ?: @"", pad.controller.vendorName ?: @""].lowercaseString;
-        BOOL labelled = [pad_name containsString:@"switch pro"] || [pad_name containsString:@"pro controller"];
+        BOOL labelled = s2a_pad_labels_abxy(pad.controller.productCategory.UTF8String, pad.controller.vendorName.UTF8String);
         NSDictionary *pad_buttons = @{@"east": labelled ? pad.buttonA : pad.buttonB, @"south": labelled ? pad.buttonB : pad.buttonA,
             @"north": labelled ? pad.buttonX : pad.buttonY, @"west": labelled ? pad.buttonY : pad.buttonX,
             @"leftShoulder": pad.leftShoulder, @"rightShoulder": pad.rightShoulder,
