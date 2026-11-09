@@ -337,9 +337,10 @@ def push_pack(c, ident, bid, pack, udid=None, docs=None, ctx=None):
         m = re.search(r"资源包推进去了，但(机上解包 \d+ 秒没有新进展[^：\n]*|起 App 后 \d+ 秒机上解包没有开始)", text)   # tools/push_pack.py apply：按进度判停住（11-07）
         if m:
             raise Failure(f"资源包推进去了，但{m.group(1)}：请打开这款游戏，保持在前台等它导入完，会自动进入游戏。", code="job_failed") from e
-        m = re.search(r"起 App 失败：([^\n]*)", text)
+        m = re.search(r"资源包已传完，还差最后一步：[^\n]*", text)   # tools/push_pack.py NeedsPlayer：电脑拉不起 App，传输本身成功（#192）
         if m:
-            raise Failure("起 App 解开资源包失败：" + m.group(1).strip()[:200], code="job_failed") from e
+            c.diagnostic(m.group(0), code="manual_unpack_required", severity="warning")
+            return got.get("files", 0), got.get("mb", 0) << 20
         from errors import tool_reason
         raise Failure("资源包推不进 iPhone：" + tool_reason(log), code="resource_transfer_failed") from e
     return got.get("files", 0), got.get("mb", 0) << 20
@@ -711,6 +712,9 @@ class WinPhone:
             return self.W.push_pack(self.udid, self.bid, str(pack), str(self.devpush) if self.devpush.is_file() else None,
                                     say=lambda m: self.c.emit("message", m), docs=game_docs(g), ctx=game_ctx(g), apply_after=True)
         except self.W.Fail as e:
+            if e.err == "manual_unpack_required":
+                self.c.diagnostic(str(e), code=e.err, severity="warning")
+                return e.transferred
             raise Failure(str(e), code=e.err or "resource_transfer_failed") from e
 
     def purge(self, g):

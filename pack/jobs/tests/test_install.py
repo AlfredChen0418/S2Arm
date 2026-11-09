@@ -148,7 +148,7 @@ class FlowTests(unittest.TestCase):
             z.writestr("Payload/S2Arm.app/Info.plist", plistlib.dumps({"CFBundleIdentifier": "io.s2arm.games", "CFBundleExecutable": "S2Arm"}))
             z.writestr("Payload/S2Arm.app/S2Arm", b"bin")
 
-    def _install(self, gid, pushed, applied_before, mbps=0, unpack_ok=True, existing=()):
+    def _install(self, gid, pushed, applied_before, mbps=0, unpack_ok=True, existing=(), cant_open=False):
         """跑 install.install（容器流程）：替身 assemble 出容器（含已有各款 + 本款）、签名装机、只推 fresh 的款。
         existing = 容器里已有的款（同壳），assemble 原样带过来，fresh 只含本款。替身按 push_pack.apply 口径记起 App 解包"""
         for g in (gid,) + tuple(existing): self._roots(g)
@@ -168,6 +168,10 @@ class FlowTests(unittest.TestCase):
                 if "--apply" in args and not (pushed == 0 and state["applied"] == "cafe01"):
                     launches.append({"S2A_PACK_APPLY_ONLY": "1"})
                     on_line("[12:00:05] 机上解包 13/17")
+                    if cant_open:
+                        Path(log).parent.mkdir(parents=True, exist_ok=True)
+                        Path(log).write_text("【红】资源包已传完，还差最后一步：在 iPhone 上打开 S2Arm（电脑这边打不开手机上的 App：起 App 失败：RSD 里没有 app_service）\n", encoding="utf-8")
+                        raise install.Failure("tool", code="tool_exit")
                     if not unpack_ok:
                         Path(log).parent.mkdir(parents=True, exist_ok=True)
                         Path(log).write_text("【红】资源包推进去了，但机上解包 180 秒没有新进展（停在第 13 包）：打开这款游戏、保持在前台等它导入完\n", encoding="utf-8")
@@ -200,6 +204,13 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(len(launches), 1)
         ev = [json.loads(l) for l in self.c.events.read_text(encoding="utf-8").splitlines() if l.strip()]   # 推包工具的「机上解包 k/n」→ 作业进度事件（启动器显示）
         self.assertTrue(any(e["type"] == "progress" and e["message"] == "机上解包 13/17" and (e["done"], e["total"], e.get("unit")) == (13, 17, "包") for e in ev), ev[-3:])
+
+    def test_cant_open_app_is_warning_not_failure(self):   # #192：资源传完、电脑拉不起 App → 装机完成 + 黄字；推了多少照实报（替身：2 个文件 3 MB）
+        gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)
+        r, *_ = self._install(gid, pushed=2, applied_before="", cant_open=True)
+        d = [x for x in self.c.job["diagnostics"] if x["code"] == "manual_unpack_required"]
+        self.assertEqual(len(d), 1); self.assertEqual(d[0]["severity"], "warning"); self.assertIn("资源包已传完", d[0]["summary"])
+        self.assertEqual(r["packFiles"], 2)
 
     def test_install_signs_installs_and_pushes(self):
         gid = "0100535012974000"; out, pack = self._fixture(gid); self.c.r.update(gameId=gid)

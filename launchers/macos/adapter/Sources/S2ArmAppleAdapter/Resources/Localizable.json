@@ -5208,6 +5208,10 @@
   "en": "Re-sign with Xcode (a free Apple ID works) or AltStore Classic v2.3. SideStore 0.7.0 free signing loses this entitlement; GetMoreRam can repair the App ID before reinstalling."
  },
  {
+  "source": "资源包已经在手机上，不用重推：在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩。",
+  "en": "The resource pack is already on your iPhone, so there is no need to send it again. Open S2Arm on your iPhone, choose this game, keep it in the foreground with the screen on, and it will be ready once the import finishes."
+ },
+ {
   "source": "换一根支持 USB 3 的 USB-C 数据线，直接插 Mac 上的 USB-C / 雷雳口（不经扩展坞、集线器、显示器上的口），再装下一款；iPhone 15 Pro 及更新的 Pro 机型才支持 USB 3，其它机型只能 USB 2.0。",
   "en": "Use a USB 3 data cable directly in a Mac USB-C or Thunderbolt port without a hub or display. Only iPhone 15 Pro and newer Pro models support USB 3; other models use USB 2.0."
  },
