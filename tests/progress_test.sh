@@ -19,7 +19,8 @@ ck "② Python 写端：「${o2}」；没给 S2A_PROGRESS 不写" '[ "$o2" = "x 
 printf '1\t出包\t3\t9\n2\t出包\t7\t9\n3\t出包\t8' > "$T/j.tsv"
 o3=$(cd "$H/pack/jobs" && python3 -c "
 import core
-class C:
+class C(core.Context):
+    def __init__(self): self.engine = core.Path(core.__file__).resolve().parents[2]
     def emit(self, **k): print(k['done'], k['total'], k['unit'], k['message'])
 print(core.Context.stage_progress(C(), '$T/j.tsv', 0))" 2>&1)
 ck "③ 启动器读端：「$(tr '\n' '|' <<< "$o3")」（期望一次 7 9 项、位置 $(printf '1\t出包\t3\t9\n2\t出包\t7\t9\n' | wc -c | tr -d ' ')）" '[ "$o3" = "7 9 项 出包 7/9
@@ -29,7 +30,8 @@ $(printf "1\t出包\t3\t9\n2\t出包\t7\t9\n" | wc -c | tr -d " ")" ]'
 printf '1000\t直连\t0\t100\n1001\t刷新\t3\t10\n1010\t直连\t50\t100\n1012\t通用\t10\t45455\n' > "$T/m.tsv"
 o4=$(cd "$H/pack/jobs" && python3 -c "
 import core
-class C:
+class C(core.Context):
+    def __init__(self): self.engine = core.Path(core.__file__).resolve().parents[2]
     def emit(self, **k): print(k['done'], k['total'], [(c['name'], c['done'], c['total'], c['rate']) for c in k['counters']])
 core.Context.stage_progress(C(), '$T/m.tsv', 0)" 2>&1)
 ck "④ 多计数器：「${o4}」" '[ "$o4" = "10 45455 [('"'"'直连'"'"', 50, 100, 5.0), ('"'"'通用'"'"', 10, 45455, None)]" ]'
