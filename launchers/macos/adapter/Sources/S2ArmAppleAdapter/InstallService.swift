@@ -89,8 +89,10 @@ public final class InstallService {
 
     /// 装。
     /// device：要装的那台（UDID / 设备名）；不给时作业按「有线优先、只有一台」自己挑（pack/jobs/install.py _pick_device）
-    public func install(gameId: String, teamId: String? = nil, device: String? = nil, events: EventSink = .discard) async throws -> InstallResult {
+    /// acceptDropped：玩家已确认「手机上只在别的电脑装过的游戏这次带不上」（作业层 container_would_drop 之后再点）
+    public func install(gameId: String, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, events: EventSink = .discard) async throws -> InstallResult {
         var extra: [String: Any] = ["gameId": gameId]
+        if acceptDropped { extra["acceptDropped"] = true }
         if let teamId, !teamId.isEmpty { extra["teamId"] = teamId }
         if let device, !device.isEmpty { extra["device"] = device }
         let r = try await client.perform("install", extra: extra, events: events).result
@@ -109,8 +111,10 @@ public final class InstallService {
     }
 
     /// 从手机容器删一款（installRemove 作业）。
-    public func remove(gameId: String, events: EventSink = .discard) async throws -> RemoveResult {
-        let r = try await client.perform("installRemove", extra: ["gameId": gameId], events: events).result
+    public func remove(gameId: String, acceptDropped: Bool = false, events: EventSink = .discard) async throws -> RemoveResult {
+        var extra: [String: Any] = ["gameId": gameId]
+        if acceptDropped { extra["acceptDropped"] = true }
+        let r = try await client.perform("installRemove", extra: extra, events: events).result
         return RemoveResult(result: r)
     }
 }

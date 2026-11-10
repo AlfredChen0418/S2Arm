@@ -72,7 +72,11 @@ class DirectPackTest(unittest.TestCase):
         (self.root / 'systemdata/fonts/fixture.bfttf').write_bytes(b'not a real font')
         # make_pack 只消费产品根里已由 refresh sysdata 阶段准备好的系统数据；
         # 这里把共用合成器列出的每个号都造一份带载荷的目录（内容不参与断言）。
-        for sid in ('0100000000000802', '0100000000000823'):
+        # 号表与被测件同一个来源（sysdata_synth --ids）：82fd8111 加 0400000000000849
+        # 时硬编码清单漏跟、全部用例炸缺号——照抄同一份清单才不会过时。
+        ids = subprocess.run([sys.executable, str(Path(pack.REPO) / 'pack' / 'sysdata_synth.py'), '--ids'],
+                             capture_output=True, text=True, check=True).stdout.split()
+        for sid in ids:
             (self.root / 'systemdata' / sid).mkdir(parents=True)
             (self.root / 'systemdata' / sid / 'fixture.bin').write_bytes(b'fixture')
         # 安卓打包前置的能力清单：与共用合成根同一个生成入口（refresh 的 gen_caps.sh 安卓口径）。
@@ -217,6 +221,14 @@ class DirectPackTest(unittest.TestCase):
         with self.assertRaises(SystemExit):
             pack.write_pack(str(self.out), [('modules', str(empty))])
         self.assertEqual({p.name: p.read_bytes() for p in self.out.iterdir()}, before)
+
+    def test_artifact_modules_survive_glob_metachars_in_out_path(self):
+        """出包目录名带 [ ] 等 glob 元字符时，工件 modules 不许静默落空：
+        glob.glob(join(out, …)) 会把目录名当字符类（qa-169163 惊奇包 8E 导入前红）。"""
+        self.out = self.base / '[meta] out' / 'package'
+        self.build()
+        artifact = self.artifact()
+        self.assertEqual([m['name'] for m in artifact['modules']], ['main'])
 
     def test_cli_refuses_a_root_that_already_has_the_descriptor(self):
         (self.root / pack.GRAPHICS_MANIFEST).parent.mkdir(parents=True)

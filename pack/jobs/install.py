@@ -840,9 +840,19 @@ class MacPhone:
         self.bid = container_bundle_id(self.team["id"])
         self.key = self.udid or self.dev["id"]   # devices/<设备>.json 的键
         self.info = dict(device=self.dev["name"], team=self.team["name"], free=self.team["free"])
+        self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
     def backup(self, g):
         backup_saves(self.c, self.dev["id"], self.bid, g, docs=game_docs(g))
+
+    def app_missing(self, bid, why):
+        """s2a-devpush 进不了容器时，这台手机确实没装这个包名吗？Mac 上没装时 s2a-devpush 只回「device socket io failed」（真机实测），
+        和真断线分不开，所以问 devicectl 的应用列表（同 backup_saves）；连它也问不出 → 停装"""
+        from diag import devicectl
+        rc, apps, err = devicectl(self.c, "device", "info", "apps", "--device", self.dev["id"], "--bundle-id", bid, timeout=60)
+        if rc:
+            raise Failure("确认不了 iPhone 上有没有装过 S2Arm：" + (err.splitlines()[-1] if err else f"devicectl 退出 {rc}") + "。为免把别的游戏挤掉，这次没装；手机解锁、数据线插稳后再点一次。", code="device_locked")
+        return not any(a.get("bundleIdentifier") == bid for a in (apps.get("result") or {}).get("apps") or [])
 
     def install(self, ipa, games, steps=True):
         sign_and_install(self.c, ipa, self.team, self.dev, self.udid, self.bid, games, steps=steps)
@@ -855,7 +865,11 @@ class MacPhone:
                               "换 USB 3 能快约 10 倍（以后重装只推变了的文件）", code="usb_slow", severity="warning")
 
     def push(self, g, pack):
-        return push_pack(self.c, self.dev["id"], self.bid, pack, udid=self.udid, docs=game_docs(g), ctx=game_ctx(g))
+        n0 = len(self.c.job["diagnostics"])
+        r = push_pack(self.c, self.dev["id"], self.bid, pack, udid=self.udid, docs=game_docs(g), ctx=game_ctx(g))
+        hit = [d for d in self.c.job["diagnostics"][n0:] if d.get("code") == "manual_unpack_required"]   # push_pack 按「需要玩家操作」收尾时记的那条
+        if hit: self.pending = hit[-1].get("summary") or ""
+        return r
 
     def purge(self, g):
         with tempfile.TemporaryDirectory(dir=self.c.private) as w:
@@ -872,9 +886,14 @@ class WinPhone:
         self.bid = layout.load_device(c, self.key).get("bundleId") or None
         self.devpush = c.engine / "Binaries/Prepare/devpush/s2a-devpush.exe"
         self.info = dict(device=self.udid)
+        self.pending = None   # 资源传完但没拉起 App 解开时的那句（put_game 带进结果 unpackPending）
 
     def client(self, work):
         return devpush_client(self.c, self.udid, self.bid, work)
+
+    def app_missing(self, bid, why):
+        """Windows 上没有 devicectl：手机明确答「没有这个 App」时 s2a-devpush 的原文含 ApplicationLookupFailed（Windows 实机核过），只认它"""
+        return "ApplicationLookupFailed" in why
 
     def backup(self, g):
         """覆盖装前备份本款存档（同 Mac backup_saves 口径：拉失败就停装）。按这次要装的包名查（这台没记录也可能有 Mac 装的同包名 App 和存档）；
@@ -934,6 +953,7 @@ class WinPhone:
         except self.W.Fail as e:
             if e.err == "manual_unpack_required":
                 self.c.diagnostic(str(e), code=e.err, severity="warning")
+                self.pending = str(e)
                 return e.transferred
             raise Failure(str(e), code=e.err or "resource_transfer_failed") from e
 
@@ -946,6 +966,72 @@ def phone_for(c):
     return WinPhone(c) if os.name == "nt" else MacPhone(c)
 
 
+GID_RE = re.compile(r"[0-9A-F]{16}")
+
+
+def phone_bid(ph):
+    """这次要装的包名：这台记录过的；Windows 第一次装还没记录 → 按 Impactor 当前账号算（同 WinPhone.bundle_for_signing）"""
+    return ph.bid or (ph.bundle_for_signing() if hasattr(ph, "bundle_for_signing") else None)
+
+
+def phone_games(c, ph):
+    """这台手机上的 S2Arm 里有哪些游戏——真相在手机上，不在某一台电脑的设备记录里（同一台手机 Mac 装几款、Windows 再装一款时，
+    各自的记录只有自己装的）。列这个包名的 Documents/games/：只认目录名是 16 位游戏号、资源包已解开（资源包/.applied）的，别的跳过。
+    进不了容器时问平台这个包名装没装（ph.app_missing）：确实没装 → 空；装着却列不出（锁屏 / 断开）→ 停，不当成「手机上没有别的游戏」"""
+    bid = phone_bid(ph)
+    if not bid or not ph.udid:
+        return set()
+    with tempfile.TemporaryDirectory(dir=c.private) as w:
+        cl = devpush_client(c, ph.udid, bid, w)
+        rc, out = cl.call("ls", "Documents/games")
+        if rc:
+            if "No such file" in out or "ObjectNotFound" in out:   # App 在、还没装过任何一款
+                return set()
+            if ph.app_missing(bid, out):
+                return set()
+            raise Failure("读不出 iPhone 上已经装了哪些游戏：" + out[-200:] + "。为免把别的游戏挤掉，这次没装；手机解锁、数据线插稳后再点一次。", code="device_locked")
+        found = set()
+        for name in out.splitlines():
+            g = name.strip().rstrip("/").upper()
+            if GID_RE.fullmatch(g) and ".applied" in (cl.ls(f"{game_docs(g)}/资源包") or []):
+                found.add(g)
+        return found
+
+
+def phone_game_name(c, ph, gid, names):
+    """确认框里的名字：本机游戏库有就用库里的，否则读手机上这款资源包自带的 control.nacp，再不行用游戏号"""
+    if names.get(gid):
+        return names[gid]
+    try:
+        import library
+        with tempfile.TemporaryDirectory(dir=c.private) as w:
+            dst = Path(w) / "control.nacp"
+            if devpush_client(c, ph.udid, phone_bid(ph), w).get(f"{game_docs(gid)}/资源包/ctl/control.nacp", dst):
+                dump = library.engine_tool(c, "ns2_dump")
+                n = dst.read_bytes()
+                return dump.nacp_title(n, 14) or dump.nacp_title(n, 0) or gid
+    except Exception:   # noqa: BLE001 —— 名字读不到就用游戏号
+        pass
+    return gid
+
+
+def container_others(c, ph, rec, leave=None):
+    """现组容器要带的别的款：这台电脑记录的 + 手机上实际有的（phone_games）。手机上有、这台电脑没记录、游戏库里也没有的，带不进去
+    （App 里的游戏程序读不回电脑）：没带 acceptDropped 就停下报 container_would_drop，列出这几款，玩家确认后再装；确认了就不带它们——
+    它们的存档和资源包还在手机上，在原来那台电脑上再装一次就回来"""
+    known = set(rec.get("games", {}))
+    on_phone = phone_games(c, ph)
+    names = {g["id"].upper(): g.get("name") or "" for g in c.catalog()["games"]}
+    candidates = sorted((known | on_phone) - {leave})
+    lost = [g for g in candidates if g in on_phone and g not in known and g not in names]
+    if lost and c.r.get("acceptDropped") is not True:
+        shown = [phone_game_name(c, ph, g, names) for g in lost]
+        raise Failure(f"这次会让手机上的 {len(lost)} 款游戏暂时不能玩：" + "、".join(shown)
+                      + "。它们不是在这台电脑上装的，存档和资源包都还在手机上，到原来那台电脑上再点一次「装到 iPhone」就能回来。确认继续再点一次。",
+                      code="container_would_drop", internal=" ".join(lost))
+    return [g for g in candidates if g not in lost]
+
+
 def put_game(c, gid, ph, steps=True):
     """把这款放进容器并装到手机：现组容器（这款 + 这台手机上已有的各款，ipa.assemble）→ 覆盖装 → 推资源包：这款照推，
     别的款只推「游戏库里的资源包比手机上记的新」的（重新打过 iPhone 包、还没装到这台的），没变的不推（数据和存档不动）。
@@ -954,7 +1040,7 @@ def put_game(c, gid, ph, steps=True):
     gid = gid.upper()
     ios_pack(c, gid)   # 这款没有资源包就不组装、不装
     rec = layout.load_device(c, ph.key)
-    others = [g for g in rec.get("games", {}) if g != gid]
+    others = container_others(c, ph, rec, leave=gid)   # 手机上实际有的款也带上（另一台电脑装的），带不了的先问玩家
     if steps: c.begin("把这款放进手机上的 S2Arm", 2, 6)
     ipa, games, sid = packer.assemble(c, gid, others, failed=rec.get("failedShells", []))
     packs = {g: ios_pack(c, g) for g in games}   # 每款都要有资源包，缺一款就不装（不装半套）
@@ -975,7 +1061,9 @@ def put_game(c, gid, ph, steps=True):
         signed = dict(signed=dict(at=time.time(), free=bool(ph.info["free"]), device=ph.info["device"])) if "free" in ph.info else {}
         layout.save_device(c, ph.key, dict(rec, games={g: dict(pack=pushed[g]) for g in games}, shellId=sid, bundleId=ph.bid or rec.get("bundleId", ""), at=time.time(), **signed))
     packer.commit_phone_ipa(c, ipa, sid)
-    return dict(outputPath=str(layout.phone_ipa(c)), bundleId=ph.bid, games=games, packFiles=files, packBytes=size, **ph.info)
+    # 资源传完但电脑没拉起 App 解开（manual_unpack_required，11-09 #336）：不算「已装好」，结果带上还差的一步，两端前端据此显示「还差最后一步」而不是「已装到 iPhone」
+    extra = dict(unpackPending=ph.pending) if ph.pending else {}
+    return dict(outputPath=str(layout.phone_ipa(c)), bundleId=ph.bid, games=games, packFiles=files, packBytes=size, **ph.info, **extra)
 
 
 def install(c):
@@ -1029,7 +1117,7 @@ def remove_from_phone(c):
     c.begin("备份这款的存档", 2, 4)
     backup = ph.backup(gid)
     c.begin("更新手机上的 S2Arm", 3, 4)
-    left = [g for g in rec["games"] if g != gid]
+    left = container_others(c, ph, rec, leave=gid)   # 同装机：手机上另一台电脑装的款也带上，带不了的先问
     # 最后一款（#227）：不装空容器（宿主 0 款的启动路径没在真机验过，vawin.c 报红不占窗口），手机上的 App 原样留着，
     #   下一步删掉它的数据后库界面按「数据不在」不再显示 = 空库；下次装新游戏时覆盖装把旧程序一起换掉
     if left:

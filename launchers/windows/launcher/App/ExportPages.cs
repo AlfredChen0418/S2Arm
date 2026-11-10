@@ -118,7 +118,7 @@ public sealed partial class EnvironmentWindow
     private Button? PhonePill()
     {
         if (installGameId is null || (!installBusy && installSeen) || (page == "install" && SelectedGame?.Id == installGameId)) return null;
-        var key = installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : "install.pill.failed";
+        var key = installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : installState == "needsPlayer" ? "install.pill.needs_player" : "install.pill.failed";
         var text = T(key).Replace("{0}", installGameName ?? installGameId);
         if (installBusy && installDone is { } d && installTotal is { } t && t > 0) text += " · " + (100 * d / t) + "%";
         var pill = new Button { Content = text, Padding = new Thickness(14, 8), CornerRadius = new CornerRadius(16),
@@ -1120,7 +1120,7 @@ public sealed partial class EnvironmentWindow
         {
             // 正在装 / 刚装完的是另一款：这里不画它的进度（原先会画到当前这款上），给一个回去的入口
             var other = new StackPanel { Spacing = 8 };
-            other.Children.Add(Muted(T(installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : "install.pill.failed").Replace("{0}", installGameName ?? installGameId)));
+            other.Children.Add(Muted(T(installBusy ? "install.pill.running" : installState == "succeeded" ? "install.pill.done" : installState == "needsPlayer" ? "install.pill.needs_player" : "install.pill.failed").Replace("{0}", installGameName ?? installGameId)));
             other.Children.Add(Action("install.pill.open", OpenPhoneJob));
             body.Children.Add(Card(other));
         }
@@ -1130,7 +1130,7 @@ public sealed partial class EnvironmentWindow
             var state = new StackPanel { Spacing = 8 };
             state.Children.Add(Label(T(installState switch
             {
-                "running" => "install.running", "succeeded" => "install.done", "cancelled" => "progress.cancelled",
+                "running" => "install.running", "succeeded" => "install.done", "needsPlayer" => "install.needs_player", "cancelled" => "progress.cancelled",
                 "invalid" => "library.invalid_result", _ => "install.failed"
             }), 18));
             if (installBusy)
@@ -1172,16 +1172,23 @@ public sealed partial class EnvironmentWindow
         finally { installChecking = false; lastCheck = DateTime.UtcNow; if (page == "install") Render(); }
     }
 
-    private async Task InstallAsync(LibraryGame game)
+    /// <summary>acceptDropped: the player confirmed games installed from another computer can't come along this time
+    /// (job code container_would_drop). ask = false (control port) fails as-is instead of popping the dialog.</summary>
+    private async Task InstallAsync(LibraryGame game, bool acceptDropped = false, bool ask = true)
     {
         if (installBusy || !InstallAllowed) return;
         BeginPhoneJob(game, "");
+        string? dropAsk = null;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
+            var job = await PackJobClient.RunAsync(PackRequest("install", game.Id, DropExtra(acceptDropped)), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
+            if (ask && JobCode(job) == "container_would_drop") dropAsk = job.Report.Message;
             installState = job.Report.State;
             installMessage = job.Report.Succeeded && job.Report.Result.TryGetProperty("device", out var device) && device.ValueKind == JsonValueKind.String
                 ? T("install.device") + " · " + device.GetString() : job.Report.Message;
+            // 资源传完但电脑没拉起 App 解开（作业结果 unpackPending，11-09 #336）：不显示「已装到 iPhone」，显示还差的一步和原因 / 办法
+            if (job.Report.Succeeded && job.Report.Result.TryGetProperty("unpackPending", out var pending) && pending.ValueKind == JsonValueKind.String)
+            { installState = "needsPlayer"; installMessage = pending.GetString() ?? ""; }
             installDiagnostics = JobDiagnostics(job);
         }
         catch (LibraryProtocolException error) { installState = "invalid"; installDiagnostics = error.Message; }
@@ -1189,6 +1196,17 @@ public sealed partial class EnvironmentWindow
             OperationCanceledException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         { installState = "failed"; installDiagnostics = error.Message; }
         finally { installBusy = false; readinessFor = null; Render(); }
+        if (dropAsk is not null && await ConfirmInstallActionAsync("install.drop", dropAsk)) await InstallAsync(game, acceptDropped: true);
+    }
+
+    private static Dictionary<string, object?>? DropExtra(bool acceptDropped) => acceptDropped ? new() { ["acceptDropped"] = true } : null;
+
+    private static string? JobCode(LibraryJobOutput job)
+    {
+        if (job.Report.Diagnostics.ValueKind != JsonValueKind.Array) return null;
+        foreach (var d in job.Report.Diagnostics.EnumerateArray())
+            if (d.TryGetProperty("code", out var code) && code.ValueKind == JsonValueKind.String) return code.GetString();
+        return null;
     }
 
     private async Task ChooseCoverAsync(LibraryGame game)
@@ -1266,7 +1284,7 @@ public sealed partial class EnvironmentWindow
     }
 
     /// <summary>Confirm dialog for a phone-side action; texts are &lt;prefix&gt;_title / _body / _confirm.</summary>
-    private async Task<bool> ConfirmInstallActionAsync(string prefix)
+    private async Task<bool> ConfirmInstallActionAsync(string prefix, string? bodyText = null)
     {
         if (installBusy || packRunning) return false;
         var dialog = new Window
@@ -1279,7 +1297,7 @@ public sealed partial class EnvironmentWindow
         var confirmed = false;
         var body = new StackPanel { Spacing = 16, Margin = new Thickness(28) };
         body.Children.Add(Label(T(prefix + "_title"), 20));
-        body.Children.Add(Muted(T(prefix + "_body"), 14));
+        body.Children.Add(Muted(bodyText ?? T(prefix + "_body"), 14));
         var buttons = new WrapPanel { Orientation = Orientation.Horizontal, HorizontalAlignment = HorizontalAlignment.Right };
         var cancel = new Button { Content = T("action.cancel"), Padding = new Thickness(16, 9),
             Background = Brush.Parse("#29292D"), Foreground = Ink, CornerRadius = new CornerRadius(8),
@@ -1298,13 +1316,15 @@ public sealed partial class EnvironmentWindow
     }
 
     /// <summary>installRemove / installRestore; texts are &lt;prefix&gt;_running / _done / _failed.</summary>
-    private async Task RunPhoneJobAsync(LibraryGame game, string operation, string prefix)
+    private async Task RunPhoneJobAsync(LibraryGame game, string operation, string prefix, bool acceptDropped = false, bool ask = true)
     {
         if (installBusy || packRunning) return;
         BeginPhoneJob(game, T(prefix + "_running"));
+        string? dropAsk = null;
         try
         {
-            var job = await PackJobClient.RunAsync(PackRequest(operation, game.Id), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
+            var job = await PackJobClient.RunAsync(PackRequest(operation, game.Id, DropExtra(acceptDropped)), e => Dispatcher.UIThread.Post(() => IngestPhoneEvent(e)), CancellationToken.None);
+            if (ask && JobCode(job) == "container_would_drop") dropAsk = job.Report.Message;
             installState = job.Report.State;
             installMessage = job.Report.Succeeded ? T(prefix + "_done") : job.Report.Message;
             installDiagnostics = JobDiagnostics(job);
@@ -1314,6 +1334,7 @@ public sealed partial class EnvironmentWindow
             OperationCanceledException or PlatformNotSupportedException or System.ComponentModel.Win32Exception)
         { installState = "failed"; installMessage = T(prefix + "_failed"); installDiagnostics = error.Message; }
         finally { installBusy = false; Render(); }
+        if (dropAsk is not null && await ConfirmInstallActionAsync("install.drop", dropAsk)) await RunPhoneJobAsync(game, operation, prefix, acceptDropped: true);
     }
 
     /// <summary>Closing while a pack runs: cancel through the job control plane first, then close.</summary>

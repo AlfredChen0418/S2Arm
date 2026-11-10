@@ -16,6 +16,9 @@
 #include "../graphics/metal/gal_abi.h"
 #include "../graphics/nvn/gfx/nvn/nvn_present_fit.h"   // pf_viewport / pf_out_aspect：直连上屏摆放（鼠标当触屏的画面矩形）
 #include <pthread.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <unistd.h>
 #include "../runtime/include/s2a_direct_prompt.h"
 #include "../runtime/include/s2a_gfx_mode.h"
 #include "../runtime/include/s2a_hud.h"
@@ -796,6 +799,15 @@ static __weak S2AMacDelegate *g_delegate;
     set_mouse_capture(NO); focused = NO; reset_input();
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ s2a_host_shutdown("Mac 窗口关闭"); });
 }
+// 菜单栏「切换游戏」：先留标记（S2A_RETURN_MARKER，开局作业给的路径），再走关窗同一条收尾（等存档写完）；作业见到标记，启动器回到游戏库并切到前台。
+//   不二次确认，同菜单栏「退出」。标记写不了也照样退出（只是启动器停在这局的结果页）
+- (void)switchGame:(id)sender {
+    (void)sender; const char *marker = getenv("S2A_RETURN_MARKER");
+    int fd = marker && *marker ? open(marker, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600) : -1;
+    if (fd >= 0) close(fd); else fprintf(stderr, "[s2a] 【红】切换游戏：回游戏库标记写不了（%s，errno %d），照样退出\n", marker ? marker : "未给", errno);
+    fprintf(stderr, "[s2a] 菜单栏切换游戏：收尾退出，启动器回到游戏库\n");
+    [self shutdown];
+}
 - (BOOL)windowShouldClose:(NSWindow *)sender { (void)sender; [self shutdown]; return NO; }
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender { (void)sender; [self shutdown]; return NSTerminateCancel; }
 - (void)windowDidBecomeKey:(NSNotification *)note { (void)note; display_focus_publish(NSApp.isActive && self.window.isKeyWindow); if (mouse_release_pending) set_mouse_capture(NO); focused = YES; reset_input(); }
@@ -866,6 +878,10 @@ void s2a_front_run(void (*guest_main)(void)) {
         NSMenu *menu = [NSMenu new]; NSMenuItem *root = [NSMenuItem new]; [menu addItem:root];
         NSMenu *application = [NSMenu new];
         NSMenuItem *controls = [application addItemWithTitle:@"查看键位 / Controls" action:@selector(show) keyEquivalent:@"k"];
+        if (getenv("S2A_RETURN_MARKER")) {   // 启动器起的局才有（作业给标记路径）；直接跑宿主没有游戏库可回，不显示
+            NSMenuItem *sw = [application addItemWithTitle:s2a_ui_zh() ? @S2A_DPROMPT_SWITCH_GAME_TITLE : @S2A_DPROMPT_SWITCH_GAME_TITLE_EN action:@selector(switchGame:) keyEquivalent:@""];
+            sw.target = delegate;
+        }
         [application addItemWithTitle:@"Quit S2Arm Game" action:@selector(terminate:) keyEquivalent:@"q"];
         root.submenu = application;
         NSMenuItem *inputRoot = [NSMenuItem new]; NSMenu *inputMenu = [[NSMenu alloc] initWithTitle:@"输入"];

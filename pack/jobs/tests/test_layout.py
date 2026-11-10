@@ -6,7 +6,7 @@ from pathlib import Path
 import unittest
 from unittest.mock import patch
 
-from jobcase import JobCase
+from jobcase import JobCase, OsView   # OsView：只给被测模块看 os.name = "nt"，不改全进程（7d265148）
 
 import layout
 from core import atomic
@@ -321,7 +321,7 @@ class VolumeNameTests(unittest.TestCase):
         import library
         cases = [("C:\\S2Arm", "", "系统盘"), ("D:\\S2Arm", "Games", "Games（D:）"), ("e:\\x", "", "E 盘"), ("\\\\nas\\share\\S2Arm", "", "\\\\nas\\share")]
         for path, label, want in cases:
-            with self.subTest(path=path), patch.object(library.os, "name", "nt"), patch.dict(os.environ, {"SystemDrive": "C:"}), \
+            with self.subTest(path=path), patch.object(library, "os", OsView()), patch.dict(os.environ, {"SystemDrive": "C:"}), \
                  patch.object(library, "_win_volume_label", return_value=label):
                 self.assertEqual(library._volume(path), want)
         self.assertEqual(library._volume(os.path.join(os.sep, "Volumes", "移动硬盘", "S2Arm")), "移动硬盘")

@@ -104,13 +104,13 @@ public sealed partial class EnvironmentWindow
         return ControlReply.Ok();
     }
 
-    private ControlReply ControlInstall(LibraryGame game)
+    private ControlReply ControlInstall(LibraryGame game, bool acceptDropped = false)
     {
         if (ControlBusy) return Busy();
         if (readinessFor != game.Id || !InstallAllowed) return ControlReply.Bad($"还不能装：先 install-check {game.Id}；这款的 iPhone 版没做好时要先出包");
         selectedGame = game.Id;
         Navigate("install");
-        _ = InstallAsync(game);
+        _ = InstallAsync(game, acceptDropped, ask: false);
         return ControlReply.Ok();
     }
 
@@ -192,14 +192,14 @@ public sealed partial class EnvironmentWindow
                 return ControlReply.Ok();
             }
             case ("POST", "/install"):
-                return ControlGame(r) is { } installGame ? ControlInstall(installGame) : NoGame;
+                return ControlGame(r) is { } installGame ? ControlInstall(installGame, r.Flag("acceptDropped")) : NoGame;
             case ("POST", "/uninstall"):
             {
                 if (ControlGame(r) is not { } game) return NoGame;
                 if (ControlBusy) return Busy();
                 selectedGame = game.Id;
                 Navigate("install");
-                _ = RunPhoneJobAsync(game, "installRemove", "install.remove");
+                _ = RunPhoneJobAsync(game, "installRemove", "install.remove", r.Flag("acceptDropped"), ask: false);
                 return ControlReply.Ok();
             }
             case ("POST", "/restore-iphone"):   // s2armctl restore-iphone：装回上一版手机 S2Arm（同 Mac 控制口）
@@ -281,8 +281,8 @@ public sealed partial class EnvironmentWindow
         ("POST /customize {gameId, name?, coverPath?}", "改游戏显示名 / 封面（JPG、PNG）；不传的不动，传空字符串恢复默认；下次装到 iPhone 时带上"),
         ("POST /ipa {gameId, spaceOverride?}", "打 iPhone 包（出 IPA + 资源包）；spaceOverride = true 同界面「仍然继续」"),
         ("POST /installCheck {gameId}", "装机前清单：几秒后看 GET /state 的 installReadiness"),
-        ("POST /install {gameId}", "用 Impactor 装到 iPhone（清单全齐才能装；Apple ID 由玩家本人在 Impactor 里登录）"),
-        ("POST /uninstall {gameId}", "从 iPhone 上的 S2Arm 删一款"),
+        ("POST /install {gameId, acceptDropped?}", "用 Impactor 装到 iPhone（清单全齐才能装；Apple ID 由玩家本人在 Impactor 里登录）；失败码 container_would_drop = 手机上有别的电脑装的游戏这次带不上，先问玩家，同意了带 acceptDropped = true 再发"),
+        ("POST /uninstall {gameId, acceptDropped?}", "从 iPhone 上的 S2Arm 删一款；acceptDropped 同 /install"),
         ("POST /cancel {taskId} | /retry {taskId}", "停掉在跑的作业 / 重试出包、装机任务"),
         ("POST /diagnostics {action:export, path}", "导出诊断包（已脱敏的 zip）"),
         ("POST /environment", "重新检查环境"), ("POST /refresh", "刷新游戏库"),

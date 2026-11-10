@@ -481,6 +481,14 @@ def send(dev, pack, work, say=print, progress=None):
 #   取单包最慢的约 4 倍，比任何一包正常耗时都长，又不至于真卡住时让玩家干等十几分钟
 STALL_S = 180
 OPEN_BY_HAND = "在 iPhone 上打开 S2Arm，选这款游戏，保持在前台别锁屏，等它导入完就能玩"
+LOCKED_WAIT = "iPhone 锁屏了：请解锁手机、保持亮屏，解锁后会自动接着解开"
+LOCKED_WHY = "iPhone 一直锁着屏，电脑拉不起 App。解锁后"
+CANT_OPEN_WHY = ("电脑拉不起手机上的 App，常见原因：iPhone 没开开发者模式（设置 → 隐私与安全性 → 开发者模式），"
+                 "或免费 Apple ID 还没信任开发者（设置 → 通用 → VPN 与设备管理）。处理好后")
+NO_DEVMODE_WHY = "电脑连不上手机的开发服务：请在 iPhone 上打开开发者模式（设置 → 隐私与安全性 → 开发者模式，要 iOS 17 以上）。处理好后"
+LOCKED_SIGNS = ("XPC response missing CoreDevice.output", "locked", "Locked")   # 锁屏时拉 App 的报错（Windows s2a-devpush 实测原文；devicectl 带 locked 字样）
+DEVMODE_SIGNS = ("CoreDeviceProxy",)   # s2a-devpush 建不了隧道（没开开发者模式 / iOS 17 以下）
+RELAUNCH_S = 10   # 拉不起时每隔几秒再拉一次（拉一次约 1 秒；等待总长仍按 STALL_S 无进展判）
 PROGRESS = re.compile(r"进度：解开 \S+（(\d+)/(\d+)）")
 
 
@@ -496,13 +504,22 @@ def apply(dev, pack, work, nb, say=print, sleep=time.sleep, now=time.time, stall
     u0 = len((read(dev, unpack_log(dev), work, "r.unpack0") or "").splitlines())
     done = re.compile(r"解开 \d+ 个包 .*\.applied = " + re.escape(want or "-"))
     say("起一次 App 解开推送包（S2A_PACK_APPLY_ONLY=1）")
-    cant_open = None
-    try:
-        dev.launch({"S2A_PACK_APPLY_ONLY": "1", **({"S2A_LAUNCH_CTX": dev.ctx} if dev.ctx else {})})   # 容器：起哪一款由启动上下文定
-    except Fail as e:   # 拉起靠电脑侧的设备服务，玩家机上常常没有（#192）；资源已在手机上，照样等玩家手动打开后解完
-        cant_open = str(e); say(f"资源包已传完。{OPEN_BY_HAND}")
+    env = {"S2A_PACK_APPLY_ONLY": "1", **({"S2A_LAUNCH_CTX": dev.ctx} if dev.ctx else {})}   # 容器：起哪一款由启动上下文定
+    def try_launch():   # → None 起成了；否则失败原文（拉起靠电脑侧的设备服务，玩家机上常常没有，#192）
+        try: dev.launch(env); return None
+        except Fail as e: return str(e)
+    def locked(err):   # 拉不起时按报错原文判是不是锁屏（11-09 测试设备实测：锁屏时写文件照样成功、只有拉 App 失败，Windows 回「XPC response missing CoreDevice.output」，解锁后同一调用成功）
+        return any(k in err for k in LOCKED_SIGNS)
+    cant_open = try_launch(); was_locked = False; tried = now()
+    if cant_open:
+        was_locked = locked(cant_open)
+        say(f"资源包已传完。{LOCKED_WAIT if was_locked else OPEN_BY_HAND}")
     seen, last = 0, now()
     while True:
+        if cant_open and now() - tried >= RELAUNCH_S:   # 推几分钟间手机自动锁屏是常态：每隔一会儿再拉一次，玩家一解锁就接着自动解开，不用自己去点
+            tried = now(); cant_open = try_launch()
+            if cant_open: was_locked = locked(cant_open)
+            else: say("已拉起 App，接着解开推送包"); last = now()
         new = (read(dev, unpack_log(dev), work, "r.unpack1") or "").splitlines()[u0:]
         if applied() == want and any(done.search(l) for l in new):
             say("资源包：机上已解开（.applied = 本包）"); return True
@@ -513,7 +530,8 @@ def apply(dev, pack, work, nb, say=print, sleep=time.sleep, now=time.time, stall
             break
         sleep(3)
     if cant_open:
-        raise NeedsPlayer(f"资源包已传完，还差最后一步：{OPEN_BY_HAND}（电脑这边打不开手机上的 App：{cant_open}）")
+        why = LOCKED_WHY if was_locked else NO_DEVMODE_WHY if any(k in cant_open for k in DEVMODE_SIGNS) else CANT_OPEN_WHY
+        raise NeedsPlayer(f"资源包已传完，还差最后一步：{why}{OPEN_BY_HAND}（电脑这边打不开手机上的 App：{cant_open}）")
     raise Fail(f"资源包推进去了，但机上解包 {stall} 秒没有新进展（停在第 {seen} 包）：打开这款游戏、保持在前台等它导入完" if seen else
                f"资源包推进去了，但起 App 后 {stall} 秒机上解包没有开始：打开这款游戏、保持在前台等它导入完")
 

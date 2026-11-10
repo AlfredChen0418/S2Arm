@@ -677,15 +677,27 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
-    func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil) {
+    /// 装机 / 删除会让手机上别的电脑装的游戏暂时不能玩（作业层 container_would_drop）：界面弹确认，确认了带 acceptDropped 重跑。
+    /// ask = false（控制口发起）不弹，原样失败，由调用方带 acceptDropped 再发。
+    struct DropConfirm { let kind: JobSession.Kind; let game: GameSummary; let message: String }
+    @Published var dropConfirm: DropConfirm?
+
+    func install(_ game: GameSummary, teamId: String? = nil, device: String? = nil, acceptDropped: Bool = false, ask: Bool = true) {
         guard !busy, installAllowed(game.id) else { return }
         failAction(nil, game: nil)
         // 连着多台时装到出包页选中的那台（和按机型优化的是同一台）；控制口明说了 device 的照它
         let device = device ?? (connectedDevices.count > 1 ? selectedDevice?["id"] as? String : nil)
         start(.install, game: game, name: game.name) { [weak self] sink in
-            _ = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, events: sink)
+            do { _ = try await self?.provider.install(gameId: game.id, teamId: teamId, device: device, acceptDropped: acceptDropped, events: sink) }
+            catch let f as JobFailure where ask && f.code == "container_would_drop" { self?.dropConfirm = DropConfirm(kind: .install, game: game, message: f.errorDescription ?? ""); throw f }
             return nil
         }
+    }
+
+    /// 确认框点了「仍然继续」
+    func confirmDrop(_ d: DropConfirm) {
+        dropConfirm = nil; clearInlineFailure()
+        if d.kind == .installRemove { removeFromPhone(d.game, acceptDropped: true) } else { install(d.game, acceptDropped: true) }
     }
 
     /// 装回上一版手机 S2Arm（只换宿主后新宿主不好用时）。
@@ -698,11 +710,12 @@ public final class S2ArmLauncherModel: ObservableObject {
         }
     }
 
-    func removeFromPhone(_ game: GameSummary) {
+    func removeFromPhone(_ game: GameSummary, acceptDropped: Bool = false, ask: Bool = true) {
         guard !busy else { return }
         failAction(nil, game: nil)
         start(.installRemove, game: game, name: game.name) { [weak self] sink in
-            _ = try await self?.provider.removeFromPhone(gameId: game.id, events: sink)
+            do { _ = try await self?.provider.removeFromPhone(gameId: game.id, acceptDropped: acceptDropped, events: sink) }
+            catch let f as JobFailure where ask && f.code == "container_would_drop" { self?.dropConfirm = DropConfirm(kind: .installRemove, game: game, message: f.errorDescription ?? ""); throw f }
             return nil
         }
     }
@@ -955,7 +968,13 @@ public final class S2ArmLauncherModel: ObservableObject {
         self.session = session
         // 一局的结局只从事件来（run 是同步起的）；别的作业由 Task 结束收尾（中间可能有好几个作业，如先装 .NET 再出包）
         if session.kind == .play, event.isFinal {
-            finish(JobOutcome.State(rawValue: event.fields["state"] as? String ?? "") ?? .interrupted, message: event.message)
+            let state = JobOutcome.State(rawValue: event.fields["state"] as? String ?? "") ?? .interrupted
+            finish(state, message: event.message)
+            // 游戏里点了「切换游戏」（宿主菜单栏，pack/jobs/build.py launch 结果带 returnToLibrary）：不停在结果页，回到游戏库并切到前台，玩家直接点下一款
+            if state == .completed, (event.fields["result"] as? [String: Any])?["returnToLibrary"] as? Bool == true {
+                backToLibrary()
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
     }
 

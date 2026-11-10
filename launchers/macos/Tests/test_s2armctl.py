@@ -481,6 +481,16 @@ class LaunchArgsTests(unittest.TestCase):
             ctl.main()
         self.assertEqual(posted, {"method": "POST", "path": "/uninstall", "body": {"gameId": "0100535012974000"}})
 
+    def test_accept_dropped_only_when_given(self):
+        """--accept-dropped 才带 acceptDropped（玩家同意别的电脑装的款这次带不上）；不给就不带，作业层停下报 container_would_drop"""
+        posted = []
+        with mock.patch.object(ctl, "call", side_effect=lambda m, p, b=None, **kw: posted.append((p, b)) or {"ok": True}):
+            for argv in (["install", "0100535012974000"], ["install", "0100535012974000", "--accept-dropped"], ["uninstall", "0100535012974000", "--accept-dropped"]):
+                with mock.patch.object(sys, "argv", ["s2armctl", *argv]):
+                    ctl.main()
+        self.assertEqual(posted, [("/install", {"gameId": "0100535012974000"}), ("/install", {"gameId": "0100535012974000", "acceptDropped": True}),
+                                  ("/uninstall", {"gameId": "0100535012974000", "acceptDropped": True})])
+
 class DiagCommandTests(unittest.TestCase):
     """#94：只敲 s2armctl diag 原先 IndexError；现在不给路径 = 导出到桌面，认不出的写法打用法退出 2"""
 

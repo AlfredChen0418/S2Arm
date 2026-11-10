@@ -182,6 +182,40 @@ class Apply(Base):
         self.assertIsInstance(r, push.NeedsPlayer); self.assertGreater(t, 180); self.assertLess(t, 190)
         self.assertTrue(str(r).startswith("资源包已传完，还差最后一步：")); self.assertIn("app_service", str(r)); self.assertNotIn("失败，", str(r))
 
+    def test_cant_launch_not_locked_says_how_to_fix(self):   # 报错不是锁屏那句：原因写开发者模式 / 信任开发者，不说锁屏
+        r, _ = self.cant_launch()
+        self.assertIn("开发者模式", str(r)); self.assertIn("VPN 与设备管理", str(r)); self.assertNotIn("锁着屏", str(r))
+
+    def locked_then(self, unlock_at=None):
+        """锁屏（11-09 测试设备实测：锁屏时写文件照样成功，只有拉 App 失败，报 XPC response missing CoreDevice.output）；unlock_at 给了就在该时刻解锁，之后拉得起、拉起即解完。返回 (结果或异常, 结束时刻, 拉了几次)"""
+        dev = Fake({}); self.dev = dev; clock = [0.0]; tries = [0]
+        unlocked = lambda: unlock_at is not None and clock[0] >= unlock_at
+        def launch(env):
+            tries[0] += 1
+            if not unlocked(): raise push.Fail("起 io.s2arm.x 失败：unexpected response from device: XPC response missing CoreDevice.output")
+            dev.files[f"{RP}/.applied"] = self.WANT; dev.files["Documents/unpack.log"] = f"11-09 解开 1 个包 2 个文件 0 MB，.applied = {self.WANT}（0.2 秒）\n"
+        dev.launch = launch
+        def sleep(x): clock[0] += x
+        try: return push.apply(dev, self.pk, self.w, 1, say=self.log.append, sleep=sleep, now=lambda: clock[0]), clock[0], tries[0]
+        except push.Fail as e: return e, clock[0], tries[0]
+
+    def test_locked_then_unlocked_resumes_by_itself(self):   # 第 45 秒解锁：电脑自己再拉起来解完，算装好，玩家不用去点
+        r, t, n = self.locked_then(unlock_at=45)
+        self.assertIs(r, True); self.assertGreaterEqual(t, 45); self.assertLess(t, 45 + push.RELAUNCH_S + 5); self.assertGreater(n, 1)
+        self.assertIn(f"资源包已传完。{push.LOCKED_WAIT}", self.log)
+
+    def test_locked_all_along_says_unlock(self):   # 一直锁着：需要玩家操作，原因说锁屏
+        r, t, _ = self.locked_then()
+        self.assertIsInstance(r, push.NeedsPlayer); self.assertIn("锁着屏", str(r)); self.assertNotIn("开发者模式", str(r))
+
+    def test_no_tunnel_says_developer_mode(self):   # s2a-devpush 建不了隧道（CoreDeviceProxy 连不上）：原因只说开发者模式
+        dev = Fake({}); self.dev = dev; clock = [0.0]
+        def boom(env): raise push.Fail("CoreDeviceProxy 连不上（要 iOS 17+、开发者模式）：x")
+        dev.launch = boom
+        def sleep(x): clock[0] += x
+        with self.assertRaises(push.NeedsPlayer) as e: push.apply(dev, self.pk, self.w, 1, say=self.log.append, sleep=sleep, now=lambda: clock[0])
+        self.assertIn("打开开发者模式", str(e.exception)); self.assertNotIn("锁着屏", str(e.exception))
+
     def test_same_pack_repush_without_new_line_fails(self):   # .applied 推前已是本包、日志旧行也对得上，但这次没解 → 不能判装好
         old = {f"{RP}/.applied": self.WANT, "Documents/unpack.log": f"10-01 解开 3 个包 9 个文件 1 MB，.applied = {self.WANT}（0.2 秒）\n"}
         with self.assertRaises(push.Fail) as e: self.ap(old, 1, False)

@@ -19,6 +19,11 @@ cat > "$T/bin/xcrun" <<'STUB'
 #!/bin/sh
 case "$*" in *--show-sdk-version*) echo 27.1;; *--version*) echo 'Apple metal version 32023.1';; *) exit 1;; esac
 STUB
+# macOS 的 /usr/bin/git 是校验 DEVELOPER_DIR 的 shim：假目录下整只 git 静默死（key_norm 的 git show 全空）。包装卸 DEVELOPER_DIR 再 exec 真 git；对不吃该变量的 git 无影响。
+cat > "$T/bin/git" <<STUB
+#!/bin/sh
+exec env -u DEVELOPER_DIR "$(command -v git)" "\$@"
+STUB
 # 只模拟 stat 参数协议与失败输出；不替换 input_fp / key_of / 抽取缓存代码。
 cat > "$T/bin/stat" <<'STUB'
 #!/usr/bin/env python3

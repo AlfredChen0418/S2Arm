@@ -120,6 +120,12 @@ struct InstallView: View {
                 }
                 .padding(.horizontal, 30).padding(.bottom, 24)
             }
+            .alert(text("install.drop_title"), isPresented: Binding(get: { model.dropConfirm != nil }, set: { if !$0 { model.dropConfirm = nil } }), presenting: model.dropConfirm) { d in
+                Button(text("install.drop_confirm"), role: .destructive) { model.confirmDrop(d) }
+                Button(loc.t("launch.done"), role: .cancel) {}
+            } message: { d in
+                Text(loc.backend(d.message))
+            }
             }
             Divider().opacity(0.3)
             if model.installDone == gameID {

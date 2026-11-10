@@ -6,7 +6,7 @@ int s2a_fps_cap_reason(void) __attribute__((weak_import));
 #import "vpad.h"
 #import "vpad_settings.h"
 #import "cpatch_settings.h"
-#include "s2a_direct_prompt.h"   // 「换一款游戏」文案（与 launchers/shared/experience.v1.json prompts 逐字一致；按 App 语言只显示一种，S2APICK）
+#include "s2a_direct_prompt.h"   // 「切换游戏」文案（与 launchers/shared/experience.v1.json prompts 逐字一致；按 App 语言只显示一种，S2APICK）
 #include <math.h>
 
 void s2a_diag_export(void);
@@ -73,7 +73,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
         case 1: return S2AL(@"settings.footer.controls");
         case 2: return S2AL(@"settings.footer.diag");
         case 4: return S2AL(@"settings.footer.saves");
-        case 5: return nil;
+        case 5: return S2APICK(S2A_DPROMPT_SWITCH_GAME_NOTE);
         default: return S2AL(@"settings.footer.dev");
     }
 }
@@ -147,7 +147,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
 - (void)updateColumns {
     BOOL compact = self.view.bounds.size.width < 650 || UIContentSizeCategoryIsAccessibilityCategory(self.traitCollection.preferredContentSizeCategory);
     NSArray *secondary = _runtime.manageSaves ? @[@1, @4, @2, @3] : @[@1, @2, @3];
-    if (_runtime.multiGameContainer) secondary = [@[@5] arrayByAddingObjectsFromArray:secondary];   // 多款容器：「换一款游戏」放第二栏最上（找回游戏库的玩家先看到）
+    if (_runtime.switchGame) secondary = [@[@5] arrayByAddingObjectsFromArray:secondary];   // 多款容器：「切换游戏」放第二栏最上（找回游戏库的玩家先看到）
     NSArray *groups = compact ? [@[@0] arrayByAddingObjectsFromArray:secondary] : @[@0];
     if (![_left.groups isEqual:groups]) { _left.groups = groups; _right.groups = secondary; _right.view.hidden = compact; [self refresh]; }
 }
@@ -262,11 +262,9 @@ static UILabel *textLabel(UIFontTextStyle style) {
 }
 - (UITableViewCell *)cellForGroup:(NSInteger)group row:(NSInteger)row {
     __weak S2ASettingsController *weakSelf = self;
-    if (group == 5) {   // 多款容器换游戏：只读说明（按 App 语言一段），不可点、不退出进程
-        UITableViewCell *cell = [[UITableViewCell alloc] initWithStyle:UITableViewCellStyleDefault reuseIdentifier:nil];
-        cell.textLabel.text = S2APICK(S2A_DPROMPT_SWITCH_GAME_BODY);
-        cell.textLabel.numberOfLines = 0; cell.textLabel.font = [UIFont preferredFontForTextStyle:UIFontTextStyleSubheadline];
-        cell.textLabel.adjustsFontForContentSizeCategory = YES; cell.selectionStyle = UITableViewCellSelectionStyleNone;
+    if (group == 5) {   // 多款容器切换游戏：点了弹确认（runtime.switchGame），同「导出诊断包」一样是一行动作
+        UITableViewCell *cell = [self baseCell:S2APICK(S2A_DPROMPT_SWITCH_GAME_ACTION)];
+        cell.textLabel.textColor = self.view.tintColor; cell.textLabel.numberOfLines = 0;
         cell.accessibilityIdentifier = @"settings.switchGame";
         return cell;
     }
@@ -316,6 +314,7 @@ static UILabel *textLabel(UIFontTextStyle style) {
         }
     } else if (group == 2 && row == 0) s2a_diag_export();
     else if (group == 4 && row == 0) _runtime.manageSaves(self.navigationController.topViewController);
+    else if (group == 5 && row == 0 && _runtime.switchGame) _runtime.switchGame(self.navigationController.topViewController);
 }
 - (void)close {
     [self.navigationController dismissViewControllerAnimated:!UIAccessibilityIsReduceMotionEnabled() completion:^{ s2a_vpad_set_settings_open(NO); }];

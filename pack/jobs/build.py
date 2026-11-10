@@ -175,6 +175,12 @@ def launch(c):
         if seed:
             env["S2A_SAVE_DIR"] = str(seed)   # 玩家导入过存档、这是第一次启动：运行时建好存档再灌入
         env.update(community.launch_env(c, game["id"]))   # 宽屏 / 60 帧宿主开关（社区资源面板，10-27）：关掉的才设，下次启动生效
+        # 宿主菜单栏「切换游戏」（macos/front_mac.m）：收尾前在这里留标记，结果带 returnToLibrary，启动器回到游戏库。先删上一局残留
+        marker = c.private / "runtime-return" / (c.task + ".flag")
+        marker.parent.mkdir(parents=True, exist_ok=True)
+        marker.unlink(missing_ok=True)
+        env["S2A_RETURN_MARKER"] = str(marker)
+        back = False
         try:
             c.begin("游戏运行中")
             log = c.logs / (c.task + "-game.log")
@@ -187,7 +193,9 @@ def launch(c):
                 raise
             if trial:
                 host_update.settle(c, game["id"], host, ok=True)
+            back = marker.exists()
         finally:
+            marker.unlink(missing_ok=True)
             if seed:
                 finish_seed(c, game["id"], log)
             # Context.run waits for the host, including failure/cancellation.
@@ -198,7 +206,7 @@ def launch(c):
                     path.unlink(missing_ok=True)
                 except OSError:
                     c.emit("message", "本局映射快照清理失败，请检查应用数据目录权限。")
-        return {"gameId": game["id"]}
+        return {"gameId": game["id"], "returnToLibrary": True} if back else {"gameId": game["id"]}
 
 
 VAGUARD = "libs2a_vaguard.dylib"

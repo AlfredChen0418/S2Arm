@@ -1150,6 +1150,26 @@ class JobsTests(unittest.TestCase):
             probe.assert_called_once_with(self.c, host)
             run.assert_not_called()
 
+    def test_launch_returns_to_library_only_when_the_host_left_the_switch_game_marker(self):
+        # 宿主菜单栏「切换游戏」写 S2A_RETURN_MARKER 再退出：结果带 returnToLibrary；正常退出不带；上一局残留的标记不算
+        game = self.game(); self.catalogue([game]); self.c.r["gameId"] = game["id"]
+        self.fake_host(game["id"])
+        stale = self.c.private / "runtime-return" / (self.c.task + ".flag")
+        for switch in (True, False):
+            stale.parent.mkdir(parents=True, exist_ok=True); stale.write_text("")
+            seen = []
+            def run(command, log, env, **kwargs):
+                marker = Path(env["S2A_RETURN_MARKER"]); seen.append(marker)
+                self.assertFalse(marker.exists())
+                if switch:
+                    marker.write_text("")
+            with patch.object(build, "validate_runtime", return_value={"gameId": game["id"], "memoryRequirementsVersion": 2}), \
+                 patch.object(self.c, "run", side_effect=run):
+                result = build.launch(self.c)
+            self.assertEqual(result.get("returnToLibrary", False), switch)
+            self.assertEqual(seen, [stale])
+            self.assertFalse(stale.exists())
+
     def test_launch_removes_only_its_snapshot_after_exit_failure_or_cancellation(self):
         game = self.game(); self.catalogue([game]); self.c.r.update(gameId=game["id"], inputGuideHandled=True,
             launchInputConfig=dict(schema=1, keyboard={"A": {"code": 14}}, mouse={}, gamepad={}, axes={},

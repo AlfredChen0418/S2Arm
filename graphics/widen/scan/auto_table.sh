@@ -37,7 +37,7 @@ UN=0; [ "$(cut -f1 <<< "$S1")" = 未判 ] && [ "$(cut -f2 <<< "$S1")" = "$VER" ]
 mkdir "$O/.lock.$MODE" 2>/dev/null || { echo "🟡 $G 自动出表（${MODE}）已在跑（锁 $O/.lock.${MODE}）"; exit 0; }
 trap 'rmdir "$O/.lock.$MODE" 2>/dev/null' EXIT
 put_() {   # put_ <态> <说明>：写 status 第 1 行；未判不推翻上一条结论（过 / 不过），把它留作第 2 行
-  local p=; [ "$1" = 未判 ] && p=$(awk -F'\t' '$1 == "过" || $1 == "不过" { print; exit }' "$ST" 2> /dev/null)
+  local p=; [ "$1" = 未判 ] && p=$(LC_ALL=C awk -F'\t' '$1 == "过" || $1 == "不过" { print; exit }' "$ST" 2>/dev/null)
   local x=; [ "$1" = 未判 ] && x=$(printf '\t%s' $((UN + 1)))   # 未判记同工具连续次数（见上：两次不再重排）
   { printf '%s\t%s\t%s%s\n' "$1" "$VER" "${2//$'\t'/ }" "$x"; if [ -n "$p" ]; then printf '%s\n' "$p"; fi; } > "$ST.new" && mv "$ST.new" "$ST"; }
 undec_() { put_ 未判 "$1"; echo "$(date '+%m-%d %H:%M') 未判（不是画面结论，不缓存，下次触发重排）：$1" >> "$O/$MODE.log"; echo "🟡 $G 自动出表（${MODE}）未判：$1"; exit 75; }   # 起局 / 构建 / 刷新等基础设施出错、没到判断点 ≠ 判据不过

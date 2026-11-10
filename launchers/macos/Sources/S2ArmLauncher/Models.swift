@@ -59,6 +59,8 @@ struct TaskRecord: Codable, Identifiable {
     var target: String?
     // 装到 iPhone：这次推了几个资源包文件（成功句按它写，审计 18:00 P1-58）
     var packFiles: Int?
+    // 装到 iPhone：资源传完但电脑没拉起 App 解开时的那句（作业结果 unpackPending，11-09 #336）；有它就不说「已装到 iPhone」
+    var unpackPending: String?
     var diagnostics: [TaskDiagnostic]?
     var space: SpaceBudget?
     // 里程碑进度（准备任务）：计划、当前里程碑、各里程碑开始时刻（前端收到切换事件时记）

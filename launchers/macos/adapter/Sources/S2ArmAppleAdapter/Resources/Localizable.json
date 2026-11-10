@@ -6512,6 +6512,10 @@
   "en": "The game was removed from the app, but its data on iPhone could not be deleted: "
  },
  {
+   "source": "确认后再点一次：点名的游戏会暂时不能玩（存档和资源包留在手机上），到装它们的那台电脑上再「装到 iPhone」一次就回来；不想这样就先别装。",
+   "en": "Click again to confirm: the games named will stop working for now (their saves and resources stay on the phone). Install them on iPhone again from the computer they came from to bring them back. If you don't want that, don't install now."
+ },
+ {
   "source": "先给点名的游戏各「打 iPhone 包」一次，再装到 iPhone；手机上现有的游戏不受影响。",
   "en": "Run \"Build for iPhone\" once for each game named, then install on iPhone; the games already on your phone are not affected."
  },

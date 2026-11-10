@@ -141,6 +141,7 @@ s2armctl state | errors [游戏号] | logs <任务号|游戏号> [--lines N]
 | `device_pairing_required` | human | 请玩家拔掉重插、解锁，在手机上重新点「信任此电脑」 |
 | `developer_mode_required` | human | 请玩家在 iPhone「设置 → 隐私与安全性 → 开发者模式」打开，按提示重启，重启后解锁 |
 | `device_locked` | human | 请玩家解锁手机、停在主屏幕，装的过程中别锁屏 |
+| `container_would_drop` | ask | 手机上有几款是在别的电脑装的，这次会暂时不能玩（存档和资源包还在手机上，回原来那台电脑再装一次就回来）：把报错里列的游戏名告诉玩家，同意了再 `install <游戏号> --accept-dropped`（删除用 `uninstall <游戏号> --accept-dropped`） |
 | `free_app_limit` | human | 这台 iPhone 上免费签名的自签 App 已满 3 个：请玩家删掉一个不玩的自签 App 再装 |
 | `free_appid_limit` | human | 免费 Apple ID 7 天内最多注册 10 个包名，已用满（Apple 错误 9120）；删 App 不退额度，别让玩家删：请玩家等几天（最早那批满 7 天恢复），或在 Xcode 换一个 Apple ID 登录（你不代做），或用付费开发者账号 |
 | `provisioning_expired` / `signing_failed` | ai | 再 `install` 一次（会重新申请）；还不行 `logs` 看签名哪步报错，必要时改用 AltStore（启动器「装到 iPhone」页底部有步骤，玩家本人登录） |

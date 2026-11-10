@@ -10,8 +10,9 @@
 // Main thread. Complete once on the main thread; nil error means the new guest
 // thread started, not that its first frame or save data has been verified.
 @property(nonatomic, copy) void (^restart)(void (^completion)(NSString *error));
-// 多款容器（一个 App 装多款游戏，runtime/src/launchctx.c）：设置页加「换一款游戏」一栏，告诉玩家换游戏要划掉 App 重开（一进程一款、不调 exit()）
-@property(nonatomic) BOOL multiGameContainer;
+// 切换游戏：只有多款容器（一个 App 装多款游戏，runtime/src/launchctx.c）给，单款包为 nil。一个进程只跑一款：
+//   弹确认，确认后照退出流程存档收尾、结束进程，再点开 App 是游戏库。设置页「切换游戏」一栏与齿轮菜单都调它；主线程
+@property(nonatomic, copy) void (^switchGame)(UIViewController *presenter);
 @end
 
 // Main thread only. A shell without a game may leave runtime capabilities nil.

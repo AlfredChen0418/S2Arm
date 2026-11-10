@@ -26,12 +26,18 @@ extern "C" {
 // 游戏声明触屏配置时自动切到仅触屏（ios/touch_config.m，只改本次运行）：提示一条，指齿轮菜单「按键布局」
 #define S2A_DPROMPT_VPAD_TOUCH_AUTO    "已切到触屏操作：这款游戏用触屏点菜单。左上角齿轮 → 按键布局，可以切回按键。"
 #define S2A_DPROMPT_VPAD_TOUCH_AUTO_EN "Switched to touch controls: this game uses touch for its menus. You can switch back to buttons from the gear in the top-left corner → Button layout."
-// 多款容器换游戏（ios/app_settings.m 设置页「换一款游戏」一栏，只在多款容器里出现；11-07 启动器线）：一个进程只跑一款、换游戏只能冷启动（不调 exit()），
-//   放在玩家找「回游戏库」时会去的设置页。按 App 语言只显示一种（ios/s2a_l10n.h S2APICK）；英文宏 <名>_EN 与规格的 en 逐字一致（launchers/shared/check_experience.py）
-#define S2A_DPROMPT_SWITCH_GAME_TITLE    "换一款游戏"
-#define S2A_DPROMPT_SWITCH_GAME_TITLE_EN "Switch games"
-#define S2A_DPROMPT_SWITCH_GAME_BODY     "换一款游戏需要重新打开 S2Arm：先在游戏里存档，然后从屏幕底部上滑，把 S2Arm 划掉，再点开就回到游戏库。"
-#define S2A_DPROMPT_SWITCH_GAME_BODY_EN  "To switch games, reopen S2Arm: save in the game first, then swipe up from the bottom of the screen, swipe S2Arm away, and tap it again to return to the game library."
+// 切换游戏（一个进程只跑一款）：iOS 多款容器在局内设置页 / 齿轮菜单点它，确认后照退出流程存档收尾、结束进程，再点开 App 是游戏库（ios/app.m）；
+//   Mac 宿主菜单栏点它（不二次确认，同菜单栏「退出」），收尾后启动器回到游戏库（macos/front_mac.m → pack/jobs/build.py launch → 启动器）。取消按钮用 S2A_DPROMPT_HOME_QUIT_DECLINE
+#define S2A_DPROMPT_SWITCH_GAME_TITLE  "切换游戏"
+#define S2A_DPROMPT_SWITCH_GAME_TITLE_EN "Switch Games"
+#define S2A_DPROMPT_SWITCH_GAME_ACTION "结束这局，回到游戏库"
+#define S2A_DPROMPT_SWITCH_GAME_ACTION_EN "End this game and return to the library"
+#define S2A_DPROMPT_SWITCH_GAME_NOTE   "S2Arm 会关闭，再点开就回到游戏库。"
+#define S2A_DPROMPT_SWITCH_GAME_NOTE_EN "S2Arm closes; open it again to return to the game library."
+#define S2A_DPROMPT_SWITCH_GAME_BODY   "请先在游戏里存档。确认后这局结束、S2Arm 关闭，再点开 S2Arm 就回到游戏库，选另一款开始。退出前会等游戏把存档写完；没在游戏里存的进度会丢。"
+#define S2A_DPROMPT_SWITCH_GAME_BODY_EN "Save in the game first. When you confirm, this game ends and S2Arm closes; open S2Arm again to return to the game library and pick another game. Quitting waits for the game to finish writing its save; progress you haven't saved in the game will be lost."
+#define S2A_DPROMPT_SWITCH_GAME_ACCEPT "已存档，切换"
+#define S2A_DPROMPT_SWITCH_GAME_ACCEPT_EN "Saved, switch"
 // 实体手柄退出游戏（#276，macos/front_mac.m；按住 Home 2 秒或「+」「-」同按 2 秒弹出，按 A 退出、按 B 回到游戏）
 #define S2A_DPROMPT_HOME_QUIT_TITLE   "退出游戏？"
 #define S2A_DPROMPT_HOME_QUIT_TITLE_EN "Quit game?"

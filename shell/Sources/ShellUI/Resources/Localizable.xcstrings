@@ -11724,6 +11724,38 @@
           }
         }
       }
+    },
+    "Reinstall from the original computer": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reinstall from the original computer"
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "需要在原来那台电脑上重装"
+          }
+        }
+      }
+    },
+    "This game was installed from another computer. Its saves and game data are still on this iPhone; on that computer, choose “Install to iPhone” again to bring it back.": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This game was installed from another computer. Its saves and game data are still on this iPhone; on that computer, choose “Install to iPhone” again to bring it back."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "这款是在另一台电脑上装的，存档和游戏资源都还在这台 iPhone 上；到那台电脑上再点一次「装到 iPhone」就能回来。"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

@@ -12,6 +12,7 @@
 #include "s2a_session.h"
 #include "s2a_dguard.h"
 #include "s2a_init_fail.h"   // 初启失败页的标题 / 按钮文案（与 launchers/shared/experience.v1.json init_fail_page 逐字一致；中英按 App 语言取，S2APICK）
+#include "s2a_direct_prompt.h"   // 「切换游戏」确认框文案（规格 prompts，S2APICK）
 #include "s2a_selfcheck_page.h"   // 起局自检提示页文案：C 层（selfcheck.c）递中文原宏，这里按 App 语言换成 <宏>_EN（host_text）
 void s2a_loadpage_attach(UIView *root); void s2a_loadpage_front(void);   // loadpage.m：首次加载页 / 简短启动画面
 #import <Metal/Metal.h>   // NSProcessPerformanceProfileSustained 定义在 Metal 的 MTLDeviceCertification.h（心跳打持续执行档用）
@@ -64,10 +65,24 @@ static void settings_restart_result(int result, const char *detail, void *contex
     NSString *error = result ? (detail && s2a_l10n_zh() ? [NSString stringWithUTF8String:detail] : S2AL(@"app.restart.failed")) : nil;
     dispatch_async(dispatch_get_main_queue(), ^{ completion(error); });
 }
+// 切换游戏（多款容器）：一个进程只跑一款，换游戏 = 照退出流程收尾（等存档写完）、结束进程，再点开 App 就是游戏库（willConnect 容器分支）。
+//   确认框同「退出游戏后管理存档」（save_transfer.m s2a_ios_save_present）：先提醒在游戏里存档；收尾放后台队列，主线程不等
+static void switch_game_present(UIViewController *presenter) {
+    if (!presenter || presenter.presentedViewController) return;
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:S2APICK(S2A_DPROMPT_SWITCH_GAME_TITLE) message:S2APICK(S2A_DPROMPT_SWITCH_GAME_BODY)
+                                                            preferredStyle:UIAlertControllerStyleAlert];
+    [alert addAction:[UIAlertAction actionWithTitle:S2APICK(S2A_DPROMPT_HOME_QUIT_DECLINE) style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:S2APICK(S2A_DPROMPT_SWITCH_GAME_ACCEPT) style:UIAlertActionStyleDestructive handler:^(UIAlertAction *item) {
+        (void)item; LOG("切换游戏：玩家确认，收尾退出，下次打开回到游戏库");
+        void s2a_host_shutdown(const char *why);
+        dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{ s2a_host_shutdown("切换游戏"); });
+    }]];
+    [presenter presentViewController:alert animated:YES completion:nil];
+}
 static void settings_attach_runtime(void) {
     S2ASettingsRuntime *runtime = [S2ASettingsRuntime new];
     runtime.manageSaves = ^(UIViewController *presenter) { s2a_ios_save_present(presenter); };
-    runtime.multiGameContainer = s2a_launch_ctx_container() != 0;   // 设置页「换一款游戏」说明（一进程一款，换游戏要划掉重开）
+    if (s2a_launch_ctx_container()) runtime.switchGame = ^(UIViewController *presenter) { switch_game_present(presenter); };   // 单款包没有游戏库，不给
     runtime.canRestart = ^BOOL { return s2a_host_session_state() == S2A_SESSION_RUNNING; };
     runtime.restart = ^(void (^completion)(NSString *)) {
         void *context = (void *)CFBridgingRetain([completion copy]);

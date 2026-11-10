@@ -29,17 +29,17 @@ infra() {   # infra <子局目录>：打基础设施失败的确定信号（一�
 marked() { LC_ALL=C /usr/bin/grep -a -q 'S2A 标记 MARK' "$1/host.log" 2> /dev/null; }
 crashed() { LC_ALL=C /usr/bin/grep -a -q CRASH "$1/host.log" 2> /dev/null; }
 [ -s "$V" ] || out 未判 "没出判据（verdict.tsv 空：闭环在起局前就退了）"
-bad=$(awk -F'\t' '$2 != "过" { printf "%s%s", (n++ ? "、" : ""), $1 }' "$V")
+bad=$(LC_ALL=C awk -F'\t' '$2 != "过" { printf "%s%s", (n++ ? "、" : ""), $1 }' "$V")
 [ -z "$bad" ] && out 过 全过
 w=$(infra "$D"); [ -n "$w" ] && out 未判 "主局：$w"
 marked "$D" || crashed "$D" || out 未判 "主局起了、没崩、没到 MARK（自动玩家没进游戏场景）"
-mb=$(awk -F'\t' '$2 != "过" && $1 !~ /^(⑥|⑦|⑧|⑨|⑩)/ { printf "%s%s", (n++ ? "、" : ""), $1 }' "$V")
+mb=$(LC_ALL=C awk -F'\t' '$2 != "过" && $1 !~ /^(⑥|⑦|⑧|⑨|⑩)/ { printf "%s%s", (n++ ? "、" : ""), $1 }' "$V")
 [ -n "$mb" ] && out 不过 "主局判出：$mb 不过"
-if awk -F'\t' '$2 != "过" && $1 ~ /^⑩/ { f = 1 } END { exit !f }' "$V"; then   # ⑩ 要对照局（不开点集）同录像窗的录像
+if LC_ALL=C awk -F'\t' '$2 != "过" && $1 ~ /^⑩/ { f = 1 } END { exit !f }' "$V"; then   # ⑩ 要对照局（不开点集）同录像窗的录像
   w=$(infra "$D/base"); [ -n "$w" ] && out 未判 "对照局：$w"
   marked "$D/base" || out 未判 "对照局没到 MARK（不开点集，不是点集的问题）"
 fi
-if [ -e "$D/ui/run.out" ] && awk -F'\t' '$2 != "过" && $1 ~ /^(⑥|⑦|⑧|⑨)/ { f = 1 } END { exit !f }' "$V"; then   # 界面局起过（没有界面路线时不起、⑥判不过照旧）
+if [ -e "$D/ui/run.out" ] && LC_ALL=C awk -F'\t' '$2 != "过" && $1 ~ /^(⑥|⑦|⑧|⑨)/ { f = 1 } END { exit !f }' "$V"; then   # 界面局起过（没有界面路线时不起、⑥判不过照旧）
   w=$(infra "$D/ui"); [ -n "$w" ] && out 未判 "界面局：$w"
 fi
 out 不过 "判出：$bad 不过"

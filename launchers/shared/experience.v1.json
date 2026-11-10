@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "contract": "s2a.experience.v1",
-  "revision": 41,
+  "revision": 42,
   "languages": ["zh-Hans", "en"],
   "source_language": "zh-Hans",
   "note": "四端（Mac / iOS / Android / 鸿蒙）启动器的「一套体验」规格。状态、文案、错误码、任务事件到界面的映射只在这里定义一次；各端只负责画，不另写一套措辞。错误码的「下一步」不在本文件里写第二份：一律指向 pack/jobs/errors.py 的 RECOVERY（口径见 README.md）。口径号 revision 改动规则见 README.md。",
@@ -185,6 +185,7 @@
        "title": {"zh-Hans": "任务失败", "en": "Job failed"},
        "detail": {"zh-Hans": "任务中途失败，原因见诊断。", "en": "The job failed partway; see the diagnostics."},
        "next_action": {"from": "pack/jobs/errors.py"}},
+      {"code": "container_would_drop", "severity": "warn", "retryable": true, "recoverable": true, "title": {"zh-Hans": "会让别的游戏暂时不能玩", "en": "Other games would stop working for now"}, "detail": {"zh-Hans": "手机上有几款游戏是在另一台电脑上装的，这台电脑没法把它们一起放进新的 App。", "en": "Some games on the phone were installed from another computer, and this computer can't put them into the new app."}, "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "container_stale", "severity": "error", "retryable": true, "recoverable": true, "title": {"zh-Hans": "要先重新出 iPhone 版", "en": "Rebuild for iPhone first"}, "detail": {"zh-Hans": "同一个 S2Arm App 里的游戏要用同一版 S2Arm 出，有的游戏还是旧版出的。", "en": "Games in the same S2Arm app must be built by the same S2Arm version, and some were built by an older one."}, "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "container_incompatible", "severity": "error", "retryable": false, "recoverable": false, "title": {"zh-Hans": "放不进同一个 App", "en": "Cannot share one app"}, "detail": {"zh-Hans": "这款和手机上已有的游戏地址空间类型不同。", "en": "This game uses a different address space type from the games already on the iPhone."}, "next_action": {"from": "pack/jobs/errors.py"}},
       {"code": "container_purge_failed", "severity": "warn", "retryable": true, "recoverable": true, "title": {"zh-Hans": "手机上的数据没删掉", "en": "Game data was not removed"}, "detail": {"zh-Hans": "这款已从 App 里移除，但它在手机上的数据还在。", "en": "The game was removed from the app, but its data is still on the iPhone."}, "next_action": {"from": "pack/jobs/errors.py"}},
@@ -484,8 +485,11 @@
       {"id": "home_quit_accept", "macro": "S2A_DPROMPT_HOME_QUIT_ACCEPT", "zh-Hans": "退出", "en": "Quit"},
       {"id": "home_quit_decline", "macro": "S2A_DPROMPT_HOME_QUIT_DECLINE", "zh-Hans": "回到游戏", "en": "Back to game"},
       {"id": "vpad_touch_auto", "macro": "S2A_DPROMPT_VPAD_TOUCH_AUTO", "zh-Hans": "已切到触屏操作：这款游戏用触屏点菜单。左上角齿轮 → 按键布局，可以切回按键。", "en": "Switched to touch controls: this game uses touch for its menus. You can switch back to buttons from the gear in the top-left corner → Button layout."},
-      {"id": "switch_game_title", "macro": "S2A_DPROMPT_SWITCH_GAME_TITLE", "zh-Hans": "换一款游戏", "en": "Switch games"},
-      {"id": "switch_game_body", "macro": "S2A_DPROMPT_SWITCH_GAME_BODY", "zh-Hans": "换一款游戏需要重新打开 S2Arm：先在游戏里存档，然后从屏幕底部上滑，把 S2Arm 划掉，再点开就回到游戏库。", "en": "To switch games, reopen S2Arm: save in the game first, then swipe up from the bottom of the screen, swipe S2Arm away, and tap it again to return to the game library."}
+      {"id": "switch_game_title", "macro": "S2A_DPROMPT_SWITCH_GAME_TITLE", "zh-Hans": "切换游戏", "en": "Switch Games"},
+      {"id": "switch_game_action", "macro": "S2A_DPROMPT_SWITCH_GAME_ACTION", "zh-Hans": "结束这局，回到游戏库", "en": "End this game and return to the library"},
+      {"id": "switch_game_note", "macro": "S2A_DPROMPT_SWITCH_GAME_NOTE", "zh-Hans": "S2Arm 会关闭，再点开就回到游戏库。", "en": "S2Arm closes; open it again to return to the game library."},
+      {"id": "switch_game_body", "macro": "S2A_DPROMPT_SWITCH_GAME_BODY", "zh-Hans": "请先在游戏里存档。确认后这局结束、S2Arm 关闭，再点开 S2Arm 就回到游戏库，选另一款开始。退出前会等游戏把存档写完；没在游戏里存的进度会丢。", "en": "Save in the game first. When you confirm, this game ends and S2Arm closes; open S2Arm again to return to the game library and pick another game. Quitting waits for the game to finish writing its save; progress you haven't saved in the game will be lost."},
+      {"id": "switch_game_accept", "macro": "S2A_DPROMPT_SWITCH_GAME_ACCEPT", "zh-Hans": "已存档，切换", "en": "Saved, switch"}
     ]
   },
 
@@ -829,6 +833,8 @@
       {"id": "install.remove_running", "zh-Hans": "正在从 iPhone 删除", "en": "Removing from iPhone"},
       {"id": "install.remove_done", "zh-Hans": "已从 iPhone 删除", "en": "Removed from iPhone"},
       {"id": "install.remove_failed", "zh-Hans": "删除没成", "en": "Removal failed"},
+      {"id": "install.drop_title", "zh-Hans": "会让别的游戏暂时不能玩", "en": "Some other games will stop working for now"},
+      {"id": "install.drop_confirm", "zh-Hans": "仍然继续", "en": "Continue anyway"},
       {"id": "install.remove_game", "zh-Hans": "从 iPhone 删除这款", "en": "Remove this game from iPhone"},
       {"id": "install.third_party", "zh-Hans": "签名装机用 S2Arm 附带的 Impactor：第三方开源工具（MIT 许可，github.com/claration/impactor v2.7.2 原版，未改动）。Apple ID 密码只在 Impactor 里输入、只发给 Apple。", "en": "Signing and installing use Impactor, bundled with S2Arm: a third-party open-source tool (MIT licensed, unmodified github.com/claration/impactor v2.7.2). Your Apple ID password is entered only in Impactor and sent only to Apple."},
       {"id": "install.checking", "zh-Hans": "正在检查装机条件…", "en": "Checking install requirements…"},
@@ -838,6 +844,7 @@
       {"id": "install.running", "zh-Hans": "正在装到 iPhone", "en": "Installing on iPhone"},
       {"id": "install.done", "zh-Hans": "已装到 iPhone", "en": "Installed on iPhone"},
       {"id": "install.failed", "zh-Hans": "装机没成", "en": "Install failed"},
+      {"id": "install.needs_player", "zh-Hans": "还差最后一步：在 iPhone 上打开 S2Arm 完成导入", "en": "One more step: open S2Arm on your iPhone to finish importing"},
       {"id": "welcome.title", "zh-Hans": "把你的 Switch 游戏，\n原生装进 iPhone 和 Mac。", "en": "Put your Switch games on\niPhone and Mac, natively."},
       {"id": "welcome.lead", "zh-Hans": "不是模拟器。S2Arm 把游戏翻译成苹果设备的原生程序，整座游戏库装进一个 App。跟着右边一步步做，就能开始出包。", "en": "Not an emulator. S2Arm translates each game into a native program for Apple devices, with your whole library in one app. Follow the steps on the right and you can start building."},
       {"id": "welcome.soon", "zh-Hans": "安卓和鸿蒙稍后就到。", "en": "Android and HarmonyOS are coming soon."},
@@ -936,6 +943,7 @@
       {"id": "export.pill.done", "zh-Hans": "出包完成：{0}", "en": "Built: {0}"},
       {"id": "install.pill.running", "zh-Hans": "正在装到 iPhone：{0} · 查看进度", "en": "Installing to iPhone: {0} · View progress"},
       {"id": "install.pill.done", "zh-Hans": "已装到 iPhone：{0} · 查看结果", "en": "Installed to iPhone: {0} · View result"},
+      {"id": "install.pill.needs_player", "zh-Hans": "还差一步：{0} · 查看", "en": "One more step: {0} · View"},
       {"id": "install.pill.failed", "zh-Hans": "装到 iPhone 没完成：{0} · 查看原因", "en": "Install to iPhone didn't finish: {0} · See why"},
       {"id": "install.pill.open", "zh-Hans": "查看那一款", "en": "Open that game"},
       {"id": "install.background", "zh-Hans": "放到后台继续", "en": "Keep going in the background"},

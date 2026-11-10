@@ -53,11 +53,12 @@ public final class S2ArmShellHostModel {
         self.identityStore = identityStore
         listedTiles = Dictionary(catalogue.tiles.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
         listedBanners = catalogue.bannerURLs
+        let strays = Self.otherComputerGames(gamesRoot, listed: Set(catalogue.tiles.map(\.id)))
         allGames = catalogue.tiles.map { tile in
             var state = layoutState(tile.id); state.customIdentity = identityStore.load(tile.id) != nil
             return GameDetail(game: tile, sections: S2ArmGameSettings.sections(for: tile.id, stores: stores, state: state))
-        }
-        listedStates = Dictionary(catalogue.tiles.map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
+        } + strays.map { GameDetail(game: $0) }
+        listedStates = Dictionary((catalogue.tiles + strays).map { ($0.id, $0.state) }, uniquingKeysWith: { a, _ in a })
         self.play = play ?? { id in _ = id.withCString { s2a_shell_play($0) } }
         self.gameDataReady = gameDataReady ?? { id in id.withCString { s2a_shell_game_data_ready($0) } != 0 }
         self.pickGameData = pickGameData ?? { id in id.withCString { s2a_shell_pick_game_data($0) } }
@@ -75,6 +76,35 @@ public final class S2ArmShellHostModel {
             NSLog("S2Arm 游戏库：S2A_SHELL_PLAY 2 秒后开始 %@", id)
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.requestPlay(id) }
         }
+    }
+
+    /// 手机上有、容器清单里没有的款：同一台手机在另一台电脑上装过，这台电脑重组容器时带不上（App 里的游戏程序读不回电脑）。
+    /// 存档和资源包都还在，显示成不可玩并告诉玩家回原来那台电脑重装。只认目录名是 16 位游戏号、资源包已解开（资源包/.applied）的，别的跳过；
+    /// 名字和图标取这款资源包自带的 ctl/control.nacp 与 icon_*.dat，读不到用游戏号、占位图
+    static func otherComputerGames(_ root: URL, listed: Set<String>) -> [GameTile] {
+        let fm = FileManager.default
+        return ((try? fm.contentsOfDirectory(atPath: root.path)) ?? []).sorted().compactMap { id in
+            let pack = root.appendingPathComponent(id).appendingPathComponent("资源包")
+            guard isTitleID(id), !listed.contains(id), fm.fileExists(atPath: pack.appendingPathComponent(".applied").path) else { return nil }
+            let ctl = pack.appendingPathComponent("ctl")
+            let icon = ["SimplifiedChinese", "AmericanEnglish"].lazy.compactMap { try? Data(contentsOf: ctl.appendingPathComponent("icon_\($0).dat")) }.first
+            NSLog("S2Arm 游戏库：%@ 在机上、不在这个 App 的清单里（别的电脑装的），显示需要重装", id)
+            return GameTile(id: id, title: nacpTitle(try? Data(contentsOf: ctl.appendingPathComponent("control.nacp"))) ?? id,
+                            icon: icon.flatMap { Artwork(id: id + ".icon", data: $0) },
+                            state: .broken(reason: shellText("Reinstall from the original computer"),
+                                           detail: shellText("This game was installed from another computer. Its saves and game data are still on this iPhone; on that computer, choose “Install to iPhone” again to bring it back.")))
+        }
+    }
+
+    /// NACP 标题：16 种语言各 0x300 字节（名字占前 0x200）；中文界面先取简体中文（14）再英文（0），否则反过来
+    static func nacpTitle(_ data: Data?) -> String? {
+        guard let data, data.count >= 16 * 0x300 else { return nil }
+        let order = Locale.preferredLanguages.first?.hasPrefix("zh") == true ? [14, 0] : [0, 14]
+        for i in order {
+            let start = data.startIndex + i * 0x300
+            if let t = String(data: data[start ..< start + 0x200].prefix { $0 != 0 }, encoding: .utf8), !t.isEmpty { return t }
+        }
+        return nil
     }
 
     /// 重判各款资源包（建好、回前台、宿主说明里「重新检查」后）：清单 playable 且资源包不在 → needsGameData；放好了 → 回到清单状态

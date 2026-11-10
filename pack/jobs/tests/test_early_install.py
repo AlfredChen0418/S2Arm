@@ -32,6 +32,12 @@ GID = '0100000000000000'
 
 
 class EarlyInstallCase(JobCase):
+    def setUp(self):
+        super().setUp()
+        import install
+        from unittest.mock import patch as _patch
+        p = _patch.object(install, "phone_games", lambda c, ph: set()); p.start(); self.addCleanup(p.stop)   # 读手机游戏清单另有用例
+
     def run_ipa(self, suffix, *, install_after=True, signal=True, oneclick_fail=False, early_rc=0, push_s=0):
         c = Context(self.request | dict(taskId='early-' + suffix, operation='ipa', gameId=GID) | (dict(installAfter=True) if install_after else {}))
         calls, envs = [], []

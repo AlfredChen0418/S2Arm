@@ -410,6 +410,8 @@ typedef BOOL (^VPFlag)(void);
         UIViewController *c = ws.window.rootViewController; if (!c || c.presentedViewController) return;
         [ws setSettingsOpen:YES]; s2a_cheats_present(c, ^{ [ws setSettingsOpen:NO]; }); }]; })];
     S2ASettingsRuntime *rt = s2a_settings_runtime();
+    // 切换游戏（只多款容器有）：确认框与收尾在 app.m，与整页设置「切换游戏」同一个回调
+    if (rt.switchGame) [items addObject:vp_act(S2APICK(S2A_DPROMPT_SWITCH_GAME_TITLE), @"square.stack", NO, ^{ [ws afterMenu:^{ UIViewController *c = ws.window.rootViewController; if (c && !c.presentedViewController) rt.switchGame(c); }]; })];
     if (rt.manageSaves) [items addObject:vp_act(S2AL(@"vpad.menu.saves"), @"tray.full", NO, ^{ [ws afterMenu:^{ UIViewController *c = ws.window.rootViewController; if (c && !c.presentedViewController) rt.manageSaves(c); }]; })];
     [items addObject:vp_act(S2AL(@"vpad.menu.more"), @"ellipsis.circle", NO, ^{ [ws afterMenu:^{ [ws openFullSettings]; }]; })];
     return items;

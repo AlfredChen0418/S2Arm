@@ -407,7 +407,7 @@ struct PackCompletionHero: View {
             let installed = store.installTask(after:task)
             VStack(alignment:.leading, spacing:8) {
                 Text(L("接下来两步")).font(.headline)
-                step(1, installed.map { L("已装到 iPhone") + ($0.device.map { "「\($0)」" } ?? "") + Store.packPushedClause($0.task.packFiles) }
+                step(1, installed.map { $0.task.unpackPending ?? (L("已装到 iPhone") + ($0.device.map { "「\($0)」" } ?? "") + Store.packPushedClause($0.task.packFiles)) }
                         ?? L("用数据线连上 iPhone，一键装好：用你在 Xcode 里登录的 Apple ID 签名，资源包一起拷进去")) {
                     if installed == nil {
                         HStack(spacing:10) {
