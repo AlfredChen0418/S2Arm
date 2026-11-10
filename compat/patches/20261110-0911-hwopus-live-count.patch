@@ -1,0 +1,77 @@
+diff --git a/src/Ryujinx.Horizon/Sdk/Codec/Detail/HardwareOpusDecoder.cs b/src/Ryujinx.Horizon/Sdk/Codec/Detail/HardwareOpusDecoder.cs
+index db2f5bef3aebebe6b84b72154dfc338bd1db49bf..2c8b211b141d137fd9ef83ac2d64bf3e3a19e97e 100644
+--- a/src/Ryujinx.Horizon/Sdk/Codec/Detail/HardwareOpusDecoder.cs
++++ b/src/Ryujinx.Horizon/Sdk/Codec/Detail/HardwareOpusDecoder.cs
+@@ -6,6 +6,7 @@ using System;
+ using System.Buffers.Binary;
+ using System.Runtime.CompilerServices;
+ using System.Runtime.InteropServices;
++using System.Threading;
+ 
+ namespace Ryujinx.Horizon.Sdk.Codec.Detail
+ {
+@@ -92,19 +93,35 @@ namespace Ryujinx.Horizon.Sdk.Codec.Detail
+         private readonly NativeDecoder _decoder;
+         private int _workBufferHandle;
+ 
++        // S2Arm 诊断（0100A00019DE0000 存档后 2010-0011 闪退）：客户端解码器代理池满 = 游戏开了没关。每次开 / 关打出存活个数，解码回错计数（前 20 次逐条打），
++        //   看存活数是不是一路涨、涨之前有没有解码回错
++        private static int s_live, s_opened, s_decodeErrors;
++        private bool _counted;
++
++        internal static int LiveCount => Volatile.Read(ref s_live);
++
+         private HardwareOpusDecoder(int workBufferHandle)
+         {
+             _workBufferHandle = workBufferHandle;
+         }
+ 
++        private void CountOpen(string kind)
++        {
++            _counted = true;
++            int live = Interlocked.Increment(ref s_live), n = Interlocked.Increment(ref s_opened);
++            Logger.Info?.Print(LogClass.ServiceAudio, $"[S2A hwopus] 开解码器第 {n} 个（{kind}，{_decoder.SampleRate} Hz {_decoder.ChannelsCount} 声道），存活 {live}");
++        }
++
+         public HardwareOpusDecoder(int sampleRate, int channelsCount, int workBufferHandle) : this(workBufferHandle)
+         {
+             _decoder = new NativeDecoder(sampleRate, channelsCount, 0, 0, null);
++            CountOpen("单流");
+         }
+ 
+         public HardwareOpusDecoder(int sampleRate, int channelsCount, int streams, int coupledStreams, byte[] mapping, int workBufferHandle) : this(workBufferHandle)
+         {
+             _decoder = new NativeDecoder(sampleRate, channelsCount, streams, coupledStreams, mapping);
++            CountOpen($"多流 {streams} 流");
+         }
+ 
+         [CmifCommand(0)]
+@@ -227,6 +244,15 @@ namespace Ryujinx.Horizon.Sdk.Codec.Detail
+             Span<short> outPcmSpace = MemoryMarshal.Cast<byte, short>(output);
+             Result result = DecodeInterleaved(_decoder, reset, input, outPcmSpace, output.Length, out outConsumed, out outSamples);
+ 
++            if (result.IsFailure)
++            {
++                int n = Interlocked.Increment(ref s_decodeErrors);
++                if (n <= 20)
++                {
++                    Logger.Info?.Print(LogClass.ServiceAudio, $"[S2A hwopus] 解码回错第 {n} 次：{result}（输入 {input.Length} 字节、输出缓冲 {output.Length} 字节），存活 {Volatile.Read(ref s_live)}");
++                }
++            }
++
+             if (withPerf)
+             {
+                 // This is the time the DSP took to process the request, TODO: fill this.
+@@ -337,6 +363,12 @@ namespace Ryujinx.Horizon.Sdk.Codec.Detail
+                 }
+ 
+                 _decoder?.Dispose();
++
++                if (_counted)
++                {
++                    _counted = false;
++                    Logger.Info?.Print(LogClass.ServiceAudio, $"[S2A hwopus] 关解码器，存活 {Interlocked.Decrement(ref s_live)}");
++                }
+             }
+         }
+ 
