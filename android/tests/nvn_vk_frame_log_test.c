@@ -12,7 +12,7 @@ static int g_fail, g_checks;
 #define CHECK(c) do { g_checks++; if (!(c)) { g_fail++; printf("    FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); } } while (0)
 
 // ---- emit 捕获：全部行进 blob（满环约 1000 行），另记首末行 ----
-static char g_blob[1600 * 1024];   // v4: 32768×32B=1MB 载荷 → base64≈1.4MB + 分片前缀
+static char g_blob[2048 * 1024];   // v5: 32768×40B=1.31MB 载荷 → base64≈1.75MB + 分片前缀
 static size_t g_bloblen;
 static int g_nlines;
 static char g_first[1024], g_last[1024];
@@ -70,9 +70,9 @@ static size_t expect_payload(uint8_t *out, uint64_t first, uint64_t n,
         for (int k = 0; k < 8; k++) out[i * S2A_FL_REC_BYTES + k] = (uint8_t)(v >> (k * 8));
         for (int k = 0; k < 4; k++) out[i * S2A_FL_REC_BYTES + 8 + k] = (uint8_t)(u >> (k * 8));
         for (int k = 0; k < 4; k++) out[i * S2A_FL_REC_BYTES + 12 + k] = (uint8_t)(c >> (k * 8));
-        // bytes 16..23 = acquire/present（s2a_fl_note 写 0）；24..31 = gpu_us/gpu_seq，
-        // 本测试二进制不带 nvn_vk_first_draw_gpu_last（弱符号缺席）→ UINT32_MAX。
-        memset(out + i * S2A_FL_REC_BYTES + 24, 0xff, 8);
+        // bytes 16..23 = acquire/present（s2a_fl_note 写 0）；24..31 = gpu_us/gpu_seq、
+        // 32..39 = disp_us/disp_seq；本测试二进制桩在关态返 0（视同缺席）→ UINT32_MAX。
+        memset(out + i * S2A_FL_REC_BYTES + 24, 0xff, 16);
     }
     return (size_t)(n * S2A_FL_REC_BYTES);
 }
@@ -101,8 +101,8 @@ static void check_dump_roundtrip(struct s2a_frame_log *fl, uint64_t first, uint6
     g_bloblen = 0;
     s2a_fl_dump(fl, cap_emit, NULL);
     CHECK(g_nlines >= 2);
-    CHECK(strncmp(g_first, "direct frame-log meta: v=4 ", 27) == 0);
-    CHECK(strstr(g_first, "rec=32") != NULL);
+    CHECK(strncmp(g_first, "direct frame-log meta: v=5 ", 27) == 0);
+    CHECK(strstr(g_first, "rec=40") != NULL);
     {
         char needle[192];
         snprintf(needle, sizeof needle, "recorded=%llu presents=%llu dropped=%llu first=%llu bytes=%llu",
@@ -172,6 +172,7 @@ static void concurrent_snapshot_test(void) {
         total += s2a_fl_fence_n(&fl, i);
         if (i < 2000) CHECK(fl.rec[i].acquire_us == 1 && fl.rec[i].present_us == 2);
         CHECK(fl.rec[i].gpu_us == UINT32_MAX && fl.rec[i].gpu_seq == UINT32_MAX);   // 无 gpu_last → 未采集
+        CHECK(fl.rec[i].disp_us == UINT32_MAX && fl.rec[i].disp_seq == UINT32_MAX); // dt 桩关态 → 未采集
     }
     CHECK(total == 40000);
 }
@@ -204,9 +205,38 @@ static void gpu_field_test(void) {
     g_stub_on = 0;
 }
 
+// disp 字段用例：强符号桩覆盖弱符号 nvn_vk_dt_last_gap——剧本化（已确认对的
+// 较新帧号, 间隔 ns），核 disp_us/disp_seq 与「同一对已确认对只报一次」去重。
+static uint64_t g_dt_frame; static uint64_t g_dt_gap_ns; static int g_dt_on;
+int nvn_vk_dt_last_gap(uint64_t *frame, uint64_t *gap_ns) {
+    if (!g_dt_on) return 0;
+    if (frame) *frame = g_dt_frame; if (gap_ns) *gap_ns = g_dt_gap_ns;
+    return 1;
+}
+static void disp_field_test(void) {
+    struct s2a_frame_log fl;
+    s2a_fl_reset(&fl);
+    g_dt_on = 1; g_dt_frame = 11; g_dt_gap_ns = 16666667;
+    s2a_fl_note(&fl, 1000);
+    CHECK(fl.rec[0].disp_us == 16667 && fl.rec[0].disp_seq == 11);
+    s2a_fl_note(&fl, 2000);   // 同一对已确认对 → 去重写未采集
+    CHECK(fl.rec[1].disp_us == UINT32_MAX && fl.rec[1].disp_seq == UINT32_MAX);
+    g_dt_frame = 12; g_dt_gap_ns = 33333333;
+    s2a_fl_note(&fl, 3000);
+    CHECK(fl.rec[2].disp_us == 33333 && fl.rec[2].disp_seq == 12);
+    g_dt_on = 0;              // 拿不到新确认 → 未采集，不写 0 不写 CPU 间隔
+    s2a_fl_note(&fl, 4000);
+    CHECK(fl.rec[3].disp_us == UINT32_MAX && fl.rec[3].disp_seq == UINT32_MAX);
+    g_dt_on = 1; g_dt_frame = 13; g_dt_gap_ns = 500000;
+    s2a_fl_note(&fl, 5000);   // 新确认对 → 再报
+    CHECK(fl.rec[4].disp_us == 500 && fl.rec[4].disp_seq == 13);
+    g_dt_on = 0;
+}
+
 int main(void) {
     concurrent_snapshot_test();
     gpu_field_test();
+    disp_field_test();
     struct s2a_frame_log fl;
 
     printf("  case %-32s", "note_order_first");

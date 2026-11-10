@@ -205,6 +205,8 @@ android {
             }
             // cs/build.sh mode; "static" links the NativeAOT service layer into the host library
             arguments "-DS2A_CS_SERVICES=${System.getenv('S2ARM_ANDROID_CS_SERVICES') ?: '0'}"
+            // 编解码静态库（android/codecs/build.sh 产出）；game 模式的链接必需
+            arguments "-DS2A_ANDROID_CODEC_LIBS=${System.getenv('S2ARM_ANDROID_CODEC_LIBS') ?: ''}"
             arguments "-DS2A_ANDROID_EXPERIMENTAL_TOUCH=${project.findProperty('s2arm.experimentalTouch') == 'true' ? 'ON' : 'OFF'}"
             // 共享 NVN 前端 + 生产 direct provider + nvn_vk 后端的编译门（默认关闭；直连包用
             // S2ARM_ANDROID_VK_ENGINE=1 打开）。名字是历史遗留，旧 d2r 引擎已删除。

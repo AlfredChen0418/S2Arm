@@ -67,6 +67,8 @@ public sealed partial class EnvironmentWindow
     private readonly Dictionary<string, (string state, string ipa, long? ipaBytes, long? packBytes, double seconds)> finishedPacks = new(StringComparer.Ordinal);
     // install
     private InstallReadiness? readiness;
+    /// <summary>上次装机清单认出连着的是 iPad：这几处入口写「装到 iPad」（键名加 _ipad，#487）；没认出照旧写 iPhone。</summary>
+    private string PadKey(string key) => readiness?.DeviceKind == "ipad" ? key + "_ipad" : key;
     private string? readinessFor;
     private bool installChecking, installBusy, installCheckFailed;
     private bool customizing;
@@ -329,7 +331,7 @@ public sealed partial class EnvironmentWindow
         // platforms
         var heading = new Grid { ColumnDefinitions = new ColumnDefinitions("*,Auto") };
         heading.Children.Add(Label(T("export.platforms"), 16));
-        var existing = Action("export.install_existing", () => { readinessFor = null; Navigate("install"); }, !BusyFor(game) || installBusy);   // 装机中也能进装机页：看别的游戏时提示「另一款正在装 · 查看那一款」
+        var existing = Action(PadKey("export.install_existing"), () => { readinessFor = null; Navigate("install"); }, !BusyFor(game) || installBusy);   // 装机中也能进装机页：看别的游戏时提示「另一款正在装 · 查看那一款」
         Grid.SetColumn(existing, 1); heading.Children.Add(existing);
         body.Children.Add(heading);
         var tiles = new UniformGrid { Columns = 4 };
@@ -933,7 +935,7 @@ public sealed partial class EnvironmentWindow
 
             // 两个大按钮
             var buttons = new WrapPanel { Orientation = Orientation.Horizontal };
-            var install = Primary(T("export.done.install"), () => { readinessFor = null; Navigate("install"); });
+            var install = Primary(T(PadKey("export.done.install")), () => { readinessFor = null; Navigate("install"); });
             AutomationId(install, "progress.install");
             install.Margin = new Thickness(0, 0, 12, 0); buttons.Children.Add(install);
             // IPA 是装机时组装、整个游戏库共用一份（默认位置根 S2Arm.ipa）：出包这步没有 IPA，只给「打开游戏文件夹」（按索引找这款实际所在的位置）
@@ -1075,7 +1077,7 @@ public sealed partial class EnvironmentWindow
         if (game is null || connectedFolder is null || libraryId is null) { body.Children.Add(Label(T("export.no_game"), 18)); return; }
         if (readinessFor != game.Id && !installChecking) { readinessFor = game.Id; readiness = null; installCheckFailed = false; _ = CheckInstallAsync(); }
         body.Children.Add(GameHeader(game));
-        body.Children.Add(Label(T("install.title"), 22));
+        body.Children.Add(Label(T(PadKey("install.title")), 22));
         body.Children.Add(Muted(T("install.description"), 14));
         body.Children.Add(Muted(T("install.container_note"), 14));
         body.Children.Add(Muted(T("install.legacy_note"), 14));

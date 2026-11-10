@@ -2895,6 +2895,9 @@ int s2a_thread_session_reset(void) {
 // Android does not maintain the live/reap proof needed for in-process rebuild.
 // Callers first check s2a_session_rebuild_supported; never certify a join here.
 int s2a_thread_session_joined(void) { return 0; }
+// No stop/parking boundary off Apple: session.c calls this unconditionally from s2a_host_restart(),
+// so game mode needs the symbol to link. 0 = the in-process restart request fails closed (PR #15).
+int s2a_thread_restart_supported(void) { return 0; }
 #endif
 uint64_t s2a_thread_id(uint32_t h) { glock(); thr_t *t = h_obj(h, S2A_OBJ_THREAD); uint64_t id = t ? t->id : 0; pthread_mutex_unlock(&G); return id; }
 

@@ -1742,5 +1742,8 @@
   "s2arm.cloud.error.writeBack": "Switched to the progress from {0}, but couldn't write it back to iCloud ({1}). The save itself is fine; the next sync will write it again.",
   "s2arm.cloud.failed": "iCloud saves didn't sync: {0}",
   "s2arm.cloud.syncing": "Syncing iCloud saves…",
-  "s2arm.cloud.busyAfterSync": "Another task started during the sync, so the game didn't start. Click Play again when it finishes"
+  "s2arm.cloud.busyAfterSync": "Another task started during the sync, so the game didn't start. Click Play again when it finishes",
+  "s2arm.action.installPad": "Install on iPad",
+  "s2arm.install.titlePad": "Install on iPad",
+  "s2arm.export.installExistingPad": "Already built? Install it on iPad"
 }

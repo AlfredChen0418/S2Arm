@@ -165,6 +165,9 @@ static void guest_pressure_watch(void) {
 }
 #endif
 static void guest_file_map(void);
+// 判了要接文件、空间检查没过（#483 时之笛 iPhone：进程一起来就判，那一刻 App 正在同一进程里解刚推上来的 2.5 GB 资源包，剩余 2367 MB < 12288 MB，
+//   退回匿名内存，池 9 GB 装不下，6 分钟后涨到系统上限被收掉；同一台手机解完包重开那局空间够、接上了）：记下来，装游戏模块前再查一次
+static int g_gfile_pending; static uint64_t g_gfile_need, g_gfile_avail;
 static void guest_file_attach_(void);
 static void guest_file_attach(void) { g_attach_phase = 1; guest_file_attach_(); g_attach_phase = 0; }
 static void guest_file_attach_(void) {
@@ -218,7 +221,10 @@ static void guest_file_map(void) {
     { const char *m = getenv("S2A_GUEST_FILE_MIN_FREE_MB"); uint64_t need = (m && *m ? strtoull(m, NULL, 10) : 12288ull) << 20; struct statfs sf;
       if (statfs(td && *td ? td : "/tmp", &sf)) { LOG("【黄】客体内存文件后备：查不了临时目录剩余空间（errno=%d），照旧用匿名内存", errno); return; }
       uint64_t avail = (uint64_t)sf.f_bavail * (uint64_t)sf.f_bsize;
-      if (avail < need) { LOG("【黄】客体内存文件后备：临时目录剩余 %llu MB < 需要 %llu MB（S2A_GUEST_FILE_MIN_FREE_MB），照旧用匿名内存", (unsigned long long)(avail >> 20), (unsigned long long)(need >> 20)); return; } }
+      if (avail < need) {   // 先不接、记下「要接没接上」，开局装模块前再试一次（s2a_guest_file_retry）
+          g_gfile_pending = 1; g_gfile_need = need; g_gfile_avail = avail;
+          LOG("【黄】客体内存文件后备：临时目录剩余 %llu MB < 需要 %llu MB（S2A_GUEST_FILE_MIN_FREE_MB），先用匿名内存，装游戏前再查一次", (unsigned long long)(avail >> 20), (unsigned long long)(need >> 20)); return; }
+      g_gfile_pending = 0; }
     int fd = open(path, O_RDWR | O_CREAT | O_EXCL, 0600);
     if (fd < 0) { LOG("【红】客体内存文件后备：建不了临时文件（errno=%d），照旧用匿名内存", errno); return; }
     unlink(path);
@@ -229,6 +235,35 @@ static void guest_file_map(void) {
         LOG("【红】客体内存文件后备：窗口 %#llx +%llu MB 映射成文件失败（errno=%d），照旧用匿名内存", (unsigned long long)g_base, (unsigned long long)(g_size >> 20), er); return; }
     g_gfd = fd;
     LOG("客体内存文件后备：窗口 %#llx +%llu MB 映射到临时文件（已 unlink，稀疏），脏页不计进程实占（S2A_GUEST_FILE）", (unsigned long long)g_base, (unsigned long long)(g_size >> 20));
+}
+// 开局装模块前（host_main.c load_session_modules）：起局时判了要接文件、但空间不够的，此刻（解包已完）再查一次、够了就接上。
+//   只在窗口还原封不动（整段一块 PROT_NONE 的匿名保留）时才换：换成文件是整段 MAP_FIXED，窗口里已经有东西就会被抹掉，那种情形不换、照旧匿名。
+//   还是不够：报红，并在屏幕上告诉玩家差多少空间（不然这款几分钟后涨到单进程上限被系统收掉，没有崩溃报告，玩家只看到闪退）
+int s2a_guest_file_retry(void) {
+    if (!g_gfile_pending || g_gfd >= 0 || !g_ok) return 0;
+    // 窗口起局后分成几段保留（构造时就不止一段），逐段看：全部仍是 PROT_NONE、非共享 = 还没放开过、没有内容
+    for (vm_address_t a = (vm_address_t)g_base, end = (vm_address_t)(g_base + g_size); a < end; ) {
+        vm_address_t ra = a; vm_size_t sz = 0; vm_region_basic_info_data_64_t bi; mach_msg_type_number_t cnt = VM_REGION_BASIC_INFO_COUNT_64; mach_port_t obj = MACH_PORT_NULL;
+        if (vm_region_64(mach_task_self(), &ra, &sz, VM_REGION_BASIC_INFO_64, (vm_region_info_t)&bi, &cnt, &obj) != KERN_SUCCESS || ra >= end) break;
+        if (bi.protection != VM_PROT_NONE || bi.shared) {
+            LOG("【黄】客体内存文件后备：装游戏前想补接文件，但窗口里已有放开过的映射（%#llx +%llu MB，权限 %d），不换，照旧匿名内存", (unsigned long long)ra, (unsigned long long)(sz >> 20), bi.protection);
+            g_gfile_pending = 0; return 0; }
+        a = ra + sz;
+    }
+    guest_file_map();
+    if (g_gfd >= 0) { LOG("客体内存文件后备：装游戏前补接上了（起局时剩余 %llu MB 不够，此刻够了）", (unsigned long long)(g_gfile_avail >> 20)); return 1; }
+    if (g_gfile_pending) {
+        g_gfile_pending = 0;
+        unsigned long long gb_need = (g_gfile_need + (1ull << 30) - 1) >> 30, gb_have = g_gfile_avail >> 30;
+        LOG("【红】客体内存文件后备：装游戏前仍不够，剩余 %llu MB < 需要 %llu MB；这款内存池装不进单进程上限，玩一会儿会被系统收掉", (unsigned long long)(g_gfile_avail >> 20), (unsigned long long)(g_gfile_need >> 20));
+        void (*msg)(const char *) = (void (*)(const char *))dlsym(RTLD_DEFAULT, "s2a_ios_show_message");
+        int (*zh)(void) = (int (*)(void))dlsym(RTLD_DEFAULT, "s2a_ui_zh");
+        char m[512];
+        if (!zh || zh()) snprintf(m, sizeof m, "手机剩余空间不足\n这款游戏运行时需要约 %llu GB 空闲空间存放内存数据，现在只有 %llu GB。请删掉一些文件或应用后重新打开，否则游戏玩一会儿可能会闪退。", gb_need, gb_have);
+        else snprintf(m, sizeof m, "Not enough free storage\nThis game needs about %llu GB of free space for its memory while running; only %llu GB is free. Free up some space and reopen it, or the game may quit after a while.", gb_need, gb_have);
+        if (msg) msg(m);
+    }
+    return 0;
 }
 // 窗口外也要文件后备的一段（远端影子区堆区余量用完、改从宿主任意空闲地址分时，far.c）：文件往后接长，按新偏移映射到内核挑的地址（同匿名的落点规则，不多占窗口外地址）。
 //   没开文件后备返回 MAP_FAILED（调用方照旧匿名）。这些段还页时不打洞（s2a_guest_zero 只认窗口），换匿名占位：语义同样是零，只是那几页回到匿名记账

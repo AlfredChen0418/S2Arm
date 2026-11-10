@@ -413,6 +413,8 @@ namespace Ryujinx.Graphics.Vulkan
         internal bool IsNvidiaPreTuring { get; private set; }
         internal bool IsIntelArc { get; private set; }
         internal bool IsQualcommProprietary { get; private set; }
+        // S2A（#468）：驱动怪癖 A-ZMASK（graphics/vulkan/core/DriverQuirks.cs）。为真时主管线建帧缓冲不绑写掩码为 0 的颜色目标。
+        internal bool ZeroWriteMaskColorAttachmentsDisabled { get; private set; }
         internal bool IsMoltenVk { get; private set; }
         internal bool SupportsMTL31 { get; private set; }
         internal bool IsTBDR { get; private set; }
@@ -621,6 +623,14 @@ namespace Ryujinx.Graphics.Vulkan
             }
 
             IsQualcommProprietary = hasDriverProperties && driverProperties.DriverID == DriverId.QualcommProprietary;
+
+            DriverQuirkSelection driverQuirks = DriverQuirks.Query(
+                properties.VendorID,
+                hasDriverProperties ? driverProperties.DriverID : null,
+                properties.DriverVersion,
+                properties.Limits.MaxDrawIndirectCount);
+            ZeroWriteMaskColorAttachmentsDisabled =
+                driverQuirks.Disabled.HasFlag(DisabledDriverFeatures.ZeroWriteMaskColorAttachments);
 
             ulong minResourceAlignment = Math.Max(
                 Math.Max(

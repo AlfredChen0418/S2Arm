@@ -1,5 +1,6 @@
 package org.s2arm.android;
 
+import android.annotation.TargetApi;
 import android.content.Context;
 import android.os.OutcomeReceiver;
 import android.os.PowerMonitor;
@@ -17,6 +18,7 @@ import java.util.function.Consumer;
  * 两类缺一就整条路径不用（宁缺毋滥）。轨功耗插电也可读，是 8E 这类
  * 电池电流报正号机型上的主要读数通道；读回的是能量差分/时间 = 平均功率。
  */
+@TargetApi(35)
 final class SystemPowerRails {
     private static final long STALE_MS = 6000;    // 上一次成功样本超过 6 秒按不可用报
     private final SystemHealthManager health;

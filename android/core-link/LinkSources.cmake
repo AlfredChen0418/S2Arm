@@ -12,7 +12,7 @@ endif()
 
 function(s2a_android_host_sources output)
     set(sources
-        native/s2a_savecommit.c native/capacity_affinity.cpp native/adpf_hint.c
+        native/s2a_savecommit.c native/system_tuning.c native/capacity_affinity.cpp native/adpf_hint.c
         native/bridge.cpp native/lan_discovery.cpp ../runtime/src/lan_elect.c native/capture_jpeg.cpp native/touch_jni.cpp native/game_touch.c native/window.cpp native/presenter.cpp
         native/wsi_lease.c native/input.c native/tsd.c native/module.c native/selftest.c native/selftest_gate.S
         native/guest_signal.c native/redlog.c native/redzone.S native/pcm_ring.c native/aaudio_sink.c native/hostapi.c native/screen_metrics.c
@@ -83,6 +83,8 @@ function(s2a_android_direct_sources output)
         native/nvn/nvn_vk_swapchain.c native/nvn/nvn_vk_surface.c native/nvn/nvn_vk_session.c
         # 显示节拍源：AChoreographer（nvn_vsync.h 契约 + nvn_be_link_* 助手，debug.s2a.vsync 门）
         native/nvn/nvn_vsync_android.c
+        # B2：VK_GOOGLE_display_timing 上屏时刻计量（presentID 挂链 + 回读 + 帧号映射），直连专用。
+        native/nvn/nvn_vk_display_timing.c
         native/nvn/nvn_vk_lifecycle.c native/nvn/nvn_vk_pipeline.c native/nvn/nvn_vk_texcache.c
         native/nvn/nvn_vk_bcdec.c
         # NVN ReadTexels：纯几何换算（宿主单测同源）+ guest 内存路径 + GPU 图像路径。
@@ -109,6 +111,8 @@ function(s2a_android_direct_sources output)
         native/direct/program_cache.c native/direct/offline_library.c
         # Pure texture helpers are needed by the core even without the game frontend.
         ../graphics/nvn/gfx/nvn/nvn_tex.c ../graphics/nvn/gfx/tex/nvn_deswizzle.c
+        # C4a 首用等待语义（iOS pso_pend 对齐）：rt 历史 + 帧预算 + 判定表，纯 C 无锁。
+        ../graphics/nvn/gfx/nvn/nvn_first_use.c
         # 纹理缓存（nvn_vk_texcache.c）按页级写跟踪判脏，前端关也引用：nvn_dirty 与它的
         # Android 宿主钩子（dm_* → direct_host）随直连核心编入，不再只挂在前端源列表里。
         ../graphics/nvn/gfx/nvn/nvn_dirty.c native/nvn/nvn_host_hooks.c)

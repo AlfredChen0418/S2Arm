@@ -23,6 +23,14 @@ s2a_lanes() {   # 本机正在出包的道数（含本道）：登记本道进�
   done
   echo $(( n > 0 ? n : 1 ))
 }
+s2a_mem_gb() {   # 本机物理内存（GB，取整），不经 Python：macOS sysctl hw.memsize，Linux /proc/meminfo；都读不到输出空，由调用方报红
+  #   原先用 PATH 上的 python3 调 os.sysconf("SC_PHYS_PAGES")，anaconda 3.9 不认这个名字，整单停在并行度（#447，11-10 Intel Mac 实走）
+  local b k
+  b=$(sysctl -n hw.memsize 2> /dev/null)
+  [ "$b" -gt 0 ] 2> /dev/null && { echo $(( b >> 30 )); return; }
+  k=$(awk '/^MemTotal:/ { print $2; exit }' "${S2A_PROC_MEMINFO:-/proc/meminfo}" 2> /dev/null)   # S2A_PROC_MEMINFO：单测在 Mac 上模拟 Linux 用
+  [ "$k" -gt 0 ] 2> /dev/null && echo $(( k >> 20 ))
+}
 s2a_cores() {
   local nc gb ln mj live
   # 出包整条链降优先级（子进程继承）：只往低调、不往高调（已更低的不动；调高要 root）。S2A_NICE 改档，0 = 不调
@@ -39,8 +47,8 @@ s2a_cores() {
     export S2A_JOBS=$j
   fi
   if [ -z "${S2A_CPU_BAKE:-}" ] || [ -z "${S2A_DIRECT_J:-}" ]; then
-    gb=${S2A_MEM_TOTAL_GB:-$(python3 -c 'import os; print(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") >> 30)' 2> /dev/null)}
-    [ "$gb" -ge 1 ] 2> /dev/null || { echo "【红】并行度：读不出物理内存（sysconf SC_PHYS_PAGES）" >&2; return 1; }
+    gb=${S2A_MEM_TOTAL_GB:-$(s2a_mem_gb)}
+    [ "$gb" -ge 1 ] 2> /dev/null || { echo "【红】并行度：读不出物理内存（sysctl -n hw.memsize、/proc/meminfo 都没读到）；可用 S2A_MEM_TOTAL_GB=<GB> 手动指定" >&2; return 1; }
   fi
   if [ -z "${S2A_CPU_BAKE:-}" ]; then
     mj=$(( gb * 3 / 4 / ln * 2 / 3 )); [ "$mj" -ge 1 ] || mj=1

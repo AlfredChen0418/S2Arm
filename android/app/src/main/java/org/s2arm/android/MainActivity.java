@@ -95,6 +95,8 @@ public class MainActivity extends Activity
     };
     private SystemPowerSampler powerSampler;   // #48 A5：应用内电池净放电读数（仅游戏局）
     private android.window.OnBackInvokedCallback gameBackCallback;
+    /** #48 A3+A4：直连刷新率投票 + 省电档限帧；只有 :game 会话（gameMode）才起轮询。 */
+    private SystemTuning systemTuning;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -165,6 +167,7 @@ public class MainActivity extends Activity
                 }
                 @Override public void event(String line) { Log.i("S2Arm", line); }
             });
+            systemTuning = new SystemTuning(this, lifecycleProbe);
         }
         if (!gameMode) {
             String packageTitle;
@@ -630,6 +633,7 @@ public class MainActivity extends Activity
         library.scanImports();   // report the library; imports require an explicit staging target
         if (host != 0) NativeBridge.setForeground(host, true);   // the window, if any, is still the render thread's
         if (powerSampler != null) powerSampler.start();
+        if (systemTuning != null) systemTuning.start();
         tryStartGame();
         if (gameMode) lifecycleProbe.postDelayed(geometrySample, 500);   // B3 输出尺寸轮询（开关关时全部回落 MATCH_PARENT）
         if (gameMode && host != 0 && !gameStopping && getIntent().getBooleanExtra(GameActivity.LIFECYCLE_TEST_EXTRA, false)
@@ -689,6 +693,7 @@ public class MainActivity extends Activity
             if (host != 0) NativeBridge.setForeground(host, false);
         }
         if (powerSampler != null) powerSampler.stop();
+        if (systemTuning != null) systemTuning.stop();
         super.onPause();
     }
     // 直连安全网（共用 dguard.c）：游戏前台跑时收到内存告警记一次失败证据（后台被杀不算崩；
@@ -1018,6 +1023,7 @@ public class MainActivity extends Activity
     // surfaceChanged and insets publish revisions of it, surfaceDestroyed revokes it. Hand-over
     // only: the render thread builds the surface and swapchain; nothing here waits for the GPU.
     @Override public void surfaceCreated(SurfaceHolder holder) {
+        if (systemTuning != null) systemTuning.attach(holder.getSurface());
         if (host == 0) return;
         String result = NativeBridge.offerSurface(host, holder.getSurface());
         if (gameMode) gameLifecycle("surface-offered");
@@ -1029,6 +1035,7 @@ public class MainActivity extends Activity
         publishSurface();
     }
     @Override public void surfaceDestroyed(SurfaceHolder holder) {
+        if (systemTuning != null) systemTuning.detach();   // Surface 退出清票
         touchPad.retireGameViewport();
         surfaceWidth = surfaceHeight = 0;
         // Bounded wait: the surface must be unused before this returns; a missed deadline aborts the process.

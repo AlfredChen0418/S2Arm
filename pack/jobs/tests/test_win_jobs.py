@@ -478,6 +478,28 @@ class WinInstall(unittest.TestCase):
             self.assertIsNone(self.m.readiness_windows(self.c, self.gid)["items"][1]["url"])
 
 
+    def test_readiness_tells_ipad_from_iphone(self):
+        # #487：连着的是 iPad 时入口写「装到 iPad」：清单结果带 deviceKind；设备服务读不出（只在 Wi-Fi 上）为空、界面照旧写 iPhone
+        w = FakeW([("U1", "USB", 3)])
+        for kind in ("ipad", "iphone", ""):
+            w.device_kind = lambda udid, k=kind: k
+            with patch.object(self.m, "win_install_mod", return_value=w):
+                self.assertEqual(self.m.readiness_windows(self.c, self.gid)["deviceKind"], kind)
+        w.device_kind = lambda udid: (_ for _ in ()).throw(OSError("设备服务断了"))
+        with patch.object(self.m, "win_install_mod", return_value=w):
+            self.assertEqual(self.m.readiness_windows(self.c, self.gid)["deviceKind"], "")
+
+    def test_device_kind_reads_usb_product_id(self):
+        # 苹果 USB 产品号：iPad 0x12AB、iPhone 0x12A8（本机实测 iPhone）；只认 USB 那条，Wi-Fi 那条没有产品号
+        sys.path.insert(0, str(ROOT / "pack" / "orch")); import install_win
+        rows = [{"DeviceID": 1, "Properties": {"SerialNumber": "PAD", "ConnectionType": "USB", "ProductID": 0x12AB}},
+                {"DeviceID": 2, "Properties": {"SerialNumber": "PAD", "ConnectionType": "Network"}},
+                {"DeviceID": 3, "Properties": {"SerialNumber": "PHONE", "ConnectionType": "USB", "ProductID": 0x12A8}},
+                {"DeviceID": 4, "Properties": {"SerialNumber": "AIR", "ConnectionType": "Network"}}]
+        with patch.object(install_win, "_mux_list", return_value=rows):
+            self.assertEqual([install_win.device_kind(u) for u in ("PAD", "PHONE", "AIR", "")], ["ipad", "iphone", "", ""])
+            self.assertEqual(install_win.mux_devices(), [("PAD", "USB", 1), ("PAD", "Network", 2), ("PHONE", "USB", 3), ("AIR", "Network", 4)])
+
 class WinTarget(unittest.TestCase):
     def test_connected_only_no_models(self):
         import target

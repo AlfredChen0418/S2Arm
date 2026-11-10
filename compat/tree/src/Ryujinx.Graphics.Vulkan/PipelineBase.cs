@@ -137,6 +137,11 @@ namespace Ryujinx.Graphics.Vulkan
         private ITexture[] _preMaskColors;
         private ITexture _preMaskDepthStencil;
 
+        // S2A（#468）：见 ZeroMaskWantedTargets。_zeroMaskScratch 是筛目标用的工作副本，免得每次建帧缓冲都分配；
+        // _zeroMaskClearTargets 是为清除临时放回帧缓冲的槽位，下一次绘制前复位。
+        private readonly ITexture[] _zeroMaskScratch = new ITexture[Constants.MaxRenderTargets];
+        private uint _zeroMaskClearTargets;
+
         private readonly DescriptorSetUpdater _descriptorSetUpdater;
 
         private IndexBufferState _indexBuffer;
@@ -330,6 +335,8 @@ namespace Ryujinx.Graphics.Vulkan
 
         public unsafe void ClearRenderTargetColor(int index, int layer, int layerCount, ColorF color)
         {
+            ZeroMaskAttachForClear(index);
+
             if (FramebufferParams == null || !FramebufferParams.IsValidColorAttachment(index))
             {
                 return;
@@ -1166,7 +1173,13 @@ namespace Ryujinx.Graphics.Vulkan
                 }
             }
 
-            if (_framebufferUsingColorWriteMask)
+            if (_framebufferUsingColorWriteMask && IsMainPipeline && Gd.ZeroWriteMaskColorAttachmentsDisabled &&
+                !ZeroMaskTargetsChanged())
+            {
+                // S2A：留在帧缓冲里的目标没变，只是管线状态变了，不重开渲染通道。
+                SignalStateChange();
+            }
+            else if (_framebufferUsingColorWriteMask)
             {
                 SetRenderTargetsInternal(_preMaskColors, _preMaskDepthStencil, true);
             }
@@ -1182,6 +1195,114 @@ namespace Ryujinx.Graphics.Vulkan
             }
         }
 
+        // S2A（#468）：Arm 专有驱动上，写掩码为 0 的颜色目标留在帧缓冲里会被写花（Mali-G710 r32p1：
+        // 隔一个 16 行 tile 行出垃圾），所以这类目标不进帧缓冲（驱动怪癖表 A-ZMASK）。返回应当留下的槽位位图：
+        // 有效且写掩码非 0 的、为清除临时放回的留下；一个都不剩又没有深度附件时留最低的有效槽位，保住帧缓冲尺寸。
+        private uint ZeroMaskWantedTargets(ReadOnlySpan<ITexture> original, ITexture depthStencil)
+        {
+            Span<PipelineColorBlendAttachmentState> blend = _newState.Internal.ColorBlendAttachmentState.AsSpan();
+            uint wanted = 0;
+            int firstValid = -1;
+
+            for (int i = 0; i < original.Length; i++)
+            {
+                if (original[i] is not TextureView { Valid: true })
+                {
+                    continue;
+                }
+
+                if (firstValid < 0)
+                {
+                    firstValid = i;
+                }
+
+                if (blend[i].ColorWriteMask != 0 || (_zeroMaskClearTargets & (1u << i)) != 0)
+                {
+                    wanted |= 1u << i;
+                }
+            }
+
+            if (wanted == 0 && firstValid >= 0 && depthStencil is not TextureView { Valid: true })
+            {
+                wanted = 1u << firstValid;
+            }
+
+            return wanted;
+        }
+
+        // S2A（#468）：按当前写掩码重新筛一遍，结果和现在的帧缓冲有没有差别。
+        private bool ZeroMaskTargetsChanged()
+        {
+            if (_preMaskColors == null || FramebufferParams == null)
+            {
+                return true;
+            }
+
+            uint wanted = ZeroMaskWantedTargets(_preMaskColors, _preMaskDepthStencil);
+
+            for (int i = 0; i < _preMaskColors.Length; i++)
+            {
+                if ((((wanted >> i) & 1) != 0) != FramebufferParams.IsValidColorAttachment(i))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // S2A（#468）：槽位 index 上因写掩码为 0 没进帧缓冲的目标；没有、或没开这条怪癖时为 null。
+        protected TextureView ZeroMaskFilteredColorView(int index)
+        {
+            if (!IsMainPipeline || !Gd.ZeroWriteMaskColorAttachmentsDisabled ||
+                !_framebufferUsingColorWriteMask || _preMaskColors == null || (uint)index >= (uint)_preMaskColors.Length)
+            {
+                return null;
+            }
+
+            if (FramebufferParams != null && FramebufferParams.IsValidColorAttachment(index))
+            {
+                return null;
+            }
+
+            return _preMaskColors[index] is TextureView { Valid: true } view ? view : null;
+        }
+
+        // S2A（#468）：清除不看绘制写掩码。目标因写掩码为 0 不在帧缓冲里时，为这次清除把它放回去，
+        // vkCmdClearAttachments 的范围和层参数照旧；下一次绘制前由 ZeroMaskDetachClearTargets 复位。
+        private void ZeroMaskAttachForClear(int index)
+        {
+            if (ZeroMaskFilteredColorView(index) == null)
+            {
+                return;
+            }
+
+            _zeroMaskClearTargets |= 1u << index;
+            SetRenderTargetsInternal(_preMaskColors, _preMaskDepthStencil, true);
+
+            if (!FramebufferParams.IsValidColorAttachment(index))
+            {
+                // 同一张纹理还绑在别的槽位上，重复附件过滤又把这个槽位去掉了：放不回来，和原来一样不清。
+                _zeroMaskClearTargets &= ~(1u << index);
+            }
+        }
+
+        // S2A（#468）：每次绘制前调用。为清除临时放回的目标，按当前写掩码重新留在外面。
+        private void ZeroMaskDetachClearTargets()
+        {
+            if (_zeroMaskClearTargets == 0)
+            {
+                return;
+            }
+
+            _zeroMaskClearTargets = 0;
+
+            if (_framebufferUsingColorWriteMask && ZeroMaskTargetsChanged())
+            {
+                SetRenderTargetsInternal(_preMaskColors, _preMaskDepthStencil, true);
+            }
+        }
+
         private void SetRenderTargetsInternal(Span<ITexture> colors, ITexture depthStencil, bool filterWriteMasked)
         {
             CreateFramebuffer(colors, depthStencil, filterWriteMasked);
@@ -1193,6 +1314,7 @@ namespace Ryujinx.Graphics.Vulkan
         public void SetRenderTargets(Span<ITexture> colors, ITexture depthStencil)
         {
             _framebufferUsingColorWriteMask = false;
+            _zeroMaskClearTargets = 0;
             SetRenderTargetsInternal(colors, depthStencil, Gd.IsTBDR);
         }
 
@@ -1538,6 +1660,32 @@ namespace Ryujinx.Graphics.Vulkan
 
         private void CreateFramebuffer(Span<ITexture> colors, ITexture depthStencil, bool filterWriteMasked)
         {
+            // S2A（#468）：见 ZeroMaskWantedTargets。只管主管线；辅助管线自己绑单个目标。
+            bool dropZeroMask = filterWriteMasked && IsMainPipeline && Gd.ZeroWriteMaskColorAttachmentsDisabled;
+
+            if (dropZeroMask)
+            {
+                if (!_framebufferUsingColorWriteMask)
+                {
+                    if (_preMaskColors == null || _preMaskColors.Length != colors.Length)
+                    {
+                        _preMaskColors = colors.ToArray();
+                    }
+                    else
+                    {
+                        colors.CopyTo(_preMaskColors);
+                    }
+
+                    _preMaskDepthStencil = depthStencil;
+                    _framebufferUsingColorWriteMask = true;
+                }
+
+                // 在副本上筛：下面会把槽位置空，保存的原始目标表要留全。槽位数不超过 MaxRenderTargets（写掩码状态也只有这么多）。
+                Span<ITexture> filtered = _zeroMaskScratch.AsSpan(0, colors.Length);
+                colors.CopyTo(filtered);
+                colors = filtered;
+            }
+
             if (filterWriteMasked)
             {
                 // TBDR GPUs don't work properly if the same attachment is bound to multiple targets,
@@ -1595,12 +1743,31 @@ namespace Ryujinx.Graphics.Vulkan
                 }
             }
 
+            if (dropZeroMask)
+            {
+                uint wanted = ZeroMaskWantedTargets(_preMaskColors, depthStencil);
+
+                for (int i = 0; i < colors.Length; i++)
+                {
+                    if (((wanted >> i) & 1) == 0)
+                    {
+                        colors[i] = null;
+                    }
+                }
+            }
+
             if (IsMainPipeline)
             {
                 FramebufferParams?.ClearBindings();
             }
 
             FramebufferParams = FramebufferParams?.Update(colors, depthStencil) ?? new FramebufferParams(Device, colors, depthStencil);
+
+            if (dropZeroMask)
+            {
+                // 工作副本不留纹理引用。
+                Array.Clear(_zeroMaskScratch);
+            }
 
             if (IsMainPipeline)
             {
@@ -1786,6 +1953,8 @@ namespace Ryujinx.Graphics.Vulkan
             {
                 Gd.FlushAllCommands();
             }
+
+            ZeroMaskDetachClearTargets();
 
             DynamicState.ReplayIfDirty(Gd, CommandBuffer);
 

@@ -97,6 +97,28 @@ class ParserTest(unittest.TestCase):
         with self.assertRaises(dfl.FrameLogError):
             dfl.parse(text.replace("rec=32", "rec=24"))
 
+    def test_v5_disp_fields(self):
+        payload = struct.pack("<QIIIIIIII", 1000000, 3500, 2, 900, 1200, 8250, 7, 16667, 11)
+        b64 = base64.b64encode(payload).decode()
+        text = ("direct frame-log meta: v=5 clock=CLOCK_BOOTTIME unit=us endian=le rec=40 "
+                "cap=32768 recorded=1 presents=1 dropped=0 first=0 bytes=40 chunks=1\n"
+                f"direct frame-log[1/1]:{b64}\n"
+                f"direct frame-log end: frames=1 dropped=0 sha256={hashlib.sha256(payload).hexdigest()}\n")
+        cap = dfl.parse(text)[0]
+        self.assertEqual((cap["gpu_us"], cap["gpu_seq"]), ([8250], [7]))
+        self.assertEqual((cap["disp_us"], cap["disp_seq"]), ([16667], [11]))
+        # UINT32_MAX = 无新确认对/未采集 → None，不当 0 用
+        payload2 = struct.pack("<QIIIIIIII", 2000000, 0, 0, 0, 0,
+                               0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff)
+        b64b = base64.b64encode(payload2).decode()
+        text2 = text.replace(b64, b64b).replace(hashlib.sha256(payload).hexdigest(),
+                                                hashlib.sha256(payload2).hexdigest())
+        cap2 = dfl.parse(text2)[0]
+        self.assertIsNone(cap2["disp_us"][0])
+        self.assertIsNone(cap2["disp_seq"][0])
+        with self.assertRaises(dfl.FrameLogError):
+            dfl.parse(text.replace("rec=40", "rec=32"))
+
     def test_file_priority_and_fallback(self):
         log = synth([1000, 2000, 3000])
         with tempfile.TemporaryDirectory() as td:
@@ -201,7 +223,7 @@ class ParserTest(unittest.TestCase):
         expect_fail("v2_missing_rec", no_rec, "rec")
         bad_rec = re.sub(r"rec=16", "rec=8", log)
         expect_fail("v2_rec_mismatch", bad_rec, "rec")
-        bad_v = re.sub(r"meta: v=2", "meta: v=5", log)
+        bad_v = re.sub(r"meta: v=2", "meta: v=6", log)
         expect_fail("unsupported_version", bad_v, "不支持")
 
         # ---- 负控：计数不自洽（溢出构造）----
@@ -245,9 +267,12 @@ class CRoundTripTest(unittest.TestCase):
 #include <stdint.h>
 #include <string.h>
 #include "nvn/nvn_vk_frame_log.c"
-// macOS Mach-O 不留未定义弱符号：宿主对拍不带 GPU 时间戳 → 未采集（UINT32_MAX）。
+// macOS Mach-O 不留未定义弱符号：宿主对拍不带 GPU 时间戳 / display timing → 未采集（UINT32_MAX）。
 int nvn_vk_first_draw_gpu_last(double *ms, int *passes, uint64_t *frame) {
     (void)ms; (void)passes; (void)frame; return 0;
+}
+int nvn_vk_dt_last_gap(uint64_t *frame, uint64_t *gap_ns) {
+    (void)frame; (void)gap_ns; return 0;
 }
 static void out(void *c, const char *l) { (void)c; puts(l); }
 int main(void) {

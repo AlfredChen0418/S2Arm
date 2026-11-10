@@ -61,17 +61,32 @@ fonts_ok "$CUR" && tz_up "$CUR" && [ "$tz_stale" = 0 ] && [ -z "$CP$SY" ] \
   && { echo "🟢 $G 系统数据已齐，跳过"; exit 0; }
 TAG=sys-$(cd "$F" && ls *.bfttf | xargs shasum -a 256 | shasum -a 256 | cut -c1-8)-tz${TZ_KEY}${CP:+-sd}${SY:+-syn}
 TAG=$(root_tag "$G" "$TAG"); W=$(root_begin "$G" "$TAG") || exit 1
-# 拷字体：先按宿主惯例（macOS 克隆复制）；macOS 上失败再普通复制一次（-X 不带扩展属性：玩家自选的字体目录可能带写不进产物根的属性），
-#   两次 cp 的原文都留在红行里（脱敏只换路径、保留原因），错误码按原因归类（没权限 → 提示去系统设置授权）
-fonts_cp() {
-  local e1 e2; e1=$(_root_cp "$F"/*.bfttf "$W/systemdata/fonts/" 2>&1) && return 0
-  [ "$(uname -s)" = Darwin ] || { FONT_ERR=$e1; return 1; }
-  if e2=$(cp -X "$F"/*.bfttf "$W/systemdata/fonts/" 2>&1 || exit $?); then
-    echo "【黄】$G 字体克隆复制失败，已改用普通复制：$(echo "$e1" | tr '\n' ' ')"; return 0
+# 先按宿主惯例复制。macOS 上克隆失败就以 -X 普通复制一次，避免扩展属性再次阻止复制。
+# 递归克隆失败可能留下目标目录。清掉它再重试，避免把源目录嵌进目标。
+clone_or_copy() {
+  local label=$1 dst=${!#} clone_err copy_err
+  shift
+  clone_err=$(_root_cp "$@" 2>&1) && return 0
+  COPY_ERR=$clone_err
+  [ "$(uname -s)" = Darwin ] || return 1
+  if [ "$1" = -R ] && ! copy_err=$(_root_rm_red "$dst" 2>&1); then
+    COPY_ERR="$clone_err / 清理克隆残留：$copy_err"
+    return 1
   fi
-  FONT_ERR="$e1 / 普通复制：$e2"; return 1
+  if copy_err=$(cp -X "$@" 2>&1 || exit $?); then
+    echo "【黄】$G $label 克隆复制失败，已改用普通复制：$(printf '%s' "$clone_err" | tr '\n' ' ')"
+    return 0
+  fi
+  COPY_ERR="$clone_err / 普通复制：$copy_err"
+  return 1
 }
-_root_rm "$W/systemdata/fonts"; FONT_ERR=; mkdir -p "$W/systemdata/fonts" && fonts_cp || { root_abort "$G" "$TAG"; echo "【红】拷字体失败：$(echo "${FONT_ERR:-建字体目录失败}" | tr '\n' ' ')"; exit 1; }
+_root_rm "$W/systemdata/fonts"
+COPY_ERR=
+if ! mkdir -p "$W/systemdata/fonts" || ! clone_or_copy 字体 "$F"/*.bfttf "$W/systemdata/fonts/"; then
+  root_abort "$G" "$TAG"
+  echo "【红】拷字体失败：$(printf '%s' "${COPY_ERR:-建字体目录失败}" | tr '\n' ' ')"
+  exit 1
+fi
 if [ "$tz_stale" = 1 ]; then _root_rm "$(tz "$W")"; fi
 if [ -z "$(tz "$W")" ]; then
   bash "$R/services/systemdata/make_tzdata.sh" "$W/systemdata/010000000000080E" > "$W/tz.log" 2>&1 || { root_abort "$G" "$TAG"; echo "【红】生成时区数据失败（$(tail -1 "$W/tz.log")）"; exit 1; }
@@ -83,7 +98,14 @@ else
 fi
 while IFS=$'\t' read -r id src; do
   [ -n "$id" ] || continue
-  _root_rm "$W/systemdata/$id"; rm -f "$W/systemdata/$id.synth"; _root_cp -R "$src" "$W/systemdata/$id" || { root_abort "$G" "$TAG"; echo "【红】拷系统数据 $id 失败（${src}）"; exit 1; }
+  dst=$W/systemdata/$id
+  _root_rm "$dst"
+  rm -f "$dst.synth"
+  if ! clone_or_copy "系统数据 $id" -R "$src" "$dst"; then
+    root_abort "$G" "$TAG"
+    echo "【红】拷系统数据 $id 失败：$(printf '%s' "$COPY_ERR" | tr '\n' ' ')"
+    exit 1
+  fi
 done <<< "$CP"
 for id in $SY; do
   _root_rm "$W/systemdata/$id"; e=$(python3 "$H/sysdata_synth.py" "$id" "$W/systemdata/$id" 2>&1) && echo "合成：pack/sysdata_synth.py $id" > "$W/systemdata/$id.synth" \

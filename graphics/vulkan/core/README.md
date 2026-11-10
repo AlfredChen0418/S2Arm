@@ -178,6 +178,7 @@ and retains every matching rule ID (including overlapping ARM rules).
 | A-GSOCC-NID | Vendor 0x13B5 AND driver ID unavailable | Disable geometryShader |
 | H-NULL | Vendor 0x19E5, any version | Disable null descriptor |
 | H-ROBUST | Vendor 0x19E5, any version | Request robust buffer access **only if supported** |
+| A-ZMASK | ARM proprietary driver, any version | Do not attach colour targets whose write mask is 0 (#468; read on the render path through `VulkanRenderer.ZeroWriteMaskColorAttachmentsDisabled`, not at device creation) |
 
 Versions use `(major << 22) | (minor << 12) | patch`, compared as `uint`.
 Decoding preserves all ten major bits, including Adreno's 512. ARM rXpY is

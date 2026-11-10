@@ -25,7 +25,7 @@ struct InstallView: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(loc.t("s2arm.install.title")).font(.manrope(26, .heavy)).tracking(-0.6)
+                    Text(loc.t(model.installKey("s2arm.install.title"))).font(.manrope(26, .heavy)).tracking(-0.6)
                     if let game { Text(game.name).font(.manrope(14)).foregroundStyle(.secondary) }
                 }
                 Spacer()

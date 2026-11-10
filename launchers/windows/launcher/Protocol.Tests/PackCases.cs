@@ -95,6 +95,11 @@ public static class PackCases
         using (var doc = JsonDocument.Parse(checklist.Replace("\"ready\":false", "\"ready\":true")))
             check(InstallReadiness.Parse(doc.RootElement) is { Ready: true } r && r.Items.Any(i => !i.Ok), "checklist: backend ready with advisory open items is accepted");
         RejectChecklist("{}", "checklist: malformed");
+        // #487：deviceKind（后端按 USB 产品号认 iPad）；旧后端没有这个字段读成 ""
+        using (var doc = JsonDocument.Parse(checklist.Replace("\"account\":\"\"", "\"account\":\"\",\"deviceKind\":\"ipad\"")))
+            check(InstallReadiness.Parse(doc.RootElement).DeviceKind == "ipad", "checklist: deviceKind ipad kept");
+        using (var doc = JsonDocument.Parse(checklist))
+            check(InstallReadiness.Parse(doc.RootElement).DeviceKind == "", "checklist: no deviceKind reads as empty");
         // 11-07 bundled Impactor: the backend asks for a launcher-local step by name only (openImpactor), never a path or an unknown verb
         const string bundledChecklist = """
 {"gameId":"G","items":[{"id":"impactor","ok":true,"waiting":false,"title":"t","detail":"","who":"human","url":null,"action":null},

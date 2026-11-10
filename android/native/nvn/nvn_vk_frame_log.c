@@ -64,6 +64,24 @@ uint64_t s2a_fl_note_timed(struct s2a_frame_log *fl, uint64_t boot_us, uint64_t 
             }
         }
     }
+    // disp 字段：VK_GOOGLE_display_timing 回报的「最新已确认相邻帧上屏间隔」
+    // （actualPresentTime 差，不取 CPU present 节拍）。读数比本行 present 晚到——disp_seq
+    // 标明间隔属于哪个较新帧，宿主按 seq 对号不按行序；同一对已确认对只报一次，
+    // 没有新确认写 UINT32_MAX（不写 0、不写 CPU 间隔，与 iOS disp_us 空口径一致）。
+    extern int nvn_vk_dt_last_gap(uint64_t *, uint64_t *) __attribute__((weak));
+    r->disp_us = UINT32_MAX; r->disp_seq = UINT32_MAX;
+    if (nvn_vk_dt_last_gap) {
+        uint64_t df = 0, dns = 0;
+        if (nvn_vk_dt_last_gap(&df, &dns)) {
+            static uint64_t fl_disp_seen;
+            if (df != fl_disp_seen) {
+                fl_disp_seen = df;
+                uint64_t u = (dns + 500) / 1000;
+                r->disp_us = u > UINT32_MAX - 1 ? UINT32_MAX - 1 : (uint32_t)u;
+                r->disp_seq = df > UINT32_MAX - 1 ? UINT32_MAX - 1 : (uint32_t)df;
+            }
+        }
+    }
     fl->w = (fl->w + 1) % S2A_FL_CAP;
     if (fl->kept < S2A_FL_CAP) fl->kept++;
     else if (fl->dropped < UINT64_MAX) fl->dropped++;
@@ -105,7 +123,9 @@ static uint8_t s2a_fl_byte(const struct s2a_frame_log *fl, uint64_t j) {
     if (o < 20) return (uint8_t)(r->acquire_us >> ((o - 16) * 8));
     if (o < 24) return (uint8_t)(r->present_us >> ((o - 20) * 8));
     if (o < 28) return (uint8_t)(r->gpu_us >> ((o - 24) * 8));
-    return (uint8_t)(r->gpu_seq >> ((o - 28) * 8));
+    if (o < 32) return (uint8_t)(r->gpu_seq >> ((o - 28) * 8));
+    if (o < 36) return (uint8_t)(r->disp_us >> ((o - 32) * 8));
+    return (uint8_t)(r->disp_seq >> ((o - 36) * 8));
 }
 
 // logcat 单条约 1 KiB 会截断：分片载荷 700 字符（同 caps/profile 先例），前缀约 30 字符。
@@ -121,7 +141,7 @@ void s2a_fl_dump(const struct s2a_frame_log *fl, void (*emit)(void *ctx, const c
     const unsigned chunks = (unsigned)((b64len + S2A_FL_CHUNK - 1) / S2A_FL_CHUNK);
     char line[800];
     snprintf(line, sizeof line,
-             "direct frame-log meta: v=4 clock=%s unit=us endian=le rec=%u cap=%u recorded=%llu "
+             "direct frame-log meta: v=5 clock=%s unit=us endian=le rec=%u cap=%u recorded=%llu "
              "presents=%llu dropped=%llu first=%llu bytes=%llu chunks=%u",
 #if defined(CLOCK_BOOTTIME)
              "CLOCK_BOOTTIME",

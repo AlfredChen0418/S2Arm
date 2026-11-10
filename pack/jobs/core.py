@@ -605,6 +605,8 @@ class Context:
         cache = self.work_root / "cache"
         cache.mkdir(parents=True, exist_ok=True)
         env.pop("DEVELOPER_DIR", None)
+        # GUI 不接受继承的通用 J；抽取与直连分别由 cores.sh 的阶段预算决定。
+        env.pop("J", None)
         if self.r.get("spaceOverride") is True:   # 玩家点过「仍然继续」：直连阶段开工前的空间复核也只打黄（pack/jobs/space_rule.py）
             env["S2A_SPACE_OVERRIDE"] = "1"
         developer = self.r.get("developerDir") or self.default_developer   # 启动器传的 > 装着的最新 Xcode；都没有就不设
@@ -621,7 +623,7 @@ class Context:
                    S2A_XCKEY_CACHE=str(cache / "xckey"), S2A_SCHED_DIR=str(cache / "local-observations"),
                    S2A_PROGRESS=str(self.logs / (self.task + ".progress.tsv")),
                    GAL_PSO_CACHE=str(cache / "pso"), S2A_ROOTS_NO_BOOT="1",
-                   S2A_PACK_PLAT="macos", S2A_TARGET="macos", S2A_SEED_AOC="1", J=str(min(os.cpu_count() or 4, 8)),
+                   S2A_PACK_PLAT="macos", S2A_TARGET="macos", S2A_SEED_AOC="1",
                    # 出包用途 = 用户包（10-29 维护者定口径，pack/jobs/archs.py）：管线归档 / 函数体只出这个包要装的设备那几对——
                    #   Mac 包 = 出包的这台 Mac；iPhone 包由 ipa.py 按目标设备传 S2A_PSO_ARCHS / S2A_PSO_OS，没传就报红、不猜（不按我方跑局机清单出）
                    S2A_PACK_PURPOSE="user",

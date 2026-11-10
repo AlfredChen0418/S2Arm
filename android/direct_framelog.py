@@ -13,7 +13,9 @@
 #   direct frame-log end: frames=R dropped=D sha256=<载荷十六进制>
 # 载荷（v2）= R 条 16B LE 记录（最旧→最新，全局上屏序号 F..F+R-1）：
 #   u64 ts_us（CLOCK_BOOTTIME）+ u32 fence_wait_us + u32 fence_n
-# 支持 v2/16B 与 v3/24B；v3 增加 acquire/present 墙钟微秒，UINT32_MAX 表示未采集或饱和。
+# 支持 v2/16B 与 v3/24B 与 v4/32B 与 v5/40B；v3 增加 acquire/present 墙钟微秒，
+# v4 增加 gpu_us/gpu_seq（GPU 忙时 + 结算帧序号），v5 增加 disp_us/disp_seq
+# （actualPresentTime 相邻帧间隔 + 间隔所属较新帧号），UINT32_MAX 表示未采集/无新读数。
 import base64
 import hashlib
 from pathlib import Path
@@ -111,9 +113,9 @@ def parse(text):
                     f"块@line {meta['line']}: end 行 frames/dropped 与 meta 不符")
             if m[3].lower() != hashlib.sha256(blob).hexdigest():
                 raise FrameLogError(f"块@line {meta['line']}: sha256 不符，载荷被改动/截断")
-            if meta["v"] not in (2, 3, 4) or meta["unit"] != "us" or meta["endian"] != "le":
-                raise FrameLogError(f"块@line {meta['line']}: 不支持的 v/unit/endian（只认 v=2,3,4/us/le）")
-            expected_rec = {2: 16, 3: 24, 4: 32}[meta["v"]]
+            if meta["v"] not in (2, 3, 4, 5) or meta["unit"] != "us" or meta["endian"] != "le":
+                raise FrameLogError(f"块@line {meta['line']}: 不支持的 v/unit/endian（只认 v=2,3,4,5/us/le）")
+            expected_rec = {2: 16, 3: 24, 4: 32, 5: 40}[meta["v"]]
             if meta["rec"] != expected_rec:
                 raise FrameLogError(
                     f"块@line {meta['line']}: v={meta['v']} 记录必须 rec={expected_rec}（实得 rec={meta['rec']}）")
@@ -128,19 +130,23 @@ def parse(text):
                 raise FrameLogError(
                     f"块@line {meta['line']}: dropped != first（丢弃计数不自洽）")
             n = meta["recorded"]
-            fmt, width = {2: ("QII", 3), 3: ("QIIII", 5), 4: ("QIIIIII", 7)}[meta["v"]]
+            fmt, width = {2: ("QII", 3), 3: ("QIIII", 5), 4: ("QIIIIII", 7),
+                          5: ("QIIIIIIII", 9)}[meta["v"]]
             flat = struct.unpack("<" + fmt * n, blob) if n else ()
             ts = [flat[i * width] for i in range(n)]
             fence_us = [flat[i * width + 1] for i in range(n)]
             fence_n = [flat[i * width + 2] for i in range(n)]
             acquire_us = [None if flat[i * width + 3] == 0xffffffff else flat[i * width + 3] for i in range(n)] if width >= 5 else None
             present_us = [None if flat[i * width + 4] == 0xffffffff else flat[i * width + 4] for i in range(n)] if width >= 5 else None
-            gpu_us = [None if flat[i * width + 5] == 0xffffffff else flat[i * width + 5] for i in range(n)] if width == 7 else None
-            gpu_seq = [None if flat[i * width + 6] == 0xffffffff else flat[i * width + 6] for i in range(n)] if width == 7 else None
+            gpu_us = [None if flat[i * width + 5] == 0xffffffff else flat[i * width + 5] for i in range(n)] if width >= 7 else None
+            gpu_seq = [None if flat[i * width + 6] == 0xffffffff else flat[i * width + 6] for i in range(n)] if width >= 7 else None
+            disp_us = [None if flat[i * width + 7] == 0xffffffff else flat[i * width + 7] for i in range(n)] if width == 9 else None
+            disp_seq = [None if flat[i * width + 8] == 0xffffffff else flat[i * width + 8] for i in range(n)] if width == 9 else None
             captures.append({"meta": meta, "ts": ts, "fence_us": fence_us,
                              "fence_n": fence_n, "acquire_us": acquire_us,
                              "present_us": present_us, "gpu_us": gpu_us,
-                             "gpu_seq": gpu_seq, "line": meta["line"]})
+                             "gpu_seq": gpu_seq, "disp_us": disp_us,
+                             "disp_seq": disp_seq, "line": meta["line"]})
             meta = None
             parts = None
             continue

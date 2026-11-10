@@ -875,7 +875,13 @@ def readiness_windows(c, gid):
     item("connected", len(udids) == 1, "iPhone 已用数据线连上",
          "连着不止一台 iPhone / iPad：只留要装的那一台。" if len(udids) > 1 else "用数据线把 iPhone 连到这台电脑，解锁手机并点「信任」。")
     cert = devcert_items(c, item, udids[0] if len(udids) == 1 else "") if use_cert else None
-    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "",
+    kind = ""
+    if len(udids) == 1 and hasattr(W, "device_kind"):   # #487：连着的是 iPad 时入口写「装到 iPad」
+        try:
+            kind = W.device_kind(udids[0])
+        except (OSError, ValueError):
+            kind = ""
+    return dict(gameId=gid, items=items, ready=not any(i["blocking"] for i in items), device=udids[0] if len(udids) == 1 else "", deviceKind=kind,
                 account=(cert or {}).get("teamName") or "", ipaPath=ipa_path, signMode="devcert" if use_cert else "appleId", devcert=cert)
 
 

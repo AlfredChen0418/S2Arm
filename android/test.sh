@@ -88,11 +88,19 @@ s2a_gate_step bash "$android_dir/tools/vk_poolahb_alias_test.sh"
 s2a_gate_step bash "$android_dir/tools/nvn_vk_timeline_test.sh"
 # 直连逐帧帧时间（宿主，确定性）：环形语义、丢弃/计数可见、分片转储字节级核回。
 s2a_gate_step bash "$android_dir/tools/nvn_vk_frame_log_test.sh"
+# B2 VK_GOOGLE_display_timing（宿主，确定性）：挂 id/回读、乱序对号、丢帧 UNKNOWN、
+# 迟到补账、门关闭、ring 环覆、detach 复位、last_gap 最新确认对。
+s2a_gate_step bash "$android_dir/tools/nvn_vk_dt_test.sh"
 s2a_gate_step bash "$android_dir/tools/generic_frame_trace_test.sh"
 # #48 A5（宿主，确定性）：BatteryManager 净放电换算与不可用状态、采样器停采/迟到回调/读数开关。
 s2a_gate_step bash "$android_dir/tools/system_power_test.sh"
+# #48 A3+A4（宿主，确定性）：Surface.setFrameRate 投票边界（去重/未知清票/API<30）、
+# 轮询接线（周期→票、省电档→cap、开关、停后迟到回调不采）、生产 present_period 的封顶与登记。
+s2a_gate_step bash "$android_dir/tools/frame_rate_vote_test.sh"
+s2a_gate_step bash "$android_dir/tools/system_tuning_test.sh"
 # 转储解析器（宿主，确定性）：分片拼回/完整性拒绝、全窗统计、与 16 帧聚合行对拍、C→python 对拍。
 s2a_gate_step "$PY" "$android_dir/tests/direct_framelog_test.py"
+s2a_gate_step "$PY" "$android_dir/tests/direct_game_mode_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/direct_refresh_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/direct_touch_generation_test.py"
 # 通用模式编译事件：原生文件生成、丢弃负控及读取器完整性校验。
@@ -302,6 +310,10 @@ s2a_gate_step "$PY" "$android_dir/tests/w2_adapter_capture_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/w2_observation_core_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/w2_observation_compute_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/w2_observation_draw_test.py"
+# C4a 首用判定环：真 nvn_vk_draw.c + 真 compile_worker/nvn_first_use，可控假编译器。
+s2a_gate_step "$PY" "$android_dir/tests/nvk_fu_decision_test.py"
+# C4b 管线异步缝：真 nvn_vk_first_draw.c TU + 真 pipe_worker/nvn_first_use，假 Vulkan。
+s2a_gate_step "$PY" "$android_dir/tests/nvn_vk_pipe_async_draw_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/w2_observation_lifecycle_test.py"
 s2a_gate_step "$PY" "$android_dir/tests/w2_observation_adapter_test.py"
 # vk_record host regression links the real Linux Vulkan loader; the dispatch itself is mocked.

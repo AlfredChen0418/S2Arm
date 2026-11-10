@@ -52,4 +52,14 @@ ck "$(dj env S2A_NCPU=8 S2A_MEM_TOTAL_GB=8 S2A_LANES=2)" "1/2" "⑫ 8 GB / 8 核
 ck "$(dj env S2A_NCPU=8 S2A_MEM_TOTAL_GB=8 S2A_DIRECT_J=3)" "3/4" "⑫ 调用方给了 S2A_DIRECT_J=3 → 原样"
 # ⑬ 接线：pack/refresh.sh 两处出直连库都按 J > S2A_DIRECT_J > S2A_CPU_BAKE 取路数
 ck "$(grep -c 'CT=${J:-${S2A_DIRECT_J:-$S2A_CPU_BAKE}}' "$H/pack/refresh.sh")" "2" "⑬ refresh.sh 两处直连库路数取 S2A_DIRECT_J"
+# ⑭ 读物理内存不靠 PATH 上的 python3（11-10 Intel Mac 实走：anaconda 3.9 的 os.sysconf 不认 SC_PHYS_PAGES，整单停在并行度）：
+#   PATH 最前放一个必失败的假 python3、不给 S2A_MEM_TOTAL_GB → 仍算得出；期望 GB 用系统自带读法手算（macOS sysctl / Linux /proc/meminfo）
+F=$(mktemp -d "${TMPDIR:-/tmp}/s2a-fakepy-XXXXXX")
+printf '#!/bin/sh\necho "ValueError: unrecognized configuration name" >&2\nexit 1\n' > "$F/python3"; chmod +x "$F/python3"
+if [ "$(uname -s)" = Darwin ]; then want_gb=$(( $(sysctl -n hw.memsize) >> 30 )); else want_gb=$(( $(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo) >> 20 )); fi
+mem() { env -u S2A_JOBS -u S2A_CPU_BAKE -u S2A_DIRECT_J -u S2A_LANES -u S2A_MEM_TOTAL_GB -u S2A_PYTHON PATH="$F:$PATH" S2A_LANE_DIR="$D" S2A_CORES_QUIET=1 S2A_NCPU=8 \
+  bash -c "source '$H/tools/cores.sh'; s2a_cores > /dev/null 2>&1 && echo \$(( (\$S2A_CPU_BAKE > 0) )) || echo 失败"; }
+ck "$(mem)" "1" "⑭ PATH 上的 python3 坏了（anaconda 3.9 那种），不给 S2A_MEM_TOTAL_GB 也算得出并行度（本机 ${want_gb} GB）"; rm -rf "$F"
+# ⑮ 入口接线（#447 评审）：一键出包选定 Python 后把它所在目录放到 PATH 最前，出包链各 .sh 的裸 python3 都落到同一个解释器
+ck "$(grep -c '^export S2A_PYTHON=$PY S2A_PY=$PY PATH="$(dirname "$PY"):$PATH"$' "$H/pack/oneclick/oneclick.sh")" "1" "⑮ oneclick.sh 把选定的 Python 目录放到 PATH 最前"
 echo "同机道数并行度单测：$([ $bad = 0 ] && echo 全通 || echo "$bad 项不通")"; exit $(( bad > 0 ))

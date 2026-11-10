@@ -442,7 +442,7 @@ struct ExportSessionView: View {
                             .accessibilityIdentifier("result.mac.play")
                         if let game { Button(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }
                     } else {
-                        Button(loc.t("s2arm.action.install")) { install(session.gameID ?? "") }
+                        Button(loc.t(model.installKey("s2arm.action.install"))) { install(session.gameID ?? "") }
                             .accessibilityIdentifier("result.ios.install")
                         if let ipa = outcome?.ipa, !ipa.isEmpty { Button(loc.t("s2arm.export.revealIpa")) { model.revealIpa(ipa) } }
                         if let game { Button(loc.t("s2arm.export.openGameFolder")) { model.reveal(game) } }

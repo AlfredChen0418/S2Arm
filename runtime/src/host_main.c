@@ -136,6 +136,9 @@ static void switch_program_modules(void) {
 static void load_session_modules(void *unused) {
     (void)unused;
     switch_program_modules();
+#if defined(__APPLE__)
+    { int s2a_guest_file_retry(void); s2a_guest_file_retry(); }   // 起局时空间不够没接上文件后备的，解包完、装模块前再试一次（vawin.c，#483）
+#endif
     load_modules(g_module_dir, (const char **)g_module_names, g_module_count);
     if (g_program_switched >= 0) {   // 多程序合集：模块（含 main.npdm 程序号）换好后，直连图形层的着色器库 / 映射表 / 每款参数换到该序号（graphics/nvn/host_adapt.m）；
         //   没链直连图形层的宿主（安卓、图形单测）按名找不到 = 报红，不假装换了

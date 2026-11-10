@@ -11,6 +11,8 @@ public enum DisabledDriverFeatures
     PushDescriptor = 1,
     ExtendedDynamicState = 2,
     NullDescriptor = 4,
+    // 写掩码为 0 的颜色目标不进帧缓冲（#468）。和上面三项不同，这一位在渲染路径上读（VulkanRenderer.ZeroWriteMaskColorAttachmentsDisabled）。
+    ZeroWriteMaskColorAttachments = 8,
 }
 
 [Flags]
@@ -65,6 +67,11 @@ public static class DriverQuirks
             DisabledDriverFeatures.NullDescriptor, ForcedDriverFeatures.None),
         new("H-ROBUST", null, 0x19e5, 0, null, false,
             DisabledDriverFeatures.None, ForcedDriverFeatures.RobustBufferAccess),
+        // #468: Mali-G710 r32p1 damages a colour attachment that is bound with a zero write mask (every other
+        // 16-pixel tile row after a LOAD/STORE pass with draws). Measured on r32p1 only; applied to every
+        // version until another one is measured.
+        new("A-ZMASK", DriverId.ArmProprietary, null, 0, null, false,
+            DisabledDriverFeatures.ZeroWriteMaskColorAttachments, ForcedDriverFeatures.None),
     };
 
     public static uint Version(uint major, uint minor, uint patch) => (major << 22) | (minor << 12) | patch;

@@ -167,6 +167,13 @@ namespace Ryujinx.Graphics.Shader.Instructions
                     src = EmitLoadSubgroupMask(context, IoVariable.SubgroupGeMask);
                     break;
 
+                case (SReg)0x84:
+                    // Switch 2 pixel shaders read bytes 1 and 2 of SR 0x84 (UPRMT 0x7771 / 0x7772) and divide by them; they behave as the
+                    // coarse shading (variable rate shading) fragment width / height. The host always shades at full rate: 1 x 1.
+                    // Read as 0 (the default below) the shaders computed 1 / 0: the 04008E001F098000 water went Inf / NaN and the auto exposure collapsed.
+                    src = Const(0x00010100);
+                    break;
+
                 default:
                     src = Const(0);
                     break;

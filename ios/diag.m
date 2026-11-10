@@ -4,7 +4,8 @@
 //         ④ 上次会话在前台没正常收尾（崩溃 / 卡死被杀 / 内存超限被杀）或 MetricKit 报了崩溃 / 卡顿 → 这次启动问一句「把上次的诊断发给我们？」。
 //   包：s2a_diag_<款>_<机型>_<iOS>_<提交前 9 位>_<MMDDHHMMSS>.zip，压缩后 ≤ 30 MB：
 //       manifest.json、logs/host.log + logs/host-<起局时刻>.log（本局 + 机上归档的最近 9 局；单份超 8 MB 只留头 2 MB + 尾 6 MB）、
-//       logs/frames.tsv、logs/threads.txt、logs/unpack.log（有就放）、metrickit/*.json（MetricKit 崩溃 / 卡顿诊断原样 JSON）。
+//       logs/frames.tsv、logs/threads.txt、logs/unpack.log（有就放）、metrickit/*.json（MetricKit 崩溃 / 卡顿诊断原样 JSON）、
+//       shaders/*（现编着色器的输入：编到一半进程没了留下的 .inflight.*、翻译器报错留下的 .fail.*，有就放）。
 //   脱敏：App 数据目录 / 安装目录换成 <APP> / <BUNDLE>，设备名、UDID 去掉；存档（bis/user/save）、资源包、密钥都不放。
 //   交出：系统分享面板（AirDrop / 存到文件 / 微信）；包同时留在 Documents/diag/（只留最近 3 个，Mac 前端「拉回诊断」能拉到）。
 #import <UIKit/UIKit.h>
@@ -182,6 +183,19 @@ static NSURL *build_zip(NSUInteger cap, BOOL slim, NSString **err) {
         add([mk stringByAppendingPathComponent:f], [@"metrickit/" stringByAppendingString:f], 4u << 20);
         if ([f containsString:@"crash"]) crash++; if ([f containsString:@"hang"]) hang++; if ([f hasSuffix:@"-exit.json"]) exits++;
     }
+    // 现编着色器的输入（graphics/nvn/host/dsh_miss.inc）：<键>.inflight.*（编到一半进程没了才剩下，#467）与 <键>.fail.*（翻译器报错，#442）。
+    //   只有着色器字节、不含个人信息，原样带走（不过脱敏，二进制也过不了）；每份至多 1 MB、整包至多 16 份，放 shaders/<程序号>_<原名>
+    {   NSString *G = [D stringByAppendingPathComponent:@"games"]; int ns = 0;
+        for (NSString *gid in [fm contentsOfDirectoryAtPath:G error:nil]) {
+            NSString *sd = [[[[G stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"wire"] stringByAppendingPathComponent:gid] stringByAppendingPathComponent:@"shaders"];
+            for (NSString *f in [[fm contentsOfDirectoryAtPath:sd error:nil] sortedArrayUsingSelector:@selector(compare:)]) {
+                if (ns >= 16) break;
+                if (![f hasSuffix:@".inflight.ctl"] && ![f hasSuffix:@".inflight.code"] && ![f hasSuffix:@".fail.ctl"] && ![f hasSuffix:@".fail.code"]) continue;
+                NSData *d = [NSData dataWithContentsOfFile:[sd stringByAppendingPathComponent:f]]; if (!d || d.length > (1u << 20)) continue;
+                NSString *rel = [NSString stringWithFormat:@"shaders/%@_%@", file_safe(gid), f];
+                [fm createDirectoryAtPath:[W stringByAppendingPathComponent:@"shaders"] withIntermediateDirectories:YES attributes:nil error:nil];
+                if ([d writeToFile:[W stringByAppendingPathComponent:rel] atomically:NO]) { [files addObject:@{@"path": rel, @"bytes": @(d.length), @"truncated": @NO}]; ns++; }
+            } } }
     if (copyFailed) {
         [fm removeItemAtPath:W error:nil];
         if (err) *err = S2AL(@"diag.error.redact");

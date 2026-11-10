@@ -600,6 +600,11 @@ public final class S2ArmLauncherModel: ObservableObject {
 
     var selectedDevice: [String: Any]? { Self.pickDevice(connectedDevices, chosen: chosenDevice) }
 
+    /// 选中的设备是 iPad 时，「装到 iPhone」这几处入口文字换成「装到 iPad」（#487）；没连设备照旧写 iPhone
+    var installTargetIsPad: Bool { (selectedDevice?["productType"] as? String)?.hasPrefix("iPad") == true }
+    /// 入口文字的键：iPad 版键名 = 原键 + "Pad"（zh / en 两份 l10n 同步）
+    func installKey(_ key: String) -> String { installTargetIsPad ? key + "Pad" : key }
+
     /// 出 iPhone 包的目标：连着的手机优先（多台时用选中的那台），其次玩家选的机型；都没有交给作业层按常见机型出。
     var currentDeviceTarget: [String: Any]? {
         if let device = selectedDevice { return device }

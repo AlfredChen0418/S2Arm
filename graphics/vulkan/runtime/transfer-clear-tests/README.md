@@ -24,11 +24,15 @@ python3 graphics/vulkan/runtime/transfer-clear-tests/run.py \
 ```
 
 编译未改写的生产 dispatch/eligibility 方法，只有硬件与资源端点为记录器。
-69项覆盖格式、样本数、层级、裁剪、掩码、usage、实际格式能力、条件渲染、
-有待处理查询时先提交、64次上限及重置、引用保持和屏障顺序。它不验证GPU像素。
+77项覆盖格式、样本数、层级、裁剪、掩码、usage、实际格式能力、条件渲染、
+有待处理查询时先提交、64次上限及重置、引用保持和屏障顺序（清图后先记写入、再插屏障），
+以及因写掩码为 0 没进帧缓冲的目标（#468，`PipelineBase.ZeroMaskFilteredColorView`）：
+部分掩码清除走清除着色器、用该视图自己的尺寸和分量类型；全掩码清除交给
+`PipelineBase.ClearRenderTargetColor`（放回帧缓冲的那一段在 `../zero-mask-attachment-tests` 里测）；
+已在帧缓冲里的目标不受影响。它不验证GPU像素。
 `--source-root` 可指旧源码，旧实现应在缺少 transfer 路径断言失败；不是编译失败。
 `--mutation` 支持 mask/conditional/format/extent/scissor/usage/capability/pending/
-bound/reset/barrier/clear/color-bits；这些负控应编译成功、运行失败，失败不伪装成退出0。
+bound/reset/barrier/clear/color-bits/filtered（去掉留在外面的视图，#468）；这些负控应编译成功、运行失败，失败不伪装成退出0。
 UINT清除必须保留ColorF的原始位模式，不能把浮点数数值强转整数；原helper也是
 `floatBitsToUint`。此项另有原始位模式断言和driver_probe的整数fragment路径。
 

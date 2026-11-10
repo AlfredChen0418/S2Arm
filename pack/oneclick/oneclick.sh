@@ -134,7 +134,9 @@ for c in /Applications/S2Arm.app/Contents/Resources/Runtime/python/bin/python3 "
 [ -n "$PY" ] || die "没有 Python 3：装 Python 3.11+，或用 S2A_PYTHON=<解释器> 指定（S2Arm.app 里的 Contents/Resources/Runtime/python/bin/python3 也行）"
 "$PY" -c "import sys; assert sys.version_info >= (3, 11)" 2> /dev/null || die "${PY} 版本低于 3.11：装 Python 3.11+ 或装 S2Arm.app（自带钉版 Python），或用 S2A_PYTHON=<解释器> 指定。装不进包（externally-managed / uv 托管）就建虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"
 "$PY" -c "import capstone, lz4, numpy, PIL" 2> /dev/null || die "${PY} 缺出包要的 Python 包：${PY} -m pip install -r launchers/macos/requirements-runtime.txt（与 S2Arm.app 内置 Python 同一份钉版清单）。装不进包（externally-managed / uv 托管）就建虚拟环境：python3 -m venv ~/s2a-venv && ~/s2a-venv/bin/python3 -m pip install -r launchers/macos/requirements-runtime.txt -r pack/fonts/requirements.txt，再 export S2A_PYTHON=~/s2a-venv/bin/python3"
-export S2A_PYTHON=$PY S2A_PY=$PY
+#   选定的解释器所在目录放到 PATH 最前（#447 评审，照启动器 pack/jobs/core.py 的 env() 做）：出包链各 .sh 里的裸 python3 都落到这一个解释器，
+#   不会在装了 anaconda 的机器上拿到 PATH 最前面那个 3.9（缺包 / 版本不对，在后面某个阶段再停）
+export S2A_PYTHON=$PY S2A_PY=$PY PATH="$(dirname "$PY"):$PATH"
 #   共享字体：没给 --fonts 就用开源替代字体（维护者 10-30：缺省开源、原版只在显式给时用；来源规则在 pack/stages/sysdata.sh，一处定）
 # 并行度按本机核数（tools/cores.sh：重烘 / 出库路数 = min(核数, 内存一半 ÷ 1.5 GB)，make 等按全部核；G04 10-23 起一键出包就按本机用满，10-25 起 refresh / ipa.sh 直调也同一处算）
 #   在本单起任何子进程（现编 nx_unpack、认游戏、解包）之前算：cores.sh 按 1 分钟负载封顶，原先放在解包之后，读到的是自己刚跑完的 8 路解包，

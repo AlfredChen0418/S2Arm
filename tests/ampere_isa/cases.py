@@ -111,6 +111,12 @@ for wrap in (1, 0):
     case(f'BMSK{".W" if wrap else ""} 寄存器形式', True, [v for p in ins for v in p], body, [bmsk(p, w, wrap) for p, w in ins], 'PTX bmsk.wrap / .clamp')
 case('BMSK.W 立即数宽度（形式 4：宽度在 32..64）', True, [12], [MOVC(4, 0), alu(0x01b, 4, 0, 4, w=(75, 1), imm=(32, 4)), MOVI(1, 0), MOVI(2, 0), MOVI(3, 0)],
      [bmsk(12, 4, 1), 0, 0, 0], 'PTX bmsk.wrap')
+# ---- S2UR URd, SR 0x84（0x9c3，SR 号 72..80）：Switch 2 片元着色器读它、UPRMT 取第 1 / 2 字节（0x7771 / 0x7772）后当除数（04008E001F098000 有 611 支）----
+#   看作粗粒度着色（可变着色率）的片元宽 / 高：宿主按全速率着色 = 1 × 1。原先 SReg 表没有 0x84、走 default 给 0，着色器算出 1 / 0（海面 Inf / NaN，自动曝光被拖垮）
+UPRMT = lambda urd, ura, sel: alu(0x096, 4, urd, ura, imm=(32, sel), rc=(64, URZ))   # UPRMT URd, URa, imm32, URc（形式 4，同反汇编 0x896：选择子在 32..64，第三源 URc 在 64..70）
+case('S2UR SR 0x84（片元粗着色尺寸：第 1 / 2 字节 = 1 × 1）', True, [],
+     [inst(0x9c3, urd=(16, 4), sr=(72, 0x84)), UPRMT(5, 4, 0x7771), UPRMT(6, 4, 0x7772), MOVU(0, 4), MOVU(1, 5), MOVU(2, 6), MOVI(3, 0)],
+     [0x00010100, 1, 1, 0], '宿主全速率着色：宽 = 高 = 1（游戏的 611 支只取这两个字节；其余字节没有读者，按 0）')
 case('UBMSK（统一数据通路，UR 6 位寄存器号）', True, [3, 7], [ULDC(4, 0), ULDC(5, 1), alu(0x09b, 1, 6, 4, w=(75, 1), **R(5)), MOVU(0, 6), MOVI(1, 0), MOVI(2, 0), MOVI(3, 0)],
      [bmsk(3, 7, 1), 0, 0, 0], 'PTX bmsk.wrap')
 

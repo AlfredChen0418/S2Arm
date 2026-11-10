@@ -114,6 +114,39 @@ if(ANDROID)
     add_dependencies(s2arm_android s2a_jni_abi)
     target_include_directories(s2arm_android PRIVATE "${CMAKE_CURRENT_BINARY_DIR}")
     if(S2A_ANDROID_NATIVE_MODE STREQUAL "game")
+        # 编解码静态库（libs2a_avc.a / libs2a_opus.a / libs2a_vpx.a）由
+        # android/codecs/build.sh 产出；此前 Android 侧没有任何地方链接它们，
+        # game 模式恒定缺 18 个编解码符号。传参：
+        # -DS2A_ANDROID_CODEC_LIBS="libs2a_avc.a;libs2a_opus.a;libs2a_vpx.a"
+        # 未显式给出时先按 android/codecs/build.sh 的缓存约定自动找；仍找不到只告警——
+        # 链接期会以缺符号暴露（现状），不能让只做链接门禁的配置（ctest_link 的 game 档）
+        # 在 configure 阶段就红。
+        if(NOT S2A_ANDROID_CODEC_LIBS)
+            set(_codec_cache "$ENV{S2A_BUILD_CACHE}")
+            if(NOT _codec_cache)
+                set(_codec_cache "$ENV{HOME}/.cache/s2arm-build")
+            endif()
+            file(GLOB _avc "${_codec_cache}/codecs/*/libs2a_avc.a")
+            file(GLOB _opus "${_codec_cache}/codecs/*/s2a-*/libs2a_opus.a")
+            file(GLOB _vpx "${_codec_cache}/codecs/*/s2a-*/libs2a_vpx.a")
+            if(_avc AND _opus AND _vpx)
+                list(SORT _avc)
+                list(SORT _opus)
+                list(SORT _vpx)
+                list(GET _avc -1 _avc)
+                list(GET _opus -1 _opus)
+                list(GET _vpx -1 _vpx)
+                set(S2A_ANDROID_CODEC_LIBS "${_avc};${_opus};${_vpx}")
+                message(STATUS "Android game mode: codec archives auto-detected: ${S2A_ANDROID_CODEC_LIBS}")
+            else()
+                message(WARNING "Android game mode: no codec archives found under ${_codec_cache}/codecs; run android/codecs/build.sh or pass -DS2A_ANDROID_CODEC_LIBS=\"a;b;c\" (link will fail with undefined avc/opus/vpx symbols)")
+            endif()
+        endif()
+        foreach(codec_lib IN LISTS S2A_ANDROID_CODEC_LIBS)
+            if(NOT EXISTS "${codec_lib}")
+                message(FATAL_ERROR "S2A_ANDROID_CODEC_LIBS entry does not exist: ${codec_lib}")
+            endif()
+        endforeach()
         s2a_android_game_sources(game_sources)
         target_sources(s2arm_android PRIVATE ${game_sources})
         # Bionic exposes process_vm_readv (used by crash.c's safe frame read)
@@ -139,6 +172,9 @@ if(ANDROID)
     target_compile_options(s2arm_android PRIVATE
         "$<$<COMPILE_LANGUAGE:C,CXX>:-Wno-missing-designated-field-initializers>")
     target_link_libraries(s2arm_android PRIVATE s2arm_android_memory android log vulkan aaudio)
+    if(S2A_ANDROID_NATIVE_MODE STREQUAL "game")
+        target_link_libraries(s2arm_android PRIVATE ${S2A_ANDROID_CODEC_LIBS})
+    endif()
     if(S2A_ANDROID_EXPERIMENTAL_TOUCH)
         target_compile_definitions(s2arm_android PRIVATE S2A_ANDROID_EXPERIMENTAL_TOUCH=1)
     endif()
@@ -602,6 +638,10 @@ else()
     target_compile_options(direct_compile_worker_test PRIVATE -Wall -Wextra -Werror)
     target_link_libraries(direct_compile_worker_test PRIVATE Threads::Threads)
     add_test(NAME android_direct_compile_worker COMMAND direct_compile_worker_test)
+    add_executable(nvn_first_use_test tests/nvn_first_use_test.c ../graphics/nvn/gfx/nvn/nvn_first_use.c)
+    target_include_directories(nvn_first_use_test PRIVATE ../graphics/nvn/gfx/nvn)
+    target_compile_options(nvn_first_use_test PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME android_nvn_first_use COMMAND nvn_first_use_test)
     add_executable(direct_control_test tests/direct_control_test.c native/direct/control.c)
     target_include_directories(direct_control_test PRIVATE native ../runtime/include)
     target_compile_options(direct_control_test PRIVATE -Wall -Wextra -Werror)
@@ -626,7 +666,8 @@ else()
     # acquire 超时跳过、无 maintenance1 时的同图像再 acquire 证明（#426）；旋转/换代判定在 nvn_vk_lifecycle_test。
     # 真机驱动行为仍需设备验证。
     add_executable(nvn_vk_swapchain_host_test tests/nvn_vk_swapchain_host_test.c
-        native/nvn/nvn_vk_swapchain.c native/nvn/nvn_vk_surface.c native/game_touch.c)
+        native/nvn/nvn_vk_swapchain.c native/nvn/nvn_vk_surface.c native/game_touch.c
+        native/nvn/nvn_vk_display_timing.c)
     target_include_directories(nvn_vk_swapchain_host_test PRIVATE
         native native/nvn native/direct ../runtime/include tests/hostvk tests/vkhost
         ../graphics/nvn/third_party/vulkan-headers/include
@@ -636,6 +677,13 @@ else()
     target_compile_definitions(nvn_vk_swapchain_host_test PRIVATE VK_USE_PLATFORM_ANDROID_KHR=1)
     target_compile_options(nvn_vk_swapchain_host_test PRIVATE -Wall -Wextra -Werror -Wno-missing-field-initializers)
     add_test(NAME android_nvn_vk_swapchain_host COMMAND nvn_vk_swapchain_host_test)
+    # B2：display_timing 计量的宿主回归（扩展替身：支持/不支持/乱序回报/丢帧 UNKNOWN）。
+    add_executable(nvn_vk_dt_test tests/nvn_vk_dt_test.c native/nvn/nvn_vk_display_timing.c)
+    target_include_directories(nvn_vk_dt_test PRIVATE
+        native/nvn tests/vkhost ../graphics/nvn/third_party/vulkan-headers/include)
+    target_compile_definitions(nvn_vk_dt_test PRIVATE S2A_DT_TEST)
+    target_compile_options(nvn_vk_dt_test PRIVATE -Wall -Wextra -Werror)
+    add_test(NAME android_nvn_vk_dt COMMAND nvn_vk_dt_test)
     # F4.4：执行包 owner 控制（单包/挂起/恢复/Stop/换代/协议错误）。纯状态机，生产 adapter 共用。
     add_executable(nvn_vk_exec_owner_test tests/nvn_vk_exec_owner_test.c native/nvn/nvn_vk_exec_owner.c)
     target_include_directories(nvn_vk_exec_owner_test PRIVATE native/nvn)

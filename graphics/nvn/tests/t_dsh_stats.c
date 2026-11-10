@@ -1,6 +1,8 @@
 // 包含生产现编接点，仅替换编译器、映射和日志依赖；不需要 GPU 或游戏。
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <signal.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -33,8 +35,10 @@ static const char *chain_name(void);   // DMSH_CHAIN（dmsh_chain.h 随 dsh_miss
 static int write_out, slow_first;   // 39–41（后台预编）：编译器桩真把产物写进兜底目录（dsh_have 认它）；41：键 0 编得慢（让排在它后面的键停在队里）
 static _Atomic int in_comp, overlap;   // 42：C# 现编入口不可重入，同时有两个调用在里面就计一次
 static int compiler_(const char *key, int stage, const char *out);
+static int crash_in_comp;   // 44：替身翻译器编到一半崩（真 SIGSEGV），看崩溃处理落没落下输入
 static int compiler(const char *key, int stage, const void *code, size_t nc, const void *ctl, size_t nt, const char *out) {
     (void)code; (void)nc; (void)ctl; (void)nt;
+    if (crash_in_comp) *(volatile int *)(uintptr_t)8 = 1;   // 同 #467 现场：读写 0x8 段错误
     if (atomic_fetch_add(&in_comp, 1)) atomic_fetch_add(&overlap, 1);
     int rc_ = compiler_(key, stage, out); atomic_fetch_sub(&in_comp, 1); return rc_;
 }
@@ -70,6 +74,7 @@ static void late(void) { dm_shader_miss_late("0000000000000000", (uint64_t)(uint
 static void call(void) { dm_shader_miss(key, (uint64_t)(uintptr_t)code, ctl); late(); }   // 建程序（登记）+ 第一次用到（现编）
 static void *many(void *arg) { for (int i = 0; i < (int)(intptr_t)arg; i++) dm_shader_miss(key, (uint64_t)(uintptr_t)code, ctl); return NULL; }   // 多线程只建程序
 static void check(int ok) { if (!ok) _exit(40); }
+static void crash_handler44(int sig) { (void)sig; s2a_dsh_crash_dump(); _exit(0); }   // 照 crash.c：原始现场后调 s2a_dsh_crash_dump
 static void scenario(int n) {
     alarm(10); setvbuf(stdout, NULL, _IONBF, 0);
     setenv("S2A_DSH_EAGER_MAX", n >= 39 ? "8" : "0", 1);   // 0–38 是登记时不编的旧语义（后台预编关）；39–41 测后台预编
@@ -86,6 +91,20 @@ static void scenario(int n) {
         uint8_t got[sizeof ctl]; FILE *f;
         snprintf(p, sizeof p, "%s/0000000000000000.fail.ctl", d); f = fopen(p, "rb"); check(f != NULL); check(fread(got, 1, sizeof got, f) == sizeof ctl); fclose(f); check(!memcmp(got, ctl, sizeof ctl)); unlink(p);
         snprintf(p, sizeof p, "%s/0000000000000000.fail.code", d); f = fopen(p, "rb"); check(f != NULL); check(fread(got, 1, sizeof got, f) == sizeof code); fclose(f); check(!memcmp(got, code, sizeof code)); unlink(p);
+        rmdir(d);
+    }
+    if (n == 44) {   // #467：正常编完不写盘；编到一半崩了，崩溃处理（这里装的处理函数照 crash.c 调 s2a_dsh_crash_dump）把输入落盘成 <键>.inflight.*，逐字节同交给翻译器的那份
+        char d[] = "/tmp/t_dsh_inflXXXXXX", p[256]; check(mkdtemp(d) != NULL); setenv("DM_MSL_FALLBACK", d, 1); unsetenv("DM_NVN_SHDUMP");
+        for (int i = 0x40; i < 0x80; i++) ctl[i] = (uint8_t)(i ^ 0x5a); for (int i = 0x40; i < 0x80; i++) code[i] = (uint8_t)(i * 3);
+        struct stat sb; char pc[256], pd[256]; snprintf(pc, sizeof pc, "%s/0000000000000000.inflight.ctl", d); snprintf(pd, sizeof pd, "%s/0000000000000000.inflight.code", d);
+        pid_t c = fork();
+        if (!c) { struct sigaction sa = {0}; sa.sa_handler = (void (*)(int))(void *)crash_handler44; sigaction(SIGSEGV, &sa, NULL); sigaction(SIGBUS, &sa, NULL);
+                  crash_in_comp = 1; compile_rc = 0; call(); _exit(3); }   // 走到这里 = 没崩
+        int st; waitpid(c, &st, 0); check(WIFEXITED(st) && WEXITSTATUS(st) == 0);
+        uint8_t got[sizeof ctl]; FILE *f;
+        f = fopen(pc, "rb"); check(f != NULL); check(fread(got, 1, sizeof got, f) == sizeof ctl); fclose(f); check(!memcmp(got, ctl, sizeof ctl)); unlink(pc);
+        f = fopen(pd, "rb"); check(f != NULL); check(fread(got, 1, sizeof got, f) == sizeof code); fclose(f); check(!memcmp(got, code, sizeof code)); unlink(pd);
+        crash_in_comp = 0; compile_rc = 0; call(); check(stat(pc, &sb) != 0 && stat(pd, &sb) != 0);   // 正常编完：不落盘
         rmdir(d);
     }
     if (n == 3) {
@@ -249,10 +268,11 @@ int main(void) {
         "成功 1、失败 0、跳过 0、复用上局 0、输出类型变体 0（正常收局）", "成功 1、失败 0、跳过 0、复用上局 0、输出类型变体 0（正常收局）",   // 39 后台编好首遇复用 / 40 后台失败首遇同步再编
         "成功 1、失败 0、跳过 0、复用上局 0、输出类型变体 0（正常收局）",   // 41 排在慢键后面的键：首遇取消后台、同步编
         "成功 0、失败 0、跳过 0、复用上局 0、输出类型变体 1（正常收局）",   // 42 原注释见下行
-        "成功 0、失败 1、跳过 0、复用上局 0、输出类型变体 0（正常收局）"    // 43 翻译器报错：输入自动存进兜底目录；42 后台在编同键时来输出类型变体：同锁、不并发、不重编（后台编好、没有首遇来取：不计成功）
+        "成功 0、失败 1、跳过 0、复用上局 0、输出类型变体 0（正常收局）",   // 43 见下行
+        "成功 1、失败 0、跳过 0、复用上局 0、输出类型变体 0（正常收局）"    // 44 编的时候输入落盘成 .inflight.*、返回后删掉；43 翻译器报错：输入自动存进兜底目录；42 后台在编同键时来输出类型变体：同锁、不并发、不重编（后台编好、没有首遇来取：不计成功）
     };
     int bad = 0;
-    for (int n = 0; n < 44; n++) {
+    for (int n = 0; n < 45; n++) {
         int fd[2]; pipe(fd); pid_t p = fork();
         if (!p) { close(fd[0]); dup2(fd[1], 1); close(fd[1]); scenario(n); }
         close(fd[1]); char buf[1024]; size_t at = 0; ssize_t got;
@@ -263,5 +283,5 @@ int main(void) {
         printf("%s 现编汇总场景 %d\n", ok ? "✓" : "✗", n);
         if (!ok) { bad++; puts(buf); }
     }
-    printf("%s t_dsh_stats：44 场景，%d 处不符\n", bad ? "✗" : "✓", bad); return bad != 0;
+    printf("%s t_dsh_stats：45 场景，%d 处不符\n", bad ? "✗" : "✓", bad); return bad != 0;
 }

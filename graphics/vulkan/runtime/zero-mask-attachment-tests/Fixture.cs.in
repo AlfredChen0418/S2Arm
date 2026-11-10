@@ -1,0 +1,210 @@
+// Production CreateFramebuffer / SetRenderTargets / SetRenderTargetColorMasks / ClearRenderTargetColor / ZeroMask*
+// blocks from PipelineBase.cs, compiled against recording endpoints. Not a GPU test.
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using Silk.NET.Vulkan;
+namespace Ryujinx.Graphics.Vulkan;
+static class Constants { public const int MaxRenderTargets = 8; }
+[Flags] enum FeedbackLoopAspects { None = 0 }
+interface ITexture { }
+readonly record struct ColorF(float Red, float Green, float Blue, float Alpha);
+struct Rectangle<T> { }
+sealed class Barriers { public void Flush(int cbs, bool renderPassActive, object holder, Action endRenderPass) { } }
+sealed unsafe class Api
+{
+    public static readonly List<string> Clears = new();
+    public void CmdClearAttachments(CommandBuffer cb, uint attachmentCount, ClearAttachment* attachments, uint rectCount, ClearRect* rects) =>
+        Clears.Add($"{attachments->ColorAttachment}:{rects->BaseArrayLayer}+{rects->LayerCount}");
+}
+sealed class TextureView : ITexture { public bool Valid = true; public string Name; public TextureView(string name) => Name = name; }
+sealed class BlendStates { private readonly PipelineColorBlendAttachmentState[] _a = new PipelineColorBlendAttachmentState[Constants.MaxRenderTargets]; public Span<PipelineColorBlendAttachmentState> AsSpan() => _a; }
+sealed class InternalState { public readonly BlendStates ColorBlendAttachmentState = new(); }
+sealed class NewState { public readonly InternalState Internal = new(); public FeedbackLoopAspects FeedbackLoopAspects; }
+sealed class VulkanRenderer { public bool IsTBDR = true, ZeroWriteMaskColorAttachmentsDisabled = true; public readonly Api Api = new(); public readonly Barriers Barriers = new(); }
+sealed class FramebufferParams
+{
+    public static int Builds;
+    public ITexture[] Colors = Array.Empty<ITexture>(); public ITexture Depth;
+    public FramebufferParams(Device device, Span<ITexture> colors, ITexture depthStencil) => Update(colors, depthStencil);
+    public FramebufferParams Update(Span<ITexture> colors, ITexture depthStencil) { Builds++; Colors = colors.ToArray(); Depth = depthStencil; return this; }
+    public bool IsValidColorAttachment(int i) => (uint)i < (uint)Colors.Length && Colors[i] is TextureView { Valid: true };
+    public void ClearBindings() { }
+    public ClearRect GetClearRect(Rectangle<int> scissor, int layer, int layerCount) => new(default, (uint)layer, (uint)layerCount);
+    public void AddBindings() { }
+    public string Attached => string.Join(",", Enumerable.Range(0, Colors.Length).Where(IsValidColorAttachment).Select(i => i + ":" + ((TextureView)Colors[i]).Name));
+}
+sealed class PipelineBase
+{
+    public readonly VulkanRenderer Gd = new(); public Device Device; public bool IsMainPipeline = true;
+    public FramebufferParams FramebufferParams;
+    public readonly NewState _newState = new();
+    private readonly PipelineColorBlendAttachmentState[] _storedBlend = new PipelineColorBlendAttachmentState[Constants.MaxRenderTargets];
+    private int _writtenAttachmentCount; private bool _framebufferUsingColorWriteMask; private ITexture[] _preMaskColors; private ITexture _preMaskDepthStencil;
+    private bool _bindingBarriersDirty, _passWritesDepthStencil;
+    private readonly ITexture[] _zeroMaskScratch = new ITexture[Constants.MaxRenderTargets]; private uint _zeroMaskClearTargets;
+    private object _renderPass, _rpHolder; private readonly Action EndRenderPassDelegate = () => { }; private bool RenderPassActive;
+    private int Cbs = 1; private CommandBuffer CommandBuffer = new(1); private Rectangle<int> ClearScissor;
+    private void CreateRenderPass() => _renderPass = new object();
+    private void BeginRenderPass() => RenderPassActive = true;
+    public int Rebuilds, StateChanges, AttachmentChanges;
+    private void UpdatePassDepthStencil() { }
+    private void UpdatePipelineAttachmentFormats() { }
+    private void SignalStateChange() => StateChanges++;
+    private void SignalAttachmentChange() => AttachmentChanges++;
+    private void SetRenderTargetsInternal(Span<ITexture> colors, ITexture depthStencil, bool filterWriteMasked)
+    {
+        Rebuilds++; CreateFramebuffer(colors, depthStencil, filterWriteMasked); SignalStateChange(); SignalAttachmentChange();
+    }
+    public TextureView Filtered(int index) => ZeroMaskFilteredColorView(index);
+    public void BeforeDraw() => ZeroMaskDetachClearTargets();
+    public void Touch() { _ = _bindingBarriersDirty; _ = _passWritesDepthStencil; _ = _writtenAttachmentCount; _ = _zeroMaskScratch; _ = _zeroMaskClearTargets; _ = _rpHolder; _ = Cbs; _ = ClearScissor; }
+    // SET_TARGETS_METHOD
+    // SET_MASKS_METHOD
+    // CREATE_FRAMEBUFFER_METHOD
+    // WANTED_METHOD
+    // CHANGED_METHOD
+    // FILTERED_METHOD
+    // ATTACH_FOR_CLEAR_METHOD
+    // DETACH_METHOD
+    // CLEAR_METHOD
+}
+static class Proof
+{
+    static int checks;
+    static void Check(bool value, string why) { checks++; if (!value) throw new Exception(why); }
+    static TextureView[] Views(int n, string prefix = "t") => Enumerable.Range(0, n).Select(i => new TextureView(prefix + i)).ToArray();
+    static PipelineBase Bind(ITexture[] colors, ITexture depth, uint[] masks, Action<PipelineBase> setup = null)
+    {
+        var p = new PipelineBase(); setup?.Invoke(p);
+        p.SetRenderTargetColorMasks(masks);       // masks first: no framebuffer yet, so no rebuild from here
+        p.SetRenderTargets(colors.Select(c => c).ToArray(), depth);   // exact ITexture[]: Span<T> rejects covariant arrays
+        return p;
+    }
+    public static void Main()
+    {
+        var depth = new TextureView("d");
+        uint[] M(params uint[] m) { var r = new uint[8]; m.CopyTo(r, 0); return r; }
+
+        // Row 1: a zero-mask target between two written ones is left out; slots keep their numbers.
+        var t = Views(3); var p = Bind(t, depth, M(15, 0, 15));
+        Check(p.FramebufferParams.Attached == "0:t0,2:t2", "zero-mask slot must be left out: " + p.FramebufferParams.Attached);
+        Check(ReferenceEquals(p.Filtered(1), t[1]), "left-out slot reports its saved view");
+        Check(p.Filtered(0) == null && p.Filtered(2) == null, "attached slots are not reported as left out");
+        Check(p.Filtered(8) == null && p.Filtered(-1) == null && p.Filtered(3) == null, "index outside the table / empty slot");
+
+        // Row 6: the mask of the left-out slot becomes non-zero: rebuild, same texture object back in slot 1.
+        int builds = FramebufferParams.Builds;
+        p.SetRenderTargetColorMasks(M(15, 15, 15));
+        Check(FramebufferParams.Builds == builds + 1, "mask 0 -> F must rebuild the framebuffer");
+        Check(p.FramebufferParams.Attached == "0:t0,1:t1,2:t2", "slot 1 attached again: " + p.FramebufferParams.Attached);
+        Check(ReferenceEquals(p.FramebufferParams.Colors[1], t[1]), "saved table kept the original texture of slot 1");
+        Check(p.Filtered(1) == null, "slot 1 no longer left out");
+
+        // Row 5: a mask change that keeps the attached set must not rebuild, only signal a state change.
+        builds = FramebufferParams.Builds; int states = p.StateChanges, attachments = p.AttachmentChanges;
+        p.SetRenderTargetColorMasks(M(7, 15, 15));
+        Check(FramebufferParams.Builds == builds, "F -> 7 keeps the attached set: no rebuild");
+        Check(p.StateChanges == states + 1 && p.AttachmentChanges == attachments, "state change only");
+
+        // And back to zero: rebuild, left out again.
+        p.SetRenderTargetColorMasks(M(7, 15, 0));
+        Check(p.FramebufferParams.Attached == "0:t0,1:t1", "slot 2 left out after F -> 0: " + p.FramebufferParams.Attached);
+        Check(ReferenceEquals(p.Filtered(2), t[2]), "slot 2 reported as left out");
+
+        // Row 3: every mask 0, depth bound: no colour target attached.
+        t = Views(2); p = Bind(t, depth, M(0, 0));
+        Check(p.FramebufferParams.Attached == "", "all masks 0 with depth: no colour attachment: " + p.FramebufferParams.Attached);
+        Check(ReferenceEquals(p.FramebufferParams.Depth, depth), "depth passed through");
+
+        // Row 4: every mask 0, no depth: the lowest valid slot stays to give the framebuffer a size.
+        t = Views(3); t[0].Valid = false; p = Bind(t, null, M(0, 0, 0));
+        Check(p.FramebufferParams.Attached == "1:t1", "all masks 0 without depth keeps the lowest valid slot: " + p.FramebufferParams.Attached);
+        p = Bind(Views(2), new TextureView("bad") { Valid = false }, M(0, 0));
+        Check(p.FramebufferParams.Attached == "0:t0", "an invalid depth view does not count as depth");
+
+        // A slot whose texture is not valid, or empty, is never wanted even with a full mask.
+        t = Views(3); t[1].Valid = false; p = Bind(new ITexture[] { t[0], t[1], null, t[2] }, depth, M(15, 15, 15, 15));
+        Check(p.FramebufferParams.Attached == "0:t0,3:t2", "invalid and empty slots are not attached: " + p.FramebufferParams.Attached);
+        Check(p.Filtered(1) == null && p.Filtered(2) == null, "invalid / empty slots are not reported as left out");
+
+        // The existing duplicate filter still runs: same texture in slots 0 and 2, slot 2 masked.
+        t = Views(2); p = Bind(new ITexture[] { t[0], t[1], t[0] }, depth, M(15, 15, 0));
+        Check(p.FramebufferParams.Attached == "0:t0,1:t1", "duplicate with zero mask removed: " + p.FramebufferParams.Attached);
+
+        // New targets from the GPU layer replace the saved table.
+        var u = Views(2, "u"); p.SetRenderTargets(u.Select(c => (ITexture)c).ToArray(), depth);
+        Check(p.FramebufferParams.Attached == "0:u0,1:u1", "rebinding uses the new targets with the current masks: " + p.FramebufferParams.Attached);
+        Check(ReferenceEquals(p.FramebufferParams.Colors[0], u[0]), "new table, not the stale one");
+        Check(p.Filtered(0) == null && p.Filtered(1) == null && p.Filtered(2) == null, "nothing left out after rebinding; the old slot 2 is gone");
+        p.SetRenderTargetColorMasks(M(0, 15, 0));
+        Check(p.FramebufferParams.Attached == "1:u1" && ReferenceEquals(p.Filtered(0), u[0]), "mask change after rebinding filters the new table: " + p.FramebufferParams.Attached);
+
+        // Clears do not depend on the draw mask. A left-out target is attached for the clear, keeps the layer range of
+        // vkCmdClearAttachments, and is left out again before the next draw.
+        var black = new ColorF(0, 0, 0, 0);
+        t = Views(3); p = Bind(t, depth, M(15, 0, 15)); builds = FramebufferParams.Builds; Api.Clears.Clear();
+        p.ClearRenderTargetColor(1, 2, 3, black);
+        Check(p.FramebufferParams.Attached == "0:t0,1:t1,2:t2", "left-out slot attached for its clear: " + p.FramebufferParams.Attached);
+        Check(Api.Clears.SequenceEqual(new[] { "1:2+3" }), "clear reached slot 1 with its layer range: " + string.Join("/", Api.Clears));
+        Check(FramebufferParams.Builds == builds + 1 && p.Filtered(1) == null, "one rebuild for the clear");
+        p.ClearRenderTargetColor(1, 0, 1, black);
+        Check(FramebufferParams.Builds == builds + 1 && Api.Clears.Count == 2, "a second clear of the same slot does not rebuild");
+        p.BeforeDraw();
+        Check(p.FramebufferParams.Attached == "0:t0,2:t2" && ReferenceEquals(p.Filtered(1), t[1]), "left out again before the next draw: " + p.FramebufferParams.Attached);
+        Check(FramebufferParams.Builds == builds + 2, "one rebuild to detach");
+        p.BeforeDraw();
+        Check(FramebufferParams.Builds == builds + 2, "nothing to detach on later draws");
+
+        // A clear of an attached slot neither rebuilds nor marks anything.
+        builds = FramebufferParams.Builds; Api.Clears.Clear();
+        p.ClearRenderTargetColor(0, 0, 1, black); p.BeforeDraw();
+        Check(Api.Clears.SequenceEqual(new[] { "0:0+1" }) && FramebufferParams.Builds == builds, "attached slot: plain clear, no rebuild");
+
+        // A clear of an empty or invalid slot stays a no-op.
+        t = Views(2); t[1].Valid = false; p = Bind(new ITexture[] { t[0], t[1], null }, depth, M(15, 15, 15)); builds = FramebufferParams.Builds; Api.Clears.Clear();
+        p.ClearRenderTargetColor(1, 0, 1, black); p.ClearRenderTargetColor(2, 0, 1, black); p.ClearRenderTargetColor(7, 0, 1, black);
+        Check(Api.Clears.Count == 0 && FramebufferParams.Builds == builds, "no clear and no rebuild for empty / invalid slots");
+
+        // A mask change while a target is attached for a clear keeps it until the next draw.
+        t = Views(3); p = Bind(t, depth, M(15, 0, 15)); p.ClearRenderTargetColor(1, 0, 1, black);
+        p.SetRenderTargetColorMasks(M(15, 0, 0));
+        Check(p.FramebufferParams.Attached == "0:t0,1:t1", "clear-attached slot survives a mask change: " + p.FramebufferParams.Attached);
+        p.BeforeDraw();
+        Check(p.FramebufferParams.Attached == "0:t0", "and is left out at the draw: " + p.FramebufferParams.Attached);
+
+        // New targets from the GPU layer forget the clear-attached slots.
+        t = Views(3); p = Bind(t, depth, M(15, 0, 15)); p.ClearRenderTargetColor(1, 0, 1, black);
+        p.SetRenderTargets(t.Select(c => (ITexture)c).ToArray(), depth);
+        Check(p.FramebufferParams.Attached == "0:t0,2:t2", "rebinding drops the clear-attached state: " + p.FramebufferParams.Attached);
+
+        // A slot that the duplicate filter removed cannot be re-attached: the clear stays dropped as before, and no
+        // clear-attached state is left behind (a later mask change that keeps the set must not rebuild).
+        t = Views(2); p = Bind(new ITexture[] { t[0], t[1], t[0] }, depth, M(15, 15, 0)); builds = FramebufferParams.Builds; Api.Clears.Clear();
+        p.ClearRenderTargetColor(2, 0, 1, black);
+        Check(Api.Clears.Count == 0 && p.FramebufferParams.Attached == "0:t0,1:t1", "duplicate slot: clear not issued, attachments unchanged: " + p.FramebufferParams.Attached);
+        builds = FramebufferParams.Builds; p.SetRenderTargetColorMasks(M(7, 15, 0));
+        Check(FramebufferParams.Builds == builds, "no clear-attached state left behind for the duplicate slot");
+
+        // Negative controls: quirk off, helper pipeline, non-tiler all keep today's behaviour.
+        foreach (Action<PipelineBase> off in new Action<PipelineBase>[] {
+            x => x.Gd.ZeroWriteMaskColorAttachmentsDisabled = false, x => x.IsMainPipeline = false, x => x.Gd.IsTBDR = false })
+        {
+            t = Views(3); p = Bind(t, depth, M(15, 0, 15), off);
+            Check(p.FramebufferParams.Attached == "0:t0,1:t1,2:t2", "without the quirk every bound target is attached: " + p.FramebufferParams.Attached);
+            Check(p.Filtered(1) == null, "nothing is reported as left out without the quirk");
+            builds = FramebufferParams.Builds;
+            p.SetRenderTargetColorMasks(M(15, 15, 15));
+            Check(FramebufferParams.Builds == builds, "without the quirk a mask change does not rebuild");
+            p.SetRenderTargetColorMasks(M(15, 0, 15)); builds = FramebufferParams.Builds; Api.Clears.Clear();
+            p.ClearRenderTargetColor(1, 0, 1, black); p.BeforeDraw();
+            Check(Api.Clears.SequenceEqual(new[] { "1:0+1" }) && FramebufferParams.Builds == builds, "without the quirk a clear of a zero-mask slot is a plain clear");
+        }
+
+        // The saved table of the existing duplicate filter must not make a slot look left out on other drivers.
+        t = Views(1); p = Bind(new ITexture[] { t[0], t[0], t[0] }, depth, M(15, 0, 0), x => x.Gd.ZeroWriteMaskColorAttachmentsDisabled = false);
+        Check(p.Filtered(1) == null && p.Filtered(2) == null, "duplicate filter alone never reports a left-out view");
+        new PipelineBase().Touch();
+        Console.WriteLine($"PASS {checks} production zero-mask attachment checks; no GPU in this harness.");
+    }
+}

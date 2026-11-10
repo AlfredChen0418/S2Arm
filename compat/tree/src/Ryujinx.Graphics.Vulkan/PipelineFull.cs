@@ -70,7 +70,11 @@ namespace Ryujinx.Graphics.Vulkan
                 // We can't use CmdClearAttachments if not writing all components,
                 // because on Vulkan, the pipeline state does not affect clears.
                 // On proprietary Adreno drivers, CmdClearAttachments appears to execute out of order, so it's better to not use it at all.
+                // S2A（#468）：目标因写掩码为 0 不在帧缓冲里时（PipelineBase.ZeroMaskWantedTargets），清除照样落到它上面。
+                // 全掩码清除不走这里：PipelineBase.ClearRenderTargetColor 会先把目标放回帧缓冲。
                 TextureView dstTexture = FramebufferParams.GetColorView(index);
+                TextureView filteredOut = dstTexture == null ? ZeroMaskFilteredColorView(index) : null;
+                dstTexture ??= filteredOut;
                 if (dstTexture == null)
                 {
                     return;
@@ -88,15 +92,23 @@ namespace Ryujinx.Graphics.Vulkan
                     dstTexture,
                     clearColor,
                     componentMask,
-                    (int)FramebufferParams.Width,
-                    (int)FramebufferParams.Height,
-                    FramebufferParams.GetAttachmentComponentType(index),
+                    filteredOut != null ? dstTexture.Width : (int)FramebufferParams.Width,
+                    filteredOut != null ? dstTexture.Height : (int)FramebufferParams.Height,
+                    filteredOut != null ? ComponentTypeOf(dstTexture) : FramebufferParams.GetAttachmentComponentType(index),
                     ClearScissor);
             }
             else
             {
                 ClearRenderTargetColor(index, layer, layerCount, color);
             }
+        }
+
+        // S2A（#468）：不在帧缓冲里的目标按格式取分量类型，规则同 FramebufferParams.GetAttachmentComponentType。
+        private static ComponentType ComponentTypeOf(TextureView view)
+        {
+            return view.Info.Format.IsSignedInt ? ComponentType.SignedInteger
+                : view.Info.Format.IsUnsignedInt ? ComponentType.UnsignedInteger
+                : ComponentType.Float;
         }
 
         private void LogTransferClearFallback(int index, uint mask)

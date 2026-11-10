@@ -202,6 +202,7 @@ static void crash_reraise(int sig) {
     raise(sig);
     _exit(128 + sig);
 }
+static void (*g_dsh_crash_dump)(void);   // graphics/nvn/host/dsh_miss.inc s2a_dsh_crash_dump：现编时崩溃，落盘正在编的那支输入；装信号时 dlsym 取一次（信号处理里不调 dlsym），只链运行时的单测取不到 = 空
 static void on_crash(int sig, siginfo_t *si, void *ctx) {
     // 先给 16 KB 写跟踪（graphics/track）认领：游戏 / 原生层写到被写保护的游戏页，跟踪模块记脏、放开后返回重执行那条指令。
     // 是否写取 ESR 的 WnR 位（数据中止 EC = 0x24 / 0x25 时有效）
@@ -261,6 +262,8 @@ static void on_crash(int sig, siginfo_t *si, void *ctx) {
     }
     uint64_t pc = uc->uc_mcontext->__ss.__pc, lr = uc->uc_mcontext->__ss.__lr, fp = uc->uc_mcontext->__ss.__fp;
     crash_raw(sig, si, uc, 0);
+    // 崩在现编着色器里（graphics/nvn/host/dsh_miss.inc，#467）：把正在编的那支输入落盘成 <键>.inflight.*，诊断包带走。只用 open / write，排在原始现场之后、完整报告之前
+    { if (g_dsh_crash_dump) g_dsh_crash_dump(); }
     { void (*ev)(const char *, int) = (void (*)(const char *, int))dlsym(RTLD_DEFAULT, "s2a_dguard_evidence"); if (ev) ev("崩溃", 0); }   // 直连安全网：这局算失败（有证据）；动态取，单测没链 dguard.c
     char bp[160], bl[160]; where(pc, bp, sizeof bp); where(lr, bl, sizeof bl);
     LOG("【红】CRASH 信号 %d 地址 %p pc %s lr %s sp %#llx", sig, si->si_addr, bp, bl, (unsigned long long)uc->uc_mcontext->__ss.__sp);
@@ -292,6 +295,7 @@ void s2a_crash_thread_init(void) {
 }
 void s2a_crash_install(void) {
     int sigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGTRAP, SIGFPE, SIGABRT};   // SIGABRT：die() 与 C# FailFast 都走 abort，要现场
+    g_dsh_crash_dump = (void (*)(void))dlsym(RTLD_DEFAULT, "s2a_dsh_crash_dump");
     for (size_t i = 0; i < sizeof sigs / sizeof *sigs; i++) {
         int e = plat_fault_install(sigs[i], on_crash, PLAT_FAULT_ONSTACK);
         if (e) LOG("【红】崩溃：安装信号 %d 失败 errno=%d", sigs[i], e);

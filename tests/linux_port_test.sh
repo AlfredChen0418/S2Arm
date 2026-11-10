@@ -4,7 +4,8 @@
 #   ① GNU stat 下 tests/srcver_test.sh 全过（审计复现：四条全红）
 #   ② GNU stat 下 src_ids 的键是「路径 大小 修改时间」：同路径改成 100 字节 → 键里大小是 100、重新认包；没变再认 → 命中缓存不再调 nx_unpack
 #   ③ stat 整个读不出 → src_ids 报红、退出非 0、不交出行（不把空键当键）
-#   ⑤ 没有 sysctl：s2a_cores 退出 0，S2A_JOBS = 本机核数（os.cpu_count），重烘路数 = min(核数, ⌊⌊物理内存 GB⌋ × 3/4⌋ × 2/3)
+#   ⑤ 没有 sysctl：s2a_cores 退出 0，S2A_JOBS = 本机核数（os.cpu_count），内存读 /proc/meminfo（这里给一份 MemTotal 32 GB 的假文件，S2A_PROC_MEMINFO 指过去），
+#      重烘路数 = min(核数, ⌊32 × 3/4⌋ × 2/3 = 16)
 #   ⑥ 核数读不出（getconf 坏）：s2a_cores 报红、退出非 0（不导出空的 S2A_JOBS 让改写阶段不限并发）
 set -u; H=$(cd "$(dirname "$0")/.." && pwd); T=$(mktemp -d); trap 'rm -rf "$T"' EXIT; bad=0
 ck() { if eval "$2"; then echo "通 $1"; else echo "不通 $1"; bad=1; fi; }
@@ -62,8 +63,9 @@ ck "③ stat 读不出 → 报红、rc=${r} 非 0、不交出行" '[ $r != 0 ] &
 
 # 钉死同机道数与负载（#1247：cores.sh 从 11-01 起还看 ~/.s2a/lanes 与 1 分钟负载，门禁机读到真实状态时红时绿）：空登记目录 + 负载 0，只验「没有 sysctl 时读得到核数 / 内存」
 mkdir -p "$T/lanes"
-cores() { env -u S2A_JOBS -u S2A_CPU_BAKE -u S2A_MEM_TOTAL_GB -u S2A_MEM_BAKE_GB -u S2A_LANES S2A_LANE_DIR="$T/lanes" S2A_CORES_QUIET=1 PATH="$1:$PATH" bash -c "source '$H/tools/cores.sh'; s2a_cores; echo \"\$? \${S2A_JOBS:-空} \${S2A_CPU_BAKE:-空}\""; }
-W=$("$PY" -c 'import os; n=os.cpu_count(); g=os.sysconf("SC_PAGE_SIZE")*os.sysconf("SC_PHYS_PAGES")//(1<<30)*3//4*2//3; print(f"0 {n} {min(n, max(g, 1))}")')
+printf 'MemTotal:       33554432 kB\nMemFree:         1024 kB\n' > "$T/meminfo"   # 32 GB（Linux /proc/meminfo 格式）
+cores() { env -u S2A_JOBS -u S2A_CPU_BAKE -u S2A_MEM_TOTAL_GB -u S2A_MEM_BAKE_GB -u S2A_LANES S2A_LANE_DIR="$T/lanes" S2A_CORES_QUIET=1 S2A_PROC_MEMINFO="$T/meminfo" PATH="$1:$PATH" bash -c "source '$H/tools/cores.sh'; s2a_cores; echo \"\$? \${S2A_JOBS:-空} \${S2A_CPU_BAKE:-空}\""; }
+W=$("$PY" -c 'import os; n=os.cpu_count(); print(f"0 {n} {min(n, 32*3//4*2//3)}")')
 o=$(cores "$T/gnu" 2>&1)
 ck "⑤ 没有 sysctl：s2a_cores 读数「${o}」= 期望「${W}」" '[ "$o" = "$W" ]'
 o=$(cores "$T/nogetconf" 2> "$T/e6"); r=${o%% *}

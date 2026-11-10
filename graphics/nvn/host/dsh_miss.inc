@@ -102,13 +102,35 @@ enum { DSH_JOB_QUEUED, DSH_JOB_RUNNING, DSH_JOB_OK, DSH_JOB_FAILED, DSH_JOB_CANC
 static dsh_job *g_dsh_job[DSH_PEND_BUCKETS]; static pthread_mutex_t g_dsh_job_mu = PTHREAD_MUTEX_INITIALIZER, g_dsh_comp_mu = PTHREAD_MUTEX_INITIALIZER;
 static void dsh_job_put(dsh_job *j) { if (atomic_fetch_sub(&j->ref, 1) == 1) { free(j->code); free(j); } }
 static int dsh_eager_max(void) { static int v = -1; if (v < 0) { const char *e = getenv("S2A_DSH_EAGER_MAX"); v = e && *e ? atoi(e) : 256; if (v < 0) v = 0; } return v; }
+// 在编的输入（#467 植物大战僵尸 和睦小镇：手机上现编时翻译器在某支着色器上 SIGSEGV，整个 App 闪退，崩的是哪支、输入是什么都没留下）：
+//   开编前只在内存里记下这支的控制段 / 代码区指针和两个落盘路径（两次 snprintf，不碰盘），翻译器返回后清掉。进程崩了时崩溃处理
+//   （runtime/src/crash.c）调 s2a_dsh_crash_dump，用 open / write / close 把它写成兜底目录里的 <键>.inflight.ctl / .code，诊断包（ios/diag.m）带走。
+//   正常路径零写盘（首版每支都写盘再删，iPhone 卡顿代价没量过，已撤）。现编整个在 g_dsh_comp_mu 里，同一时刻只有一支在编，一个槽够
+static struct { const void *ctl, *cd; size_t nctl, ncode; char pc[1200], pd[1200]; } g_dsh_fly;
+static _Atomic int g_dsh_fly_on;
+static void dsh_fly_set(const char *out, const char *k, const void *ctl, size_t nctl, const void *cd, size_t ncode) {
+    if (!out || !*out || !strcmp(out, "/dev/null")) return;
+    snprintf(g_dsh_fly.pc, sizeof g_dsh_fly.pc, "%s/%s.inflight.ctl", out, k); snprintf(g_dsh_fly.pd, sizeof g_dsh_fly.pd, "%s/%s.inflight.code", out, k);
+    g_dsh_fly.ctl = ctl; g_dsh_fly.nctl = nctl; g_dsh_fly.cd = cd; g_dsh_fly.ncode = ncode; atomic_store(&g_dsh_fly_on, 1);
+}
+static void dsh_fly_clear(void) { atomic_store(&g_dsh_fly_on, 0); }
+// 崩溃处理里调：只用异步信号安全的 open / write / close，不分配、不加锁、不格式化
+void s2a_dsh_crash_dump(void) {
+    if (!atomic_load(&g_dsh_fly_on)) return;
+    int fd = open(g_dsh_fly.pc, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd >= 0) { ssize_t w = write(fd, g_dsh_fly.ctl, g_dsh_fly.nctl); (void)w; close(fd); }
+    fd = open(g_dsh_fly.pd, O_WRONLY | O_CREAT | O_TRUNC, 0644); if (fd >= 0) { ssize_t w = write(fd, g_dsh_fly.cd, g_dsh_fly.ncode); (void)w; close(fd); }
+}
 static int dsh_comp_locked(dsh_comp_fn comp, const char *k, int st, const void *cd, size_t ncode, const void *ctl, size_t nctl, const char *out) {
-    pthread_mutex_lock(&g_dsh_comp_mu); int rc = comp(k, st, cd, ncode, ctl, nctl, out); pthread_mutex_unlock(&g_dsh_comp_mu); return rc;
+    pthread_mutex_lock(&g_dsh_comp_mu); dsh_fly_set(out, k, ctl, nctl, cd, ncode);
+    int rc = comp(k, st, cd, ncode, ctl, nctl, out);
+    dsh_fly_clear(); pthread_mutex_unlock(&g_dsh_comp_mu); return rc;
 }
 // 变体要的那份源码（审计 #1646 P1-123：输出类型 / 采样器归约 / 顶点补齐三处原先直接调 comp，不拿 g_dsh_comp_mu，后台预编在编时会并发进 C# 现编入口）：
 //   锁里再查一次「兜底目录里已有本键源码」——锁外查过没有、等锁期间后台预编刚编完同一个键的，直接用，不重编。返回同 comp（0 = 成功）
 static int dsh_comp_src_locked(dsh_comp_fn comp, const char *k, int st, const void *cd, size_t ncode, const void *ctl, size_t nctl, const char *out) {
-    pthread_mutex_lock(&g_dsh_comp_mu); int rc = dsh_have(out, k) ? 0 : comp(k, st, cd, ncode, ctl, nctl, out); pthread_mutex_unlock(&g_dsh_comp_mu); return rc;
+    pthread_mutex_lock(&g_dsh_comp_mu); int rc = 0;
+    if (!dsh_have(out, k)) { dsh_fly_set(out, k, ctl, nctl, cd, ncode); rc = comp(k, st, cd, ncode, ctl, nctl, out); dsh_fly_clear(); }
+    pthread_mutex_unlock(&g_dsh_comp_mu); return rc;
 }
 static void dsh_eager_start(const uint8_t key[8], int st, const uint8_t *cd, uint32_t ncode, const uint8_t *ctl, uint32_t nctl, const char *out) {
     if (atomic_fetch_add(&g_dsh_eager_n, 1) >= (uint64_t)dsh_eager_max()) { atomic_fetch_sub(&g_dsh_eager_n, 1); return; }

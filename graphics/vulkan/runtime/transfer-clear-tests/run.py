@@ -24,7 +24,7 @@ def main():
     p.add_argument('--deps', type=Path, required=True)
     p.add_argument('--out', type=Path, required=True)
     p.add_argument('--source-root', type=Path)
-    p.add_argument('--mutation', choices=['mask','conditional','format','extent','scissor','usage','capability','pending','bound','reset','barrier','clear','color-bits'])
+    p.add_argument('--mutation', choices=['mask','conditional','format','extent','scissor','usage','capability','pending','bound','reset','barrier','clear','color-bits','filtered'])
     a = p.parse_args()
     here = Path(__file__).resolve().parent
     repo = a.source_root or here.parents[3]
@@ -49,12 +49,17 @@ def main():
         'clear':('Gd.Api.CmdClearColorImage(CommandBuffer, image, ImageLayout.General, in value, 1, in range);',''),
         'color-bits':('ClearColorValue value = new(color.Red, color.Green, color.Blue, color.Alpha);','ClearColorValue value = new((uint)color.Red, (uint)color.Green, (uint)color.Blue, (uint)color.Alpha);'),
     }
-    if a.mutation:
+    if a.mutation=='filtered':
+        # #468 negative control: without the left-out view the clear of a filtered target is dropped again.
+        assert clear.count('dstTexture ??= filteredOut;')==1
+        clear=clear.replace('dstTexture ??= filteredOut;','')
+    elif a.mutation:
         before,after=controls[a.mutation]
         assert (transfer+reset).count(before)==1
         transfer,reset=transfer.replace(before,after),reset.replace(before,after)
     diagnostic=block(source,'private void LogTransferClearFallback(') if 'private void LogTransferClearFallback(' in source else ''
-    text=(here/'Fixture.cs.in').read_text().replace('// CLEAR_METHOD',clear).replace('// TRANSFER_METHOD',transfer).replace('// DIAGNOSTIC_METHOD',diagnostic).replace('/* FLUSH_RESET */',reset)
+    component=block(source,'private static ComponentType ComponentTypeOf(TextureView view)') if 'private static ComponentType ComponentTypeOf(TextureView view)' in source else ''
+    text=(here/'Fixture.cs.in').read_text().replace('// COMPONENT_TYPE_METHOD',component).replace('// CLEAR_METHOD',clear).replace('// TRANSFER_METHOD',transfer).replace('// DIAGNOSTIC_METHOD',diagnostic).replace('/* FLUSH_RESET */',reset)
     a.out.mkdir(parents=True,exist_ok=False)
     (a.out/'Program.cs').write_text(text)
     refs=''.join(f'<Reference Include="{a.deps.resolve()/ (n+".dll")}" />' for n in ['Ryujinx.Graphics.GAL','Silk.NET.Vulkan','Silk.NET.Core'])

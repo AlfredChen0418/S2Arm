@@ -7,10 +7,12 @@ using Silk.NET.Vulkan;
 using VkFormat = Silk.NET.Vulkan.Format;
 using GalFormat = Ryujinx.Graphics.GAL.Format;
 namespace Ryujinx.Graphics.Vulkan;
-static class Record { public static readonly List<string> Calls = new(); public static float[] Color = [.25f,.5f,.75f,1f]; public static void Add(string s) => Calls.Add(s); }
-enum ComponentType { Float }
+static class Record { public static readonly List<string> Calls = new(); public static float[] Color = [.25f,.5f,.75f,1f]; public static void Add(string s) => Calls.Add(s);
+    public static TextureView HelperDst; public static int HelperWidth, HelperHeight; public static ComponentType HelperType; }
+enum ComponentType { Float, SignedInteger, UnsignedInteger }
 sealed class Info { public Target Target = Target.Texture2D; public int Samples = 1, Width = 32, Height = 32; public GalFormat Format = GalFormat.R8G8B8A8Unorm; }
-sealed class TextureStorage { public VkFormat VkFormat = VkFormat.R8G8B8A8Unorm; public Info Info = new(); public ImageUsageFlags UsageFlags = ImageUsageFlags.TransferDstBit; }
+sealed class TextureStorage { public VkFormat VkFormat = VkFormat.R8G8B8A8Unorm; public Info Info = new(); public ImageUsageFlags UsageFlags = ImageUsageFlags.TransferDstBit;
+    public void RecordModification(AccessFlags access, PipelineStageFlags stage) { if (access != AccessFlags.TransferWriteBit || stage != PipelineStageFlags.TransferBit) throw new Exception("modification access/stage"); Record.Add("record-write"); } }
 sealed class TextureView
 {
     public bool Valid = true;
@@ -39,7 +41,7 @@ sealed class FramebufferParams
 }
 sealed class FormatCapabilities { public bool Transfer = true; public bool OptimalFormatSupports(FormatFeatureFlags f, GalFormat format) => Transfer && f==FormatFeatureFlags.TransferDstBit; }
 sealed class Barriers { public void Flush(int cb,bool active,object holder,object end) { if(active)throw new Exception("active barrier flush");Record.Add("flush-barriers"); } }
-sealed class Helper { public void Clear(VulkanRenderer gd,TextureView dst,ReadOnlySpan<float> color,uint mask,int w,int h,ComponentType type,Rectangle<int> scissor) => Record.Add("helper"); }
+sealed class Helper { public void Clear(VulkanRenderer gd,TextureView dst,ReadOnlySpan<float> color,uint mask,int w,int h,ComponentType type,Rectangle<int> scissor) { Record.HelperDst=dst;Record.HelperWidth=w;Record.HelperHeight=h;Record.HelperType=type;Record.Add("helper"); } }
 sealed class VulkanRenderer
 {
     public bool IsQualcommProprietary=true,TransferFullClears=true; public long TransferFullClearCount;
@@ -65,6 +67,10 @@ sealed class PipelineFull
     public void FlushCommandsImpl(){ Record.Add("submit"); /* FLUSH_RESET */ AutoFlush.Pending=false; }
     public void EndRenderPass()=>Record.Add("end-pass");
     public void ClearRenderTargetColor(int index,int layer,int count,ColorF color)=>Record.Add("attachment-clear");
+    // A colour target left out of the framebuffer because its write mask is 0 (PipelineBase.ZeroMaskFilteredColorView).
+    public TextureView FilteredView;
+    private TextureView ZeroMaskFilteredColorView(int index)=>FilteredView;
+    // COMPONENT_TYPE_METHOD
     // CLEAR_METHOD
     // TRANSFER_METHOD
     // DIAGNOSTIC_METHOD
@@ -79,7 +85,7 @@ static class Proof
         foreach(VkFormat format in new[]{VkFormat.R8G8B8A8Unorm,VkFormat.B8G8R8A8Unorm,VkFormat.R8G8B8A8Srgb,VkFormat.R16G16B16A16Sfloat,
             VkFormat.B10G11R11UfloatPack32,VkFormat.R8Unorm,VkFormat.R16G16SNorm,VkFormat.R8Uint}){
             var p=new PipelineFull();p.FramebufferParams.Texture.VkFormat=format;p.FramebufferParams.Texture.Storage.VkFormat=format;
-            Record.Calls.Clear();Draw(p);Check(string.Join('/',Record.Calls)=="end-pass/flush-barriers/retain/barrier-before/clear/barrier-after","eligible ordered clear");Check(p.Gd.TransferFullClearCount==1,"count actual successful path");
+            Record.Calls.Clear();Draw(p);Check(string.Join('/',Record.Calls)=="end-pass/flush-barriers/retain/barrier-before/clear/record-write/barrier-after","eligible ordered clear");Check(p.Gd.TransferFullClearCount==1,"count actual successful path");
         }
         Action<PipelineFull>[] rejects={
             p=>p.Gd.TransferFullClears=false,p=>p._activeConditionalRender=new(),p=>p.FramebufferParams.Texture.Valid=false,
@@ -95,6 +101,23 @@ static class Proof
         foreach(var reject in rejects){var p=new PipelineFull();reject(p);Record.Calls.Clear();Draw(p);Check(!Record.Calls.Contains("clear"),"ineligible must keep old path");Check(Record.Calls.Contains("helper"),"old compatibility path retained");}
         foreach(var args in new[]{(1,1,15u),(0,2,15u),(0,1,7u)}){var p=new PipelineFull();Record.Calls.Clear();Draw(p,args.Item1,args.Item2,args.Item3);Check(Record.Calls.SequenceEqual(new[]{"helper"}),"layer/mask fallback");}
         var other=new PipelineFull();other.Gd.IsQualcommProprietary=false;Record.Calls.Clear();Draw(other);Check(Record.Calls.SequenceEqual(new[]{"attachment-clear"}),"other vendors unchanged");
+        // #468: a colour target left out of the framebuffer (zero write mask, PipelineBase.ZeroMaskFilteredColorView) is still cleared.
+        // Partial-mask clears use the clear shader on the left-out view, with the view's own size and component type.
+        {var f=new PipelineFull();f.Gd.IsQualcommProprietary=false;f.FramebufferParams.Texture=null;f.FilteredView=new TextureView();f.FilteredView.Info.Width=48;f.FilteredView.Info.Height=24;
+            Record.Calls.Clear();Record.HelperDst=null;Draw(f,0,1,7);Check(Record.Calls.SequenceEqual(new[]{"helper"}),"left-out target, partial mask: clear shader");
+            Check(ReferenceEquals(Record.HelperDst,f.FilteredView)&&Record.HelperWidth==48&&Record.HelperHeight==24&&Record.HelperType==ComponentType.Float,"left-out target: view, its own size, float type");}
+        foreach(var kind in new[]{(GalFormat.R8Uint,ComponentType.UnsignedInteger),(GalFormat.R8Sint,ComponentType.SignedInteger)}){var f=new PipelineFull();f.Gd.IsQualcommProprietary=false;f.FramebufferParams.Texture=null;f.FilteredView=new TextureView();f.FilteredView.Info.Format=kind.Item1;
+            Record.Calls.Clear();Draw(f,0,1,7);Check(Record.Calls.SequenceEqual(new[]{"helper"})&&Record.HelperType==kind.Item2,"left-out integer target keeps its component type");}
+        // Full-mask clears of a left-out target go to PipelineBase.ClearRenderTargetColor, which re-attaches the target (tested in zero-mask-attachment-tests).
+        {var f=new PipelineFull();f.Gd.IsQualcommProprietary=false;f.FramebufferParams.Texture=null;f.FilteredView=new TextureView();Record.Calls.Clear();Draw(f,2,3);
+            Check(Record.Calls.SequenceEqual(new[]{"attachment-clear"}),"left-out target, full mask: attachment clear keeps layers");}
+        // On the clear-shader-only (Adreno) branch a left-out view is used the same way and never takes the transfer path.
+        {var f=new PipelineFull();f.FramebufferParams.Texture=null;f.FilteredView=new TextureView();Record.Calls.Clear();Record.HelperDst=null;Draw(f);
+            Check(Record.Calls.SequenceEqual(new[]{"helper"})&&ReferenceEquals(Record.HelperDst,f.FilteredView),"left-out target never takes the transfer path");}
+        // Attached targets are unchanged: framebuffer size and the framebuffer's component type.
+        {var f=new PipelineFull();f.FilteredView=new TextureView();f.FilteredView.Info.Width=48;f.FramebufferParams.Width=40;f.FramebufferParams.Height=20;Record.Calls.Clear();Record.HelperDst=null;Draw(f,0,1,7);
+            Check(Record.Calls.SequenceEqual(new[]{"helper"})&&ReferenceEquals(Record.HelperDst,f.FramebufferParams.Texture)&&Record.HelperWidth==40&&Record.HelperHeight==20,"attached target wins over a left-out view and keeps the framebuffer size");}
+        var nothing=new PipelineFull();nothing.FramebufferParams.Texture=null;Record.Calls.Clear();Draw(nothing);Check(Record.Calls.Count==0,"slot neither attached nor left out stays a no-op");
         var pending=new PipelineFull();pending.AutoFlush.Pending=true;Record.Calls.Clear();Draw(pending);Check(Record.Calls[0]=="submit"&&Record.Calls.Contains("clear"),"pending-query progress before clear");
         var batch=new PipelineFull();Record.Calls.Clear();for(int i=0;i<130;i++)Draw(batch);Check(Record.Calls.Count(x=>x=="submit")==2,"bounded recording with reset");Check(batch.Gd.TransferFullClearCount==130,"no clear dropped");
         var invalid=new PipelineFull();invalid.FramebufferParams=null;Record.Calls.Clear();Draw(invalid);Check(Record.Calls.Count==0,"no framebuffer remains no-op");

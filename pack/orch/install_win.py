@@ -35,8 +35,8 @@ def plumesign_path(given=None):
     return None
 
 
-def mux_devices():
-    """本机设备服务列出的设备 → [(UDID, 连接方式, 设备编号)]"""
+def _mux_list():
+    """本机设备服务（usbmux）ListDevices 的原始设备表"""
     if os.name == 'nt': s = socket.create_connection(('127.0.0.1', 27015), 5)
     else: s = socket.socket(socket.AF_UNIX); s.settimeout(5); s.connect('/var/run/usbmuxd')
     with s:
@@ -49,10 +49,29 @@ def mux_devices():
             c = s.recv(n - len(b))
             if not c: break
             b += c
+    return plistlib.loads(b).get('DeviceList', [])
+
+
+def mux_devices():
+    """本机设备服务列出的设备 → [(UDID, 连接方式, 设备编号)]"""
     out = []
-    for d in plistlib.loads(b).get('DeviceList', []):
+    for d in _mux_list():
         pr = d.get('Properties', {}); out.append((pr.get('SerialNumber'), pr.get('ConnectionType'), d.get('DeviceID')))
     return out
+
+
+APPLE_PID_IPAD = 0x12AB   # 苹果 USB 产品号：iPad 0x12AB（iPhone 0x12A8，本机实测两台 iPhone 都是 0x12A8）
+
+
+def device_kind(udid):
+    """这台用数据线连着的设备是不是 iPad（#487：入口写「装到 iPad」）→ "ipad" / "iphone"；读不到产品号（只在 Wi-Fi 上、设备服务连不上）→ ""。
+    只认 USB 产品号正好是 iPad 的才算 iPad，其余照旧按 iPhone 写"""
+    if not udid:
+        return ""
+    pids = {d.get('Properties', {}).get('ProductID') for d in _mux_list()
+            if d.get('Properties', {}).get('SerialNumber') == udid and d.get('Properties', {}).get('ConnectionType') == 'USB'}
+    pids.discard(None)
+    return "" if not pids else "ipad" if APPLE_PID_IPAD in pids else "iphone"
 
 
 def device_id(udid, devs):

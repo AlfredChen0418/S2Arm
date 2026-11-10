@@ -33,9 +33,10 @@ extern "C" {
 
 #define S2A_FL_CAP 32768u   /* 保留最近 32768 帧 */
 
-// v4 记录 = 32B：u64 ts，u32 fence_wait_us/fence_n/acquire_us/present_us/gpu_us/gpu_seq。
-// acquire/present 的 UINT32_MAX 表示未采集或饱和，不得解释为零；
-// gpu_us/gpu_seq 的 UINT32_MAX 表示无新结算帧（不写 0，对齐 iOS gpu_us 空口径）。
+// v5 记录 = 40B：u64 ts，u32 fence_wait_us/fence_n/acquire_us/present_us/gpu_us/gpu_seq/
+// disp_us/disp_seq。acquire/present 的 UINT32_MAX 表示未采集或饱和，不得解释为零；
+// gpu_us/gpu_seq 与 disp_us/disp_seq 的 UINT32_MAX 表示无新结算/确认（不写 0，
+// 对齐 iOS gpu_us / disp_us 空口径）。
 struct s2a_fl_rec {
     uint64_t ts;            /* 成功 present 返回点的 CLOCK_BOOTTIME 微秒戳 */
     uint32_t fence_wait_us; /* 距上一条 present 之间 fence 等待总时长（µs，封顶 UINT32_MAX） */
@@ -44,8 +45,10 @@ struct s2a_fl_rec {
     uint32_t present_us;     /* 本帧 QueuePresent CPU 墙钟 us */
     uint32_t gpu_us;         /* 最新结算帧 GPU TOP→BOTTOM 忙时 us（同一结算帧只报一次） */
     uint32_t gpu_seq;        /* 该读数对应的结算帧序号（gpu_read_frame 的 frame_seq） */
+    uint32_t disp_us;        /* 最新确认上屏间隔 us（actualPresentTime 相邻帧差，同一对只报一次） */
+    uint32_t disp_seq;       /* 该间隔所属的较新帧号（nvn_vk_dt_last_gap 的 frame） */
 };
-#define S2A_FL_REC_BYTES 32u
+#define S2A_FL_REC_BYTES 40u
 
 struct s2a_frame_log {
     struct s2a_fl_rec rec[S2A_FL_CAP]; /* 环形：最近 kept 个成功 present 的记录 */
