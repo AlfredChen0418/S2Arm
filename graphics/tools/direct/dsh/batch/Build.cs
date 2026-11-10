@@ -302,7 +302,7 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
         //   NJ×2 路：一半在等 Metal 闸时另一半照常翻译。配对的顶点着色器读片元的 MSL（vs_pad）：放后一波
         var po = new ParallelOptions { MaxDegreeOfParallelism = NJ * 2 };
         var ms = misses.OrderBy(x => x, StringComparer.Ordinal).ToList(); var miss = new HashSet<string>(ms, StringComparer.Ordinal);
-        var tk = new Ticker("直连库·翻译与收尾", Keys.Count);
+        using var tk = new Ticker("直连库·翻译与收尾", Keys.Count);
         void Both(string k)
         {
             if (miss.Contains(k)) One(k);
@@ -618,7 +618,7 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
         int Mb(long n) => (int)Math.Max(1, (n + (1 << 20) - 1) >> 20);
         var jobs = reuse.Values.Select(h => (Run: (Action)(() => Reused(h, false)), Mb: 0)).Concat(vinReuse.Values.Select(h => (Run: (Action)(() => Reused(h, true)), Mb: 0)))
             .Concat(units.Select(b => (Run: (Action)(() => OneBatch(b)), Mb: Mb(b.Sum(k => plan.Len[k]))))).Concat(vinPlanOrder.Select(b => (Run: (Action)(() => VinOne(b)), Mb: Mb(b.Sum(k => Unity.PyLen(vinSrc[k])))))).ToList();
-        var tk = new Ticker("直连库·编批库（MB）", jobs.Sum(j => j.Mb));
+        using var tk = new Ticker("直连库·编批库（MB）", jobs.Sum(j => j.Mb));
         Parallel.ForEach(InOrder(jobs), new ParallelOptions { MaxDegreeOfParallelism = NJ * 2 }, j => { j.Run(); tk.Step(j.Mb); });   // 大的先编；拼源码与回填在多出的那些线程里做，Metal 不断粮
         var vinOrder = vinPlanOrder;
         if (!failed.IsEmpty)
@@ -866,10 +866,15 @@ sealed class TextStore : IReadOnlyDictionary<string, string>
 }
 
 /// <summary>出包进度（格式同 tools/progress.py：时刻\t阶段\t已完成\t总数，S2A_PROGRESS 指的文件，1 秒限频，最后一项必写）</summary>
-sealed class Ticker
+sealed class Ticker : IDisposable
 {
     readonly string stage, path; readonly int total; int done; long last;
-    public Ticker(string stage, int total) { this.stage = stage; this.total = Math.Max(total, 0); path = Environment.GetEnvironmentVariable("S2A_PROGRESS"); Write(true); }
+    bool disposed;
+    public Ticker(string stage, int total)
+    {
+        this.stage = stage; this.total = Math.Max(total, 0); path = Environment.GetEnvironmentVariable("S2A_PROGRESS");
+        Write(true); PublishActivity(false);
+    }
     public void Step(int n = 1) { int d = Interlocked.Add(ref done, n); Write(d >= total); }
     void Write(bool force)
     {
@@ -877,9 +882,29 @@ sealed class Ticker
         long now = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
         lock (this)
         {
+            if (disposed) return;
             if (!force && now - last < 1) return;
             last = now; File.AppendAllText(path, $"{now}\t{stage}\t{Math.Min(done, total)}\t{total}\n");
         }
+    }
+    void PublishActivity(bool ending)
+    {
+        if (string.IsNullOrEmpty(path) || Build.Jobs <= 0) return;
+        lock (this)
+        {
+            // Two columns: old four-column readers ignore this optional activity record.
+            // No timer runs in the build tree: periodic observation belongs to the parent worker,
+            // so an idle/deadlocked child cannot keep nostall alive by writing its own heartbeat.
+            var data = new { schema = 1, pid = Environment.ProcessId, stage, target = Build.Jobs,
+                pool = Build.Jobs * 2, state = ending ? "ended" : "active" };
+            try { File.AppendAllText(path, "#dsh_activity\t" + System.Text.Json.JsonSerializer.Serialize(data) + "\n"); }
+            catch (IOException) { }   // Optional telemetry must not change compilation results.
+            catch (UnauthorizedAccessException) { }
+        }
+    }
+    public void Dispose()
+    {
+        lock (this) { if (disposed) return; disposed = true; PublishActivity(true); }
     }
 }
 

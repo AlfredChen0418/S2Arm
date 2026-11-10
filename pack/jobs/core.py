@@ -22,6 +22,7 @@ import sys
 import threading
 import time
 import uuid
+from progress_activity import BatchActivity
 from errors import Failure, explain, failure_summary, last_output_lines, recovery
 
 
@@ -498,20 +499,28 @@ class Context:
         出包时几个计数器交替写（刷新各阶段 7/10、直连库 2/6、编库 n/23502、通用翻译 n/45455…），只按最后一行发会来回跳（10-26 维护者：
         「进行中的环节能看到着色器总数和编译数量的实时变化最好」）：每个计数器各记「已完成 / 总数 / 起止时刻」，
         counters = 还没做完的逐项计数（总数 ≥ 20，同 tools/progress.sh 的阶段计数口径），各带每秒速度；done / total 取最近一次更新的逐项计数，没有就取最后一行"""
+        activity = getattr(self, "_batch_activity", None)
+        if activity is None:
+            activity = self._batch_activity = BatchActivity(engine=self.engine, alive=pid_alive)
+        previous = activity.data
         try:
             with open(path, "rb") as f:
                 f.seek(pos)
                 chunk = f.read()
         except OSError:
+            activity.clear()
+            self.clear_stage_activity(previous)
             return pos
         end = chunk.rfind(b"\n")
         if end < 0:
+            self.stage_activity()
             return pos
         seen = getattr(self, "_counters", None)
         if seen is None:
             seen = self._counters = {}
         last, fine = None, None
         for line in chunk[:end].decode(errors="replace").split("\n"):
+            activity.accept(line)
             f = line.split("\t")
             if len(f) != 4 or not f[2].isdigit() or not f[3].isdigit() or int(f[3]) <= 0:
                 continue
@@ -524,22 +533,66 @@ class Context:
             if c is None or total != c["total"] or done < c["done"]:   # 新计数器 / 同名计数器重新开始：速度从这一行重算
                 c = seen[name] = dict(name=name, total=total, t0=t, d0=done)
             c.update(done=done, t=t)
+            if not hasattr(self, "_activity_counters"):
+                self._activity_counters = {}
+            self._activity_counters[name] = c
             last = c
             if total >= 20 or name.startswith("直连库·"):
                 fine = c
         if last is not None:
             main = fine or last
-            counters = []
-            for c in seen.values():
-                if (c["total"] < 20 and not c["name"].startswith("直连库·")) or c["done"] >= c["total"]:
-                    continue
-                rate = (c["done"] - c["d0"]) / (c["t"] - c["t0"]) if c["t"] > c["t0"] and c["done"] > c["d0"] else None
-                counters.append(dict(name=c["name"], done=c["done"], total=c["total"], rate=round(rate, 3) if rate else None))
-            self.emit(message=f"{main['name']} {main['done']}/{main['total']}", done=main["done"], total=main["total"], unit="项", counters=counters)
+            self.emit_stage_counter(main)
             direct_space_recheck(self, seen)
+        else:
+            if previous and activity.data is None:
+                self.clear_stage_activity(previous)
+            else:
+                self.stage_activity()
         return pos + end + 1
 
+    def emit_stage_counter(self, main, pulse=False):
+        activity = getattr(self, "_batch_activity", None)
+        data = activity.snapshot() if activity else None
+        active = data is not None and data["stage"] == main["name"]
+        counters = []
+        for c in getattr(self, "_counters", {}).values():
+            if (c["total"] < 20 and not c["name"].startswith("直连库·")) or c["done"] >= c["total"]:
+                continue
+            # Only elapsed time advances during a long batch, never its MB numerator.
+            t = time.time() if pulse and c["name"] == main["name"] else c["t"]
+            rate = (c["done"] - c["d0"]) / (t - c["t0"]) if t > c["t0"] and c["done"] > c["d0"] else None
+            counters.append(dict(name=c["name"], done=c["done"], total=c["total"], rate=round(rate, 3) if rate else None))
+        message = f"{main['name']} {main['done']}/{main['total']}"
+        if active:
+            message += "（" + activity.describe(data) + "）"
+            activity.sent()
+        self.emit(message=message, done=main["done"], total=main["total"], unit="项", counters=counters,
+                  **({"activity": data} if active else {}))
 
+    def stage_activity(self):
+        activity = getattr(self, "_batch_activity", None)
+        if activity is None or not activity.due():
+            return
+        previous = activity.data
+        data = activity.snapshot()
+        if data is None:
+            self.clear_stage_activity(previous)
+            return
+        main = getattr(self, "_activity_counters", {}).get(data["stage"])
+        if main is not None:
+            self.emit_stage_counter(main, pulse=True)
+        elif main is None:  # Cache-only batches have no MB denominator; report activity without inventing work.
+            self.emit(message=data["stage"] + "（" + activity.describe(data) + "）", activity=data)
+            activity.sent()
+
+    def clear_stage_activity(self, previous):
+        if previous is None:
+            return
+        main = getattr(self, "_activity_counters", {}).get(previous["stage"])
+        if main is not None:
+            self.emit_stage_counter(main)
+        else:
+            self.emit(message=previous["stage"])
 
     def progress(self, done, total):
         self.check()
@@ -777,6 +830,9 @@ class Context:
         limit = timeout if timeout is not None else self.r.get("stageTimeoutSeconds")
         deadline = time.monotonic() + float(limit) if limit else None
         run_env = env or self.env()
+        self._activity_counters = {}  # A cache-only phase must not reuse a previous command's MB denominator.
+        if getattr(self, "_batch_activity", None):
+            self._batch_activity.clear()
         with self.last_log.open("a", encoding="utf-8") as out:
             if run_env.get("S2A_DEVELOPER_DIR"):
                 out.write("S2Arm frontend toolchain: DEVELOPER_DIR=" + run_env["DEVELOPER_DIR"] + "\n")
@@ -885,6 +941,8 @@ class Context:
                 self.reap(p, out)   # 异常 / 取消 / 超时路径（正常路径上面已收过，这里收不到东西）
                 p.stdout.close()
                 self.children.discard(p)
+                if getattr(self, "_batch_activity", None):
+                    self._batch_activity.clear()
         return self.last_log
 
     def finish(self, state, message, result=None):
