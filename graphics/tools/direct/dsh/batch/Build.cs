@@ -297,7 +297,16 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
         var po = new ParallelOptions { MaxDegreeOfParallelism = NJ * 2 };
         var ms = misses.OrderBy(x => x, StringComparer.Ordinal).ToList(); var miss = new HashSet<string>(ms, StringComparer.Ordinal);
         var tk = new Ticker("直连库·翻译与收尾", Keys.Count);
+        // 配对顶点只等它自己的片元收尾（KI-001）：原先第二波等整个第一波（含无关的计算 / 几何 / 曲面键）全部收尾才开始，第一波的长尾里多数线程空等。
+        //   顶点只在缓存未命中、要现翻时读片元 MSL（VsPadCore → MAC.Text）；片元收尾把 _b.metal 写进 Side 后才放行。
+        //   不会死锁：InOrder 一次领一个、第一波的键全排在配对顶点之前，配对顶点开始等时它要等的片元都已被某个线程领走，而第一波的键从不等别人
+        var done = Keys.Where(k => !Pairs.ContainsKey(k)).ToDictionary(k => k, _ => new ManualResetEventSlim(false), StringComparer.Ordinal);
         void Both(string k)
+        {
+            if (miss.Contains(k) && Pairs.TryGetValue(k, out var ps)) foreach (var p in ps) if (done.TryGetValue(p, out var ev)) ev.Wait();
+            try { Both1(k); } finally { if (done.TryGetValue(k, out var ev)) ev.Set(); }
+        }
+        void Both1(string k)
         {
             if (miss.Contains(k)) One(k);
             else if (hits.ContainsKey(k))
@@ -309,8 +318,8 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
             var f = FinishOne(k); if (f.St == "ok" && f.Refl != null) FinFlags[k] = SumFlags(f.Refl);
             Fin[k] = (f.Key, f.St, f.Why, null); BOM.TryRemove(k, out _); VarSrc.TryRemove(k, out _); tk.Step();
         }   // 收尾后翻译产物即放（之后只读 Side / VarSrc / Defer；配对顶点读片元从 Side 读）：原先全部键的产物留到进程结束，异度3 2.7 GB
-        Parallel.ForEach(InOrder(Keys.Where(k => !Pairs.ContainsKey(k))), po, Both);
-        Parallel.ForEach(InOrder(Keys.Where(k => Pairs.ContainsKey(k))), po, Both);
+        Parallel.ForEach(InOrder(Keys.Where(k => !Pairs.ContainsKey(k)).Concat(Keys.Where(k => Pairs.ContainsKey(k)))), po, Both);
+        foreach (var ev in done.Values) ev.Dispose();
         foreach (var k in ms)
         {
             var why = XlSt[k].Why;
