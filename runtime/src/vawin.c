@@ -70,6 +70,14 @@ int s2a_guest_file_wanted4(const char *e, uint64_t pool, uint64_t room, uint64_t
     if (seen) return seen + margin > room;
     return pool + host + margin > room;
 }
+// Mac（#306）：只在「池本身大于 物理内存 − 预留」时自动开，不再按宿主开销估计 / 实测峰值放大。文件后备在 Mac 上有硬代价：macOS 对脏文件页有上限（16 GB M1 Pro 实测约 2.2 GB，
+//   无可调 sysctl；MAP_NOCACHE / F_NOCACHE / MADV_RANDOM 都去不掉），过线后游戏线程每写缺一页都要等内核写回一页——开机 / 读档停 40–400 s、397 s 写 31 GB 进 SSD。
+//   16 GB 跑 9 GiB 池的款（剩余 10240 MB）因此判关、走匿名内存：同机同存档关文件后备无长停顿，稳态压缩器约 5.6 GB。8 GB 机器（剩余 2048 MB）池装不下照旧开。
+//   不看实测峰值：它含文件里已落块的客体字节（懒清零后释放页不打洞，只涨不降），开过一次就会一直判开
+int s2a_guest_file_wanted_mac(const char *e, uint64_t pool, uint64_t room) {
+    if (e && *e) return strcmp(e, "0") != 0;
+    return room && pool > room;
+}
 int s2a_guest_file_wanted3(const char *e, uint64_t pool, uint64_t room, uint64_t seen, uint64_t host, uint64_t margin) {
     if (e && *e) return strcmp(e, "0") != 0;
     if (!room) return 0;
@@ -139,7 +147,7 @@ static void guest_file_attach_(void) {
     room = os_proc_available_memory();   // 预热进程（ActivePrewarm）此刻的上限可能是后台档，偏小只会多开、不会漏开
 #else
     // Mac 没有单进程上限，但物理内存小时匿名内存会压进压缩器抖动：16 GB 机器跑 9 GB 池的款，压缩器占 11 GB、WindowServer 被看门狗杀、游戏约 1 帧 / 秒（#41 / #68）。
-    //   按物理内存减系统与其它 App 的预留当「剩余」：16 GB 跑 Switch 2 款开文件后备，大内存机器判装得下、行为不变
+    //   按物理内存减系统与其它 App 的预留当「剩余」，只在池本身装不下时开（s2a_guest_file_wanted_mac，#306）：16 GB 跑 Switch 2 款保持匿名，8 GB 机器开
     { uint64_t ph = 0; size_t phn = sizeof ph; uint64_t reserve = env_mb("S2A_GUEST_FILE_MAC_RESERVE_MB", 6144); if (!sysctlbyname("hw.memsize", &ph, &phn, NULL, 0) && ph > reserve) room = ph - reserve; }
 #endif
     // 宿主开销估计缺省 2560 MB（DOOM Eternal 实测约 2258 MB，往上取整）、余量 512 MB；S2A_GUEST_FILE_HOST_MB / S2A_GUEST_FILE_MARGIN_MB 可改
@@ -147,9 +155,6 @@ static void guest_file_attach_(void) {
     uint64_t host = env_mb("S2A_GUEST_FILE_HOST_MB", 2048), margin = env_mb("S2A_GUEST_FILE_MARGIN_MB", 512), seen = s2a_guest_mem_seen();
 #ifdef __IPHONE_OS_VERSION_MIN_REQUIRED
     int died = room && s2a_guest_run_died();
-#else
-    int died = 0;   // Mac 不按内存杀进程
-#endif
     int on = s2a_guest_file_wanted4(e, pool, room, seen, host, margin, died);
     const char *why = e && *e ? "按 S2A_GUEST_FILE 显式设定" : !room ? "自动：不知道单进程上限（Mac 会换页），缺省关"
                     : pool > room ? "自动：池本身大于剩余，装不下"
@@ -157,6 +162,13 @@ static void guest_file_attach_(void) {
                     : seen == UINT64_MAX ? "自动：本款实测峰值记录读不出（坏记录），保守开"
                     : seen ? (on ? "自动：本机本款实测峰值 + 余量大于剩余，装不下" : "自动：本机本款实测峰值 + 余量不大于剩余，装得下、保持匿名内存")
                     : (on ? "自动：没有本款实测，池 + 宿主开销估计 + 余量大于剩余，装不下" : "自动：没有本款实测，池 + 宿主开销估计 + 余量不大于剩余，装得下、保持匿名内存");
+#else
+    (void)margin;   // Mac 只比池与剩余（#306）
+    int on = s2a_guest_file_wanted_mac(e, pool, room);
+    const char *why = e && *e ? "按 S2A_GUEST_FILE 显式设定" : !room ? "自动：读不到物理内存，缺省关"
+                    : on ? "自动：池本身大于物理内存 − 预留，装不下"
+                    : "自动：Mac 池装得下物理内存 − 预留，保持匿名内存（文件后备撞脏文件页上限会长停顿，#306）";
+#endif
     LOG("客体内存文件后备：%s——%s；本款应用内存池 %llu MB、离单进程内存上限还剩 %llu MB%s、本机本款实测峰值 %llu MB（0 = 没有）、宿主开销估计 %llu MB%s", on ? "开" : "关", why,
         (unsigned long long)(pool >> 20), (unsigned long long)(room >> 20), room ? "" : "（0 = 未知）", (unsigned long long)(seen == UINT64_MAX ? 0 : seen >> 20), (unsigned long long)(host >> 20), s2a_process_prewarmed() ? "；预热进程" : "");
     if (!on) return;

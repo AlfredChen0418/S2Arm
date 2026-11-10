@@ -11,6 +11,7 @@ int s2a_guest_file_wanted2(const char *e, uint64_t pool, uint64_t room, uint64_t
 int s2a_guest_file_wanted3(const char *e, uint64_t pool, uint64_t room, uint64_t seen, uint64_t host, uint64_t margin);
 uint64_t s2a_guest_mem_seen(void); void s2a_guest_mem_note(uint64_t footprint);
 int s2a_guest_file_wanted4(const char *e, uint64_t pool, uint64_t room, uint64_t seen, uint64_t host, uint64_t margin, int died); int s2a_guest_run_died(void); void s2a_guest_run_mark(int running);
+int s2a_guest_file_wanted_mac(const char *e, uint64_t pool, uint64_t room);
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
@@ -71,6 +72,15 @@ int main(void) {
         CHECK(b0 == UINT64_MAX && on0 == 1 && b1 == UINT64_MAX && b2 == 0, "㉙ 坏记录（乱码 / 0）读出 UINT64_MAX、判开；没有记录读出 0（得 %d %d %d %d）", b0 == UINT64_MAX, on0, b1 == UINT64_MAX, (int)b2);
         unsetenv("S2A_GUEST_MEM_PEAK");
     }
+    // #306 Mac 判据（s2a_guest_file_wanted_mac）：期望按规则手写——设了按设的；room 0 关；只有池本身 > 剩余（物理内存 − 预留 6144 MB）才开，不加宿主估计、不看实测
+    const uint64_t M16 = (16384 - 6144) * MB, M8 = (8192 - 6144) * MB, M24 = (24576 - 6144) * MB;
+    CHECK(s2a_guest_file_wanted_mac(NULL, S2, M16) == 0, "㉚ 16 GB Mac、池 9216 MB ≤ 剩余 10240 MB：关（旧判据加宿主估计 2048 + 余量 512 判开，撞脏文件页上限长停顿 #306）");
+    CHECK(s2a_guest_file_wanted4(NULL, S2, M16, 0, H2, G, 0) == 1, "㉛ 对照：同参数旧判据（wanted4）判开");
+    CHECK(s2a_guest_file_wanted_mac(NULL, S2, M8) == 1 && s2a_guest_file_wanted_mac(NULL, S1, M8) == 1, "㉜ 8 GB Mac、剩余 2048 MB：池 9216 / 3285 MB 都装不下：开");
+    CHECK(s2a_guest_file_wanted_mac(NULL, S2, M24) == 0 && s2a_guest_file_wanted_mac(NULL, S1, M16) == 0, "㉝ 24 GB 跑 Switch 2 款、16 GB 跑 Switch 款：关");
+    CHECK(s2a_guest_file_wanted_mac(NULL, S2, S2) == 0 && s2a_guest_file_wanted_mac(NULL, S2, S2 - 1) == 1, "㉞ 边界：池 = 剩余 关，剩余少 1 字节 开");
+    CHECK(s2a_guest_file_wanted_mac("1", S1, M24) == 1 && s2a_guest_file_wanted_mac("0", S2, M8) == 0 && s2a_guest_file_wanted_mac("", S2, M16) == 0, "㉟ 显式 1 / 0 照设，空串同没设");
+    CHECK(s2a_guest_file_wanted_mac(NULL, S2, 0) == 0, "㊱ 读不到物理内存（room 0）：关");
     printf("%s t_guest_file_auto：%d 项不符\n", bad ? "✗" : "✓", bad);
     return bad != 0;
 }
