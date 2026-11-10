@@ -15,7 +15,7 @@
   ⑫ Windows 一键出包的运行时 GLSLC 门（oneclick_win.glslc_need / glslc_gate；11-05 普查 c1105_r4 GRID Autosport 跑到直连库才报「没有 Mac 宿主」rc=1）：
      替身判据（同 glslc_offline 主流程）——需要且认出源码 → 要；需要但认不出源码（运行时现编）→ 不要；不需要 → 不要（且不去找源码）。
      门：要 → 不退回 Mac、照常往下并置 S2A_GLSLC_RUNTIME_ONLY=1（11-08 DQB2：跳过出包期离线编，运行时现编）、计时表最后一步是「判运行时 GLSLC」；不要 → 照常往下、不置；设了 DM_GLSLC_HOST → 不判、照常往下"""
-import os, struct, sys, tempfile
+import os, struct, subprocess, sys, tempfile
 from pathlib import Path
 
 R = Path(__file__).resolve().parents[1]
@@ -154,6 +154,22 @@ with tempfile.TemporaryDirectory() as t:
     chk('⑫ 门：不要 → 照常往下、不置', (('ok', None), '判运行时 GLSLC'), gate(None, out='g2'))
     chk('⑫ 门：设了 DM_GLSLC_HOST → 不判、照常往下、不置', (('ok', None), ''), gate('要', host=str(Path(t, 's2arm-host')), out='g3'))
     oneclick_win.glslc_need = real
+
+# Mac 刷新与抽取共用的保守容器判据：Trinity 必须先等改写产物，不能只在 Windows 的精确判据里识别。
+with tempfile.TemporaryDirectory(prefix='decoder need ') as t:
+    romfs = Path(t, 'romfs with spaces', 'nested'); romfs.mkdir(parents=True)
+    def mac_decoder_need():
+        return subprocess.run(['bash', '-c', 'source "$1/pack/decoder_need.sh"; decoder_need "$1" "$2"',
+                               'decoder-test', str(R), str(romfs.parent)],
+                              env=dict(os.environ, PY=sys.executable), capture_output=True, text=True).returncode
+    for name in ('data.trpfs', 'DATA.TRPFS', 'archive.pak', 'archive.pkz', 'archive.utoc', 'gameresources.resources'):
+        entry = romfs / name; entry.touch()
+        chk(f'⑬ Mac 容器判据：{name} → 要解码器 / 等改写', 0, mac_decoder_need())
+        entry.unlink()
+    for name in ('data.trpfd', 'ordinary.bin'):
+        entry = romfs / name; entry.touch()
+        chk(f'⑬ Mac 容器判据：只有 {name} → 不要', 1, mac_decoder_need())
+        entry.unlink()
 
 print(f'{"✓" if not bad else "✗"} host_decoder：{bad} 不通')
 sys.exit(1 if bad else 0)
