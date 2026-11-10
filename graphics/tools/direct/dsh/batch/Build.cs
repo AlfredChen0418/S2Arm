@@ -297,16 +297,7 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
         var po = new ParallelOptions { MaxDegreeOfParallelism = NJ * 2 };
         var ms = misses.OrderBy(x => x, StringComparer.Ordinal).ToList(); var miss = new HashSet<string>(ms, StringComparer.Ordinal);
         var tk = new Ticker("直连库·翻译与收尾", Keys.Count);
-        // 配对顶点只等它自己的片元收尾（KI-001）：原先第二波等整个第一波（含无关的计算 / 几何 / 曲面键）全部收尾才开始，第一波的长尾里多数线程空等。
-        //   顶点只在缓存未命中、要现翻时读片元 MSL（VsPadCore → MAC.Text）；片元收尾把 _b.metal 写进 Side 后才放行。
-        //   不会死锁：InOrder 一次领一个、第一波的键全排在配对顶点之前，配对顶点开始等时它要等的片元都已被某个线程领走，而第一波的键从不等别人
-        var done = Keys.Where(k => !Pairs.ContainsKey(k)).ToDictionary(k => k, _ => new ManualResetEventSlim(false), StringComparer.Ordinal);
         void Both(string k)
-        {
-            if (miss.Contains(k) && Pairs.TryGetValue(k, out var ps)) foreach (var p in ps) if (done.TryGetValue(p, out var ev)) ev.Wait();
-            try { Both1(k); } finally { if (done.TryGetValue(k, out var ev)) ev.Set(); }
-        }
-        void Both1(string k)
         {
             if (miss.Contains(k)) One(k);
             else if (hits.ContainsKey(k))
@@ -318,8 +309,7 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
             var f = FinishOne(k); if (f.St == "ok" && f.Refl != null) FinFlags[k] = SumFlags(f.Refl);
             Fin[k] = (f.Key, f.St, f.Why, null); BOM.TryRemove(k, out _); VarSrc.TryRemove(k, out _); tk.Step();
         }   // 收尾后翻译产物即放（之后只读 Side / VarSrc / Defer；配对顶点读片元从 Side 读）：原先全部键的产物留到进程结束，异度3 2.7 GB
-        Parallel.ForEach(InOrder(Keys.Where(k => !Pairs.ContainsKey(k)).Concat(Keys.Where(k => Pairs.ContainsKey(k)))), po, Both);
-        foreach (var ev in done.Values) ev.Dispose();
+        PairedWaves(Keys, Pairs, miss.Contains, Both, po.MaxDegreeOfParallelism);
         foreach (var k in ms)
         {
             var why = XlSt[k].Why;
@@ -330,6 +320,40 @@ static partial class Build   // 影响翻译产物的那段（包记录切片、
             if (why.StartsWith("EntryPointNotFoundException", StringComparison.Ordinal) || why.StartsWith("DllNotFoundException", StringComparison.Ordinal)) { Say($"[RED] 原生库缺件（出包机环境，不是游戏内容）：{why}（{k}）"); Environment.Exit(1); }
         }
         Say($"dsh_batch：{ms.Count} 个键，成 {ms.Count(k => XlSt[k].St == "ok")}，败 {ms.Count(k => XlSt[k].St != "ok")}");
+    }
+
+    // 两波收尾（KI-001）：非配对键在前、配对的顶点着色器在后，同一个并行循环按序一次领一个。配对顶点要现翻（need 为真：缓存未命中，翻译时读片元 _b.metal，见 BuildXlate.cs）时
+    //   只等它配对的、属于前一波的那几支收尾（片元收尾把 _b.metal 写进 Side 后才放行）；原先两次 Parallel.ForEach，第二波等整个第一波（含无关的计算 / 几何 / 曲面键）全部收尾才开始，
+    //   第一波长尾里多数线程空等（0100000000010000 Windows 冷缓存：「翻译与逐键收尾」125.8 → 106.1 秒）。不会死锁：InOrder 一次领一个、前一波的键全排在配对顶点之前，
+    //   配对顶点开始等时它要等的键都已被某个线程领走，而前一波的键从不等别人。单测：dsh_batch --paired-waves（tests/dshb_paired_waves_test.sh）
+    internal static void PairedWaves(IReadOnlyList<string> keys, IReadOnlyDictionary<string, SortedSet<string>> pairs, Func<string, bool> need, Action<string> act, int dop)
+    {
+        var done = keys.Where(k => !pairs.ContainsKey(k)).Distinct(StringComparer.Ordinal).ToDictionary(k => k, _ => new ManualResetEventSlim(false), StringComparer.Ordinal);
+        try
+        {
+            Parallel.ForEach(InOrder(keys.Where(k => !pairs.ContainsKey(k)).Concat(keys.Where(k => pairs.ContainsKey(k)))), new ParallelOptions { MaxDegreeOfParallelism = dop }, k =>
+            {
+                if (pairs.TryGetValue(k, out var ps) && need(k)) foreach (var p in ps) if (done.TryGetValue(p, out var ev)) ev.Wait();
+                try { act(k); } finally { if (done.TryGetValue(k, out var ev)) ev.Set(); }
+            });
+        }
+        finally { foreach (var ev in done.Values) ev.Dispose(); }
+    }
+    // 单测入口：合成一组键跑 PairedWaves，各键按给定毫秒数睡，打印「键 开始毫秒 结束毫秒」。参数：<并行数> <键:毫秒[:配对片元,…][:hit]> …（带配对片元的是配对顶点；hit = 缓存命中，不等片元）
+    internal static int PairedWavesCli(string[] argv)
+    {
+        int dop = int.Parse(argv[0]); var keys = new List<string>(); var ms = new Dictionary<string, int>(StringComparer.Ordinal);
+        var pairs = new Dictionary<string, SortedSet<string>>(StringComparer.Ordinal); var hit = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var a in argv[1..])
+        {
+            var c = a.Split(':'); keys.Add(c[0]); ms[c[0]] = int.Parse(c[1]);
+            if (c.Length > 2 && c[2].Length > 0) pairs[c[0]] = new SortedSet<string>(c[2].Split(','), StringComparer.Ordinal);
+            if (c.Length > 3 && c[3] == "hit") hit.Add(c[0]);
+        }
+        var sw = Stopwatch.StartNew(); var log = new ConcurrentDictionary<string, (long S, long E)>(StringComparer.Ordinal);
+        PairedWaves(keys, pairs, k => !hit.Contains(k), k => { long s = sw.ElapsedMilliseconds; Thread.Sleep(ms[k]); log[k] = (s, sw.ElapsedMilliseconds); }, dop);
+        foreach (var k in keys) Console.WriteLine($"{k} {log[k].S} {log[k].E}");
+        return 0;
     }
 
     // ---------------- 逐键收尾 ----------------

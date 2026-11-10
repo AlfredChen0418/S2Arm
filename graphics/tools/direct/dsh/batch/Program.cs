@@ -33,6 +33,7 @@ static class DshBatch
         if (argv.Length >= 3 && argv[0] == "--metal-compile") return Metal.CompileCli(argv[1..]);   // 单测：盘写满整次停、普通编不过只记这一支（graphics/tools/direct/tests/t_metal_nospace.py）
         if (argv.Length == 1 && argv[0] == "--compiler-why") { Console.Out.Write(Metal.CompilerWhy(Console.In.ReadToEnd()) ?? ""); return 0; }   // 单测：编译器 stderr → 出库清单记的那一句（Metal.CompilerWhy）
         if (argv.Length >= 1 && argv[0] == "--unity") return Unity.Cli(argv[1..]);
+        if (argv.Length >= 2 && argv[0] == "--paired-waves") return Build.PairedWavesCli(argv[1..]);   // 单测：配对顶点只等自己的片元、不等整个第一波（Build.PairedWaves，tests/dshb_paired_waves_test.sh）
         Console.Error.WriteLine("用法：dsh_batch build … | --xfp | --unity … | --libpack … | --c1cb …（见 Program.cs 文件头）"); return 2;
     }
 }
