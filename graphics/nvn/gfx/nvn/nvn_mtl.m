@@ -5704,6 +5704,7 @@ static void shmap_load_once(void) {
 }
 
 @interface NvShader : NSObject { @public id<MTLLibrary> ft_lib; uint8_t ft_tried; id<MTLLibrary> bf_lib; uint8_t bf_tried;   // bf_lib: the readable-tile version <key>_bf, looked up once by name (bf_fn)
+    __weak id<MTLLibrary> plib;   // the library fn came from (#1001 two-level build probe, spec_probe: Metal 4 names a function by library + name)
     id<MTLFunction> fn, tf_fn, fn_u, geo_fn;   // fn_u: the integer-output entry point (dmsh_build.py fs_uint), for pipelines whose unsigned integer attachments are exactly u_mask (pso_desc)
     uint8_t s_rec, warm_claimed;   // submit-thread first-use / prewarm handoff counters
     uint8_t gmem_use;   // 0 未判 / 1 不绑原始内存池表 / 2 绑（gmem_uses：动态占比计数用）
@@ -6165,7 +6166,7 @@ static NvShader *shader_build(NSString *pc, int stage, int layer, int depth_zero
             NSArray *ent = e[1]; if (ent.count > 32) continue;
             o->geo_tf_stride[b] = [e[0] unsignedIntValue]; o->geo_tf_n[b] = (uint32_t)ent.count;
             for (NSUInteger k = 0; k < ent.count; k++) { o->geo_tf_off[b][k] = [ent[k][0] unsignedIntValue]; o->geo_tf_comp[b][k] = [ent[k][1] unsignedIntValue]; } } }
-    o->fn = [lib newFunctionWithName:fnn(o, entry)]; o->stage = stage; o->load_depth_zero = depth_zero; strlcpy(o->key, pc.UTF8String, sizeof o->key); o->ventry = entry;
+    o->fn = [lib newFunctionWithName:fnn(o, entry)]; o->plib = lib; o->stage = stage; o->load_depth_zero = depth_zero; strlcpy(o->key, pc.UTF8String, sizeof o->key); o->ventry = entry;
     if (stage == 5 && tensor_native_json(j)) {
         o->tensor = 3;
         MLOG("compute shader %s: native HMMA.16816 F16 (%d instructions, SIMD-group matrix ABI 1)", pc.UTF8String, [j[@"tensor_mma_count"] intValue]);
@@ -8390,6 +8391,58 @@ static int pso_pair_ok(NvShader *vs, NvShader *fs, int report) {
     return 0;
 }
 static int pso_pend_find(const pso_key *k) { for (int i = 0; i < PSO_PEND_MAX; i++) if (g_pp[i].used && !memcmp(&g_pp[i].k, k, sizeof *k)) return i; return -1; }
+// 两级建管线的耗时探针（#1001 第二步，DM_NVN_PSO_SPEC_PROBE=1，缺省关）：后台编一条首遇管线之前，用 Metal 4 编译器把同一份描述再建三遍、各自计时——
+//   ① 片元输出留空（MTLPixelFormatUnspecialized 等）的基础管线，② 从 ① 按真实颜色格式 / 混合 / 写掩码特化，③ 完整建。①③ 谁先建按序号单双轮换，看谁沾谁的光。
+//   只测最常见的那种：顶点 / 片元都是库里的主入口（vs->fn / fs->fn，变体入口来自别的库，跳过计数）。探针在专用串行队列上同步做完再放行原来的编译，开了会让后台编译晚到，只用于测量。
+//   不改任何管线的建法与取用。Metal 3 设备没有特化接口，不测
+static int spec_probe_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_PSO_SPEC_PROBE"); on = e && *e && strcmp(e, "0") && !g_m3; } return on; }
+// Metal 4 专有名字按棘轮压到最少：描述符变量都用 id、属性走消息，整段在 @available 里（avail / mtl4 两个棘轮，基线说明见 tools/mtl4_baseline.txt）
+static void spec_probe_color(id p, MTLRenderPipelineDescriptor *d, int unspec) API_AVAILABLE(macos(26.0), ios(26.0)) {
+    for (int i = 0; i < 8; i++) { MTLRenderPipelineColorAttachmentDescriptor *s = d.colorAttachments[i]; MTL4RenderPipelineColorAttachmentDescriptor *c = [[p colorAttachments] objectAtIndexedSubscript:i];
+        if (s.pixelFormat == MTLPixelFormatInvalid) { [c setPixelFormat:MTLPixelFormatInvalid]; continue; }
+        [c setPixelFormat:unspec ? MTLPixelFormatUnspecialized : s.pixelFormat]; [c setWriteMask:unspec ? MTLColorWriteMaskUnspecialized : s.writeMask];
+        [c setBlendingState:unspec ? MTL4BlendStateUnspecialized : s.blendingEnabled ? MTL4BlendStateEnabled : MTL4BlendStateDisabled];
+        MTLBlendFactor u = MTLBlendFactorUnspecialized; MTLBlendOperation uo = MTLBlendOperationUnspecialized;
+        [c setSourceRGBBlendFactor:unspec ? u : s.sourceRGBBlendFactor]; [c setDestinationRGBBlendFactor:unspec ? u : s.destinationRGBBlendFactor];
+        [c setSourceAlphaBlendFactor:unspec ? u : s.sourceAlphaBlendFactor]; [c setDestinationAlphaBlendFactor:unspec ? u : s.destinationAlphaBlendFactor];
+        [c setRgbBlendOperation:unspec ? uo : s.rgbBlendOperation]; [c setAlphaBlendOperation:unspec ? uo : s.alphaBlendOperation]; }
+}
+static struct { uint64_t n, skipped, failed, base_ns, spec_ns, full_ns; } g_sp;   // 只在探针串行队列上写
+// 函数按库 + 名字给 Metal 4；声明了函数常量的（这款游戏的片元多数是）要套一层特化描述、常量取默认值，否则建管线时校验直接 abort（11-14 第一局探针）。
+//   要不要套看库里按名字取出的原函数：shader_load 已把 o->fn 换成特化后的函数，特化后的函数常量表是空的，按它判会漏套（11-14 第二局探针同样 abort）
+static id spec_probe_fn(id<MTLLibrary> lib, id<MTLFunction> f) API_AVAILABLE(macos(26.0), ios(26.0)) {
+    id l = [MTL4LibraryFunctionDescriptor new]; [l setLibrary:lib]; [l setName:f.name];
+    if (![lib newFunctionWithName:f.name].functionConstantsDictionary.count) return l;
+    id sp = [MTL4SpecializedFunctionDescriptor new]; [sp setFunctionDescriptor:l]; [sp setConstantValues:[MTLFunctionConstantValues new]]; return sp;
+}
+static void spec_probe(MTLRenderPipelineDescriptor *d, NvShader *vs, NvShader *fs) {
+    if (@available(macOS 26.0, iOS 26.0, *)) {} else return;
+    static dispatch_queue_t q; static id comp; static dispatch_once_t once;
+    dispatch_once(&once, ^{ q = dispatch_queue_create("dm.nvn.specprobe", dispatch_queue_attr_make_with_qos_class(DISPATCH_QUEUE_SERIAL, QOS_CLASS_USER_INITIATED, 0));
+        if (@available(macOS 26.0, iOS 26.0, *)) { NSError *e = nil; comp = [g_dev newCompilerWithDescriptor:[MTL4CompilerDescriptor new] error:&e];
+            if (!comp) MLOG("【红】 two-level build probe: no Metal 4 compiler (%s)", e.localizedDescription.UTF8String); } });
+    dispatch_sync(q, ^{ @autoreleasepool { if (@available(macOS 26.0, iOS 26.0, *)) {
+        id<MTLLibrary> vl = vs ? vs->plib : nil, fl = fs ? fs->plib : nil;
+        if (!comp || !vl || !fl || d.vertexFunction != vs->fn || d.fragmentFunction != fs->fn || !d.rasterizationEnabled) { g_sp.skipped++; return; }
+        id full = [MTL4RenderPipelineDescriptor new];
+        [full setVertexFunctionDescriptor:spec_probe_fn(vl, vs->fn)]; [full setFragmentFunctionDescriptor:spec_probe_fn(fl, fs->fn)]; [full setVertexDescriptor:d.vertexDescriptor];
+        [full setRasterSampleCount:d.rasterSampleCount]; [full setInputPrimitiveTopology:d.inputPrimitiveTopology];
+        [full setAlphaToCoverageState:d.alphaToCoverageEnabled ? MTL4AlphaToCoverageStateEnabled : MTL4AlphaToCoverageStateDisabled];
+        spec_probe_color(full, d, 0);
+        id base = [full copy]; spec_probe_color(base, d, 1);
+        int full_first = (int)(g_sp.n & 1); NSError *e = nil; uint64_t tb = 0, ts = 0, tf = 0, t0;
+        id<MTLRenderPipelineState> pf = nil, pb = nil, pz = nil;
+        if (full_first) { t0 = bp_now(); pf = [comp newRenderPipelineStateWithDescriptor:full compilerTaskOptions:nil error:&e]; tf = bp_now() - t0; }
+        t0 = bp_now(); pb = [comp newRenderPipelineStateWithDescriptor:base compilerTaskOptions:nil error:&e]; tb = bp_now() - t0;
+        if (pb) { t0 = bp_now(); pz = [comp newRenderPipelineStateBySpecializationWithDescriptor:full pipeline:pb error:&e]; ts = bp_now() - t0; }
+        if (!full_first) { t0 = bp_now(); pf = [comp newRenderPipelineStateWithDescriptor:full compilerTaskOptions:nil error:&e]; tf = bp_now() - t0; }
+        if (!pb || !pz || !pf) { uint64_t f = ++g_sp.failed; if (f <= 8) MLOG("【红】 two-level build probe (vertex %s fragment %s): %s failed: %s", vs->key, fs->key, !pb ? "base" : !pz ? "specialization" : "full build", e.localizedDescription.UTF8String); return; }
+        uint64_t n = ++g_sp.n; g_sp.base_ns += tb; g_sp.spec_ns += ts; g_sp.full_ns += tf;
+        if (n <= 64 || !(n & (n - 1))) MLOG("two-level build probe #%llu (vertex %s fragment %s, %s first): base %.1f ms, specialize %.1f ms, full %.1f ms; so far %llu probed (%llu skipped: variant entry points; %llu failed), mean base %.1f / specialize %.1f / full %.1f ms",
+            (unsigned long long)n, vs->key, fs->key, full_first ? "full" : "base", tb / 1e6, ts / 1e6, tf / 1e6, (unsigned long long)n, (unsigned long long)g_sp.skipped, (unsigned long long)g_sp.failed,
+            g_sp.base_ns / 1e6 / n, g_sp.spec_ns / 1e6 / n, g_sp.full_ns / 1e6 / n);
+    } } });
+}
 static void pso_pend_kick(const pso_key *k, NvShader *vs, NvShader *fs) {   // Called by the submit thread: kick only if it is neither in the cache nor in the table
     if (hm_get_id(&g_pso, k) || !pso_pair_ok(vs, fs, 0)) return;
     pthread_mutex_lock(&g_pp_mu);
@@ -8404,6 +8457,7 @@ static void pso_pend_kick(const pso_key *k, NvShader *vs, NvShader *fs) {   // C
     if (at >= 0 || slot < 0) return;
     MTLRenderPipelineDescriptor *d = pso_desc(k, vs, fs, nil, 0); g_pp_kicked++; NSString *pkey = par_rkey(k, vs, fs, 0, nil);
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        if (spec_probe_on()) spec_probe(d, vs, fs);   // #1001 diagnostic, off by default
         NSError *e = nil; id<MTLRenderPipelineState> ps = par_render(d, pkey, &e);
         pthread_mutex_lock(&g_pp_mu); g_pp[slot].ps = ps; g_pp[slot].done = 1; pthread_cond_broadcast(&g_pp_cv); pthread_mutex_unlock(&g_pp_mu);
     });

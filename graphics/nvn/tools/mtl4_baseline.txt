@@ -1,3 +1,5 @@
-227
+234
 # 第一行是基线数（graphics/gate.sh 只读第一行）。只许减不许增；增加必须在下面写明原因，并由画面线在 PR 上认可。
 # 10-30 226 → 227（帧率能耗线 e60/metalfx-video）：直连上屏 MetalFX 空间放大在 Metal 4 下只能经 Metal 4 编译器建放大器（newSpatialScalerWithDevice:compiler:），nvn_present_fx.inc 的 MTL4CompilerDescriptor 一处，没有 Metal 3 / 包装函数替代。
+
+# 11-14 227 → 234（#1001 两级建耗时探针，缺省关）：nvn_mtl.m spec_probe 要量 Metal 4 特化接口本身（片元输出留空的基础管线 → newRenderPipelineStateBySpecializationWithDescriptor），Metal 3 没有对应接口、没有包装可走；描述符变量已全用 id、属性走消息，只剩 MTL4LibraryFunctionDescriptor / MTL4SpecializedFunctionDescriptor / MTL4RenderPipelineDescriptor / MTL4CompilerDescriptor 各一处、颜色附件描述符一处（setWriteMask: 在 id 上有同名冲突）与混合状态、alpha-to-coverage 枚举，整段在 @available 里。
