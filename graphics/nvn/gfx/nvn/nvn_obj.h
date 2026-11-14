@@ -223,6 +223,7 @@ typedef struct { const prog_t *prog; int32_t stages; uint8_t kok; uint8_t keys[6
 typedef struct { const prog_t *prog; uint64_t serial; int32_t stages, pad; } p_bind_program_id;
 // 宿主按序号的程序快照表（hle_nvn.c）：返回的快照指针长期有效；没有该序号返回空。安卓直连核心可能不带 hle_nvn.c 链接，故弱引用
 const prog_t *nvn_prog_snap_get(uint64_t serial, uint8_t keys[6][8], uint8_t *ok, uint8_t stage[6]) __attribute__((weak));
+uint64_t nvn_prog_set_ns(uint64_t serial) __attribute__((weak));   // 首遇等待诊断（#1001，hle_nvn.c）：这个序号 SetShaders 的时刻（now_ns）；没开 DM_NVN_FU_SETAT / 没记到 = 0
 // 还原完整记录：prog / stages 取自记录，snap / keys / kok / stage_of 按序号查表；表里没有（或载荷长度不对）时快照只带序号、键全缺、阶段 0xff
 static inline const p_bind_program *bind_program_rec(const void *a, uint32_t size, p_bind_program *t) {
     memset(t, 0, sizeof *t); memset(t->stage_of, 0xff, sizeof t->stage_of);

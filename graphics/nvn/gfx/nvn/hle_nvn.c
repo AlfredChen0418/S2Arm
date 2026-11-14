@@ -1290,6 +1290,29 @@ int prog_key(const prog_t *p, unsigned st, uint8_t key[8]) {
 }
 // S2Arm: a stage's key from the bytes there now (prog_key returns the one computed at SetShaders): equal to it only while the game still holds the same control section and code (nvn_mtl.m pso_fout_variant)
 int prog_key_live(const prog_t *p, unsigned st, uint8_t key[8]) { return st < p->nstage && keys_hash(&p->sd[st], 0, key); }
+// 首遇等待诊断（#1001，DM_NVN_FU_SETAT=1，缺省关）：按序号记 SetShaders 的时刻，nvn_mtl.m 的首遇等待行报「登记到这次绘制隔了多久」，
+//   看两级建管线（SetShaders 时先建基础管线）有没有提前量。直接映射表 64K 项（1 MB，开了才分配）：同槽后来的序号顶掉先前的，查到序号对不上算没记到
+enum { FU_SETAT_N = 1 << 16 };
+static _Atomic uint64_t (*g_fu_setat)[2];
+static int fu_setat_on(void) { static int on = -1; if (on < 0) { const char *e = getenv("DM_NVN_FU_SETAT"); on = e && *e && strcmp(e, "0"); } return on; }
+static void fu_setat_note(uint64_t serial) {
+    if (!fu_setat_on()) return;
+    if (!atomic_load_explicit((_Atomic(void *) *)&g_fu_setat, memory_order_acquire)) {
+        void *n = calloc(FU_SETAT_N, sizeof *g_fu_setat), *z = NULL;
+        if (!n || !atomic_compare_exchange_strong((_Atomic(void *) *)&g_fu_setat, &z, n)) free(n);
+    }
+    _Atomic uint64_t *e = g_fu_setat ? g_fu_setat[serial & (FU_SETAT_N - 1)] : NULL; if (!e) return;
+    atomic_store_explicit(&e[0], 0, memory_order_relaxed);
+    atomic_store_explicit(&e[1], now_ns(), memory_order_relaxed);
+    atomic_store_explicit(&e[0], serial, memory_order_release);
+}
+uint64_t nvn_prog_set_ns(uint64_t serial) {
+    _Atomic uint64_t (*t)[2] = atomic_load_explicit((_Atomic(void *) *)&g_fu_setat, memory_order_acquire); if (!t) return 0;
+    _Atomic uint64_t *e = t[serial & (FU_SETAT_N - 1)];
+    if (atomic_load_explicit(&e[0], memory_order_acquire) != serial) return 0;
+    uint64_t ns = atomic_load_explicit(&e[1], memory_order_relaxed);
+    return atomic_load_explicit(&e[0], memory_order_acquire) == serial ? ns : 0;
+}
 NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData *sd) {
     prog_t *o = (prog_t *)p;
     if (n < 0 || n > 6) { LOG("【红】 ProgramSetShaders stage count %d", n); return 0; }
@@ -1298,6 +1321,7 @@ NVN(nvnProgramSetShaders, NVNboolean, NVNprogram *p, int n, const NVNshaderData 
     uint64_t old_serial = o->serial;   // 旧阶段的 pin 等到新阶段存好/ pin 好之后再解，换 SetShaders 期间不留空窗
 #endif
     nvn_be_prog_release(o); o->nstage = n; memcpy(o->sd, sd, n * sizeof *sd); o->serial = nvn_new_serial();
+    fu_setat_note(o->serial);
     // The keys are computed here (see prog_key in nvn_obj.h): the control section is only guaranteed valid during this call; the code area lives in a memory pool and stays valid while the program is in use
     static int dump = -1; if (dump < 0) dump = getenv("DM_NVN_SHDUMP") != NULL;
     prog_keys_t *k = pk_get(p, 1);

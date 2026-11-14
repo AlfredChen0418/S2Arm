@@ -4660,6 +4660,7 @@ static id<MTLTexture> tex_mtl_(const tex_t *ct) {
 static void tess_stat_line(uint64_t frame);   // S2Arm tessellation: 曲面画出 / 跳过统计行（随本统计行一起打，定义在 tess_draw 旁）
 static void nvn_mem_detail(unsigned long long frame);   // DM_NVN_MEM_DETAIL, defined with mtl_res_snapshot below (it needs the shader / pipeline / archive tables)
 static void fb_report(uint64_t frame);   // same-pass feedback sampling counts (defined with fb_prepare)
+static void fu_cls_report(uint64_t frame);   // first-use waits by prewarm list (#1001, defined with fu_list_class)
 static void samp_report(uint64_t frame);   // sampler IDs registered again with another state (defined with nvn_be_reg_samp)
 // Metal allocation size of a texture / buffer object held in a table (0 for anything else); for the memory report (#357)
 static uint64_t res_bytes(id o) { return [o conformsToProtocol:@protocol(MTLResource)] ? (uint64_t)((id<MTLResource>)o).allocatedSize : 0; }
@@ -4696,7 +4697,7 @@ void nvn_be_mem_kinds(uint64_t *priv_tex, uint64_t *priv_buf, uint64_t *pool_len
 void nvn_be_mem_stat(unsigned long long frame, unsigned long long rss_mb) {
     alias_orphan_pass();   // #357: before the line cap below, which only limits the readout
     nvn_mem_detail(frame);   // before the line cap below: the detailed accounting has its own interval and must not be starved by the 400-line budget
-    fb_report(frame); samp_report(frame); audit_probe_report(frame);
+    fb_report(frame); samp_report(frame); audit_probe_report(frame); fu_cls_report(frame);
     static unsigned long long last_rss, last_gpu, last_frame; static int lines; unsigned long long gpu = (unsigned long long)(g_dev.currentAllocatedSize >> 20);
     unsigned long long dr = rss_mb > last_rss ? rss_mb - last_rss : last_rss - rss_mb, dg = gpu > last_gpu ? gpu - last_gpu : last_gpu - gpu;
     if (lines >= 400 || (lines && dr < 64 && dg < 64 && frame - last_frame < 3000)) return; lines++; last_rss = rss_mb; last_gpu = gpu; last_frame = frame;
@@ -8558,6 +8559,8 @@ static void first_skip_note(void) {
 //   (10-26, test device 2, witcher3_1026115427_2): one of 35 runs, at the moment its low address region fell to 40 MB and the linked stand-ins' function bodies failed to load too;
 //   the same pair built in every other run. It used to go on the failed list for the whole run, its draws lost for good. #618 (11-13, M1 Max): the service crashed on the same pair
 //   every time, retried every 30 frames all run long; retries now back off and stop after PSO_RETRY_MAX failures in a row (nvn_pso_retry.h)
+static int fu_list_class(const pso_key *k, NvShader *vs, NvShader *fs);   // 首遇等待按预热清单分类（#1001，见 warm_urgent_index）
+static void fu_cls_note(int cls, uint64_t ns, double set_ms);
 static nvn_hmap g_pso_retry = {.klen = sizeof(pso_key)}; static uint64_t g_pso_transient;
 static int pso_err_transient(NSError *e) {
     NSString *d = e.localizedDescription;
@@ -8616,6 +8619,7 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_vs(NvProg *pr, NvS
         pso_pend_kick(&k, vs, fs);   // nothing when already queued (an earlier lookahead) or refused (table full: compiled here below)
         if (g_pp_submit_mark != g_sub_serial) { g_pp_submit_mark = g_sub_serial; pso_predict_rest(); }
     }
+    int fu_cls = fu_list_class(&k, vs, fs);   // 分类取开始等的那一刻（#1001）
     atomic_fetch_add(&g_fu_waiting, 1); int fu_busy0 = atomic_load(&g_warm_busy); uint64_t fu_t0 = bp_now(), fu_take = 0, fu_build = 0;
     ps = g_pso_lmap || ms_fn ? nil : pso_pend_take(&k, &pp_late, may_skip);
     fu_take = bp_now() - fu_t0;
@@ -8648,16 +8652,21 @@ static __unsafe_unretained id<MTLRenderPipelineState> pso_get_vs(NvProg *pr, NvS
       //   着色器对、归档键、等了多久、能不能跳（不能的原因看各目标：fresh = 这一帧清过 / 不读旧内容，steady = 前两帧都画过；存储写 = 着色器写存储），
       //   据此分出「下一帧会被重画满」与「真正累积（历史 / 贴花 / 图集）」两类目标，再定跳过判据。前 64 次逐条，之后 2 的幂次
       static uint64_t nw; uint64_t k_ = ++nw;
+      // #1001：首遇等待按预热清单分类累计（fu_list_class，每 300 帧一行 fu_cls_report）；SetShaders 到这次绘制的间隔要开 DM_NVN_FU_SETAT=1（hle_nvn.c 记登记时刻）
+      double set_ms = -1; { uint64_t at = nvn_prog_set_ns && pr->gp ? nvn_prog_set_ns(pr->gp->serial) : 0, now = now_ns(); if (at && at <= now) set_ms = (now - at) / 1e6; }
+      fu_cls_note(fu_cls, d_, set_ms);
       if (d_ >= 4000000ull && (k_ <= 64 || !(k_ & (k_ - 1)))) {
           char tg[400]; int o = 0; tg[0] = 0;
           for (int i = 0; i < R.rt.n && o < (int)sizeof tg - 80; i++) if (R.rt.color[i])
               o += snprintf(tg + o, sizeof tg - o, " c%d ser=%llu %ux%u fmt=%#x fresh=%d steady=%d", i, (unsigned long long)R.rt.color[i]->serial, R.rt.color[i]->d.width, R.rt.color[i]->d.height, R.rt.color[i]->d.format, rt_fresh_now(R.rt.color[i]), rt_seen_steady(R.rt.color[i]));
           if (R.rt.depth && o < (int)sizeof tg - 80) snprintf(tg + o, sizeof tg - o, " d ser=%llu %ux%u fmt=%#x fresh=%d steady=%d", (unsigned long long)R.rt.depth->serial, R.rt.depth->d.width, R.rt.depth->d.height, R.rt.depth->d.format, rt_fresh_now(R.rt.depth), rt_seen_steady(R.rt.depth));
           NSString *ak = par_rkey(&k, vs, fs, g_pso_lmap != NULL, ms_fn ? ms_fn : g_pso_fsfn);
-          MLOG("first-use wait #%llu frame %llu: %.1f ms for vertex %s fragment %s (archive key %s; %s; storage writes %d; waited for the queued compile %.1f ms, built here %.1f ms; prewarm lines compiling when it began %d, prewarm yields %s) targets:%s",
+          char sa[48]; if (set_ms >= 0) snprintf(sa, sizeof sa, "%.0f ms before", set_ms); else strlcpy(sa, nvn_prog_set_ns ? "not recorded (DM_NVN_FU_SETAT=1)" : "not recorded", sizeof sa);
+          MLOG("first-use wait #%llu frame %llu: %.1f ms for vertex %s fragment %s (archive key %s; %s; storage writes %d; waited for the queued compile %.1f ms, built here %.1f ms; prewarm lines compiling when it began %d, prewarm yields %s; prewarm list: %s; program set %s) targets:%s",
                (unsigned long long)k_, (unsigned long long)atomic_load(&g_cur_frame), d_ / 1e6, vs->key, fs ? fs->key : "-", ak ? ak.UTF8String : "-",
                pp_late ? "past the wait limit" : may_skip ? "skippable, waited within the frame budget" : "not skippable", shader_writes(vs) || shader_writes(fs),
-               fu_take / 1e6, fu_build / 1e6, fu_busy0, fu_yield_on() ? "on" : "off", tg);
+               fu_take / 1e6, fu_build / 1e6, fu_busy0, fu_yield_on() ? "on" : "off",
+               fu_cls < 0 ? "none this run" : fu_cls == 0 ? "not listed" : fu_cls == 1 ? "listed, not reached yet" : "listed, being built", sa, tg);
       } }
     if (!ps && pso_err_transient(e)) {   // the compiler service, not the pipeline: retried with a back-off (nvn_pso_retry.h), its draws skipped meanwhile; failing PSO_RETRY_MAX times in a row it goes on the failed list
         NSNumber *r = hm_get_id(&g_pso_retry, &k); uint64_t now = atomic_load(&g_cur_frame);
@@ -8872,14 +8881,17 @@ static os_unfair_lock g_wu_lock = OS_UNFAIR_LOCK_INIT;
 static NSDictionary<NSString *, NSArray<NSNumber *> *> *g_wu_pairs;   // "顶点键|片元键" → R 行下标；nil = 当前没有在跑的预热
 static NSMutableArray<NSNumber *> *g_wu_q;                             // 急件下标（先进先出）
 static _Atomic(uint8_t) *g_wu_claim; static long g_wu_n;                // 每行「已领」标记
+static NSDictionary<NSData *, NSNumber *> *g_wu_rows;               // R 行的种子键（pso_skey）→ 下标：首遇等待分类用（fu_list_class），预热结束后保留
 static _Atomic uint64_t g_wu_bumped, g_wu_taken;                        // 放进急件的行数 / 由急件路领走编的行数
 static void warm_urgent_index(NSArray<WarmTask *> *tasks) {
     NSMutableDictionary<NSString *, NSMutableArray<NSNumber *> *> *m = [NSMutableDictionary dictionary];
+    NSMutableDictionary<NSData *, NSNumber *> *rows = [NSMutableDictionary dictionary];
     for (NSUInteger i = 0; i < tasks.count; i++) { WarmTask *t = tasks[i]; if (t->kind != 1) continue;
         NSString *k = [NSString stringWithFormat:@"%@|%@", t->vkey, t->fkey ?: @""];
-        NSMutableArray *a = m[k]; if (!a) m[k] = a = [NSMutableArray array]; [a addObject:@(i)]; }
+        NSMutableArray *a = m[k]; if (!a) m[k] = a = [NSMutableArray array]; [a addObject:@(i)];
+        for (NSData *r in t->rs) if (!rows[r]) rows[r] = @(i); }
     _Atomic(uint8_t) *c = calloc(tasks.count ? tasks.count : 1, sizeof *c);
-    os_unfair_lock_lock(&g_wu_lock); free((void *)g_wu_claim); g_wu_claim = c; g_wu_n = (long)tasks.count; g_wu_pairs = m; g_wu_q = [NSMutableArray array]; os_unfair_lock_unlock(&g_wu_lock);
+    os_unfair_lock_lock(&g_wu_lock); free((void *)g_wu_claim); g_wu_claim = c; g_wu_n = (long)tasks.count; g_wu_pairs = m; g_wu_rows = rows; g_wu_q = [NSMutableArray array]; os_unfair_lock_unlock(&g_wu_lock);
 }
 static void warm_urgent_end(void) { os_unfair_lock_lock(&g_wu_lock); g_wu_pairs = nil; [g_wu_q removeAllObjects]; os_unfair_lock_unlock(&g_wu_lock); }   // 标记数组留给还没退出的工人读（随下一次索引换掉）
 // 工人领下一行：先急件，再按清单顺序；已领的跳过。→ 下标，-1 = 没有了
@@ -8906,6 +8918,32 @@ static void warm_bump(const char *vk, const char *fk) {
     os_unfair_lock_unlock(&g_wu_lock);
     if (added) { uint64_t n = atomic_fetch_add(&g_wu_bumped, added) + added;
         if (!((n - added) & (n - added - 1)) || n == added) MLOG("pipeline prewarm: the game registered a program whose pipelines were still queued: %llu lines moved to the front so far (%llu taken from the front)", (unsigned long long)n, (unsigned long long)atomic_load(&g_wu_taken)); }
+}
+// 首遇等待分类（#1001：两级建管线之前先量，种子 / 预热接住之后还剩多少首遇）：按这条管线记进 pso_user.tsv 的同一把种子键查本局的预热清单。
+//   -1 本局没有预热清单；0 清单里没有（完全没见过）；1 在清单里、预热还没轮到（种子接住了，只是轮次晚）；2 在清单里、已被预热领走（在编，首遇在等同一条）
+static int fu_list_class(const pso_key *k, NvShader *vs, NvShader *fs) {
+    pso_skey sk; pso_skey_from(k, vs, fs, g_pso_lmap != NULL, g_pso_lmap ? &g_pso_fz : NULL, &sk);
+    NSData *d = [[NSData alloc] initWithBytesNoCopy:&sk length:sizeof sk freeWhenDone:NO];   // 不进自动释放池（提交线程上没有会清空的池）
+    os_unfair_lock_lock(&g_wu_lock);
+    NSNumber *r = g_wu_rows[d]; int c = !g_wu_rows ? -1 : !r ? 0 : (r.longValue < g_wu_n && g_wu_claim && atomic_load(&g_wu_claim[r.longValue])) ? 2 : 1;
+    os_unfair_lock_unlock(&g_wu_lock);
+    return c;
+}
+// 分类累计（提交线程写；每 300 帧 fu_cls_report 在呈现那条线程上只读、不加锁，读到的可能差一两次）：[类 + 1]，下标 0 = 本局没有预热清单。全部首遇等待计次数与耗时，≥ 4 ms 的另计；
+//   SetShaders 到首次绘制的间隔只在开了 DM_NVN_FU_SETAT 时有，记个数、最短和合计
+static struct { uint64_t n, ns, n4, ns4, set_n; double set_ms, set_min; } g_fu_cls[4];
+static void fu_cls_note(int cls, uint64_t ns, double set_ms) {
+    typeof(g_fu_cls[0]) *c = &g_fu_cls[cls + 1]; c->n++; c->ns += ns; if (ns >= 4000000ull) { c->n4++; c->ns4 += ns; }
+    if (set_ms >= 0) { if (!c->set_n || set_ms < c->set_min) c->set_min = set_ms; c->set_n++; c->set_ms += set_ms; }
+}
+static void fu_cls_report(uint64_t frame) {
+    static uint64_t last; uint64_t all = 0; for (int i = 0; i < 4; i++) all += g_fu_cls[i].n; if (all == last) return; last = all;
+    static const char *nm[4] = {"no list", "not listed", "listed, not reached yet", "listed, being built"}; char b[900]; int o = 0;
+    for (int i = 1; i < 5 && o < (int)sizeof b - 200; i++) { int j = i & 3; const typeof(g_fu_cls[0]) *c = &g_fu_cls[j]; if (!c->n) continue;
+        o += snprintf(b + o, sizeof b - o, "%s%s %llu (%.1f ms; >= 4 ms: %llu, %.1f ms", o ? "; " : "", nm[j], (unsigned long long)c->n, c->ns / 1e6, (unsigned long long)c->n4, c->ns4 / 1e6);
+        if (c->set_n) o += snprintf(b + o, sizeof b - o, "; program set before the draw: %llu recorded, shortest %.0f ms, mean %.0f ms", (unsigned long long)c->set_n, c->set_min, c->set_ms / c->set_n);
+        o += snprintf(b + o, sizeof b - o, ")"); }
+    MLOG("first-use waits up to frame %llu by prewarm list: %s", (unsigned long long)frame, b);
 }
 static void warm_task_(WarmTask *t);
 static uint64_t g_warm_mps;   // task / mesh pipelines the prewarm built (M lines)
